@@ -11,7 +11,7 @@ impl SdfSphere3D {
 
     pub fn new() -> Self {
         Self {
-            position        : F3::empty(),
+            position        : F3::zeros(),
             radius          : 1.0,
         }
     }

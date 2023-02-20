@@ -9,28 +9,28 @@ pub struct F2 {
 
 impl F2 {
 
-    pub fn new(v: F2) -> Self {
+    pub fn from(v: F2) -> Self {
         Self {
             x               : v.x,
             y               : v.y,
         }
     }
 
-    pub fn empty() -> Self {
+    pub fn zeros() -> Self {
         Self {
             x               : 0.0,
             y               : 0.0,
         }
     }
 
-    pub fn new_1(x: F) -> Self {
+    pub fn new_x(x: F) -> Self {
         Self {
             x               : x,
             y               : x,
         }
     }
 
-    pub fn new_2(x: F, y: F) -> Self {
+    pub fn new(x: F, y: F) -> Self {
         Self {
             x,
             y,
@@ -64,7 +64,7 @@ pub struct F3 {
 
 impl F3 {
 
-    pub fn new(v: F3) -> Self {
+    pub fn from(v: F3) -> Self {
         Self {
             x               : v.x,
             y               : v.y,
@@ -72,7 +72,7 @@ impl F3 {
         }
     }
 
-    pub fn empty() -> Self {
+    pub fn zeros() -> Self {
         Self {
             x               : 0.0,
             y               : 0.0,
@@ -80,7 +80,7 @@ impl F3 {
         }
     }
 
-    pub fn new_1(x: F) -> Self {
+    pub fn new_x(x: F) -> Self {
         Self {
             x               : x,
             y               : x,
@@ -88,7 +88,7 @@ impl F3 {
         }
     }
 
-    pub fn new_3(x: F, y: F, z: F) -> Self {
+    pub fn new(x: F, y: F, z: F) -> Self {
         Self {
             x               : x,
             y               : y,

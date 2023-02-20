@@ -55,7 +55,7 @@ impl FT {
                     let xx = x as F / width as F;
                     let yy = y as F / height as F;
 
-                    let coord = F2::new_2((xx - 0.5) * ratio, (1.0 - yy) - 0.5);
+                    let coord = F2::new((xx - 0.5) * ratio, (1.0 - yy) - 0.5);
 
                     /*
                     let ray = self.camera.gen_ray(coord);
@@ -89,26 +89,24 @@ impl FT {
         let mut engine = Engine::new();
 
         engine.register_type_with_name::<F2>("F2")
-            .register_fn("F2", F2::empty)
-            .register_fn("F2", F2::new_1)
-            .register_fn("F2", F2::new_2)
+            .register_fn("F2", F2::zeros)
+            .register_fn("F2", F2::new)
             .register_get_set("x", F2::get_x, F2::set_x)
             .register_get_set("y", F2::get_y, F2::set_y);
 
         engine.register_fn("+", |a: F2, b: F2| -> F2 {
-            F2::new_2(a.x + b.x, a.y + b.y)
+            F2::new(a.x + b.x, a.y + b.y)
         });
 
         engine.register_type_with_name::<F3>("F3")
-            .register_fn("F3", F3::empty)
-            .register_fn("F3", F3::new_1)
-            .register_fn("F3", F3::new_3)
+            .register_fn("F3", F3::zeros)
+            .register_fn("F3", F3::new)
             .register_get_set("x", F3::get_x, F3::set_x)
             .register_get_set("y", F3::get_y, F3::set_y)
             .register_get_set("z", F3::get_z, F3::set_z);
 
         engine.register_fn("+", |a: F3, b: F3| -> F3 {
-            F3::new_3(a.x + b.x, a.y + b.y, a.z + b.z)
+            F3::new(a.x + b.x, a.y + b.y, a.z + b.z)
         });
 
         // Sdf3D
