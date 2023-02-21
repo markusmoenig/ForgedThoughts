@@ -1,1 +1,1 @@
-ForgedThoughts will be a modeling and rendering language utilizing SDFs.
+ForgedThoughts will be a modeling and rendering programming language utilizing SDFs.

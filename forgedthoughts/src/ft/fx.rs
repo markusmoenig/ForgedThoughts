@@ -1,7 +1,12 @@
 use crate::prelude::*;
 
+use std::ops::Add;
+use std::ops::Sub;
+use std::ops::Mul;
+use std::ops::AddAssign;
+
 ///F2
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct F2 {
     pub x                   : F,
     pub y                   : F,
@@ -52,10 +57,44 @@ impl F2 {
     pub fn set_y(&mut self, new_val: F) {
         self.y = new_val;
     }
+
+    /// Creates a copy
+    pub fn copy(&mut self) -> F2 {
+        self.clone()
+    }
+
+    /// Normalizes this vector
+    pub fn normalize(&mut self) {
+        let l = self.length();
+        self.x /= l;
+        self.y /= l;
+    }
+
+    /// Returns the length
+    pub fn length(&self) -> F {
+        (self.x * self.x + self.y * self.y).sqrt()
+    }
+
+    // Temporaries until proper implementation
+    pub fn xyy(&self) -> F3 {
+        F3::new(self.x, self.y, self.y)
+    }
+
+    pub fn yyx(&self) -> F3 {
+        F3::new(self.y, self.y, self.x)
+    }
+
+    pub fn yxy(&self) -> F3 {
+        F3::new(self.y, self.x, self.y)
+    }
+
+    pub fn xxx(&self) -> F3 {
+        F3::new(self.x, self.x, self.x)
+    }
 }
 
 /// F3
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct F3 {
     pub x                   : F,
     pub y                   : F,
@@ -119,7 +158,74 @@ impl F3 {
     pub fn set_z(&mut self, new_val: F) {
         self.z = new_val;
     }
+
+    /// Creates a copy
+    pub fn copy(&mut self) -> F3 {
+        self.clone()
+    }
+
+    /// Normalizes this vector
+    pub fn normalize(&mut self) -> F3 {
+        let l = self.length();
+        self.x /= l;
+        self.y /= l;
+        self.z /= l;
+        self.clone()
+    }
+
+    /// Returns the length
+    pub fn length(&self) -> F {
+        (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
+    }
+
+    pub fn cross(&self, other: &F3) -> F3 {
+        F3::new(self.y * other.z - self.z * other.y,
+            self.z * other.x - self.x * other.z,
+            self.x * other.y - self.y * other.x
+        )
+    }
+
+    pub fn mult_f(&self, other: &F) -> F3 {
+        F3::new(self.x * other,
+            self.y * other,
+            self.z * other
+        )
+    }
+
 }
+
+impl Add for F3 {
+    type Output = F3;
+
+    fn add(self, other: F3) -> F3 {
+        F3::new( self.x + other.x, self.y + other.y, self.z + other.z )
+    }
+}
+
+impl AddAssign for F3 {
+    fn add_assign(&mut self, other: F3) {
+        self.x += other.x;
+        self.y += other.y;
+        self.z += other.z;
+    }
+}
+
+impl Sub for F3 {
+    type Output = F3;
+
+    fn sub(self, other: F3) -> F3 {
+        F3::new( self.x - other.x, self.y - other.y, self.z - other.z )
+    }
+}
+
+impl Mul for F3 {
+    type Output = F3;
+
+    fn mul(self, other: F3) -> F3 {
+        F3::new( self.x * other.x, self.y * other.y, self.z * other.z )
+    }
+}
+
 /*
 // F4
 #[derive(PartialEq, Debug, Clone)]

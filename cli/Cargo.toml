@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 
 forgedthoughts = { path = "../forgedthoughts" }
+png = "0.17.5"
