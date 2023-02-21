@@ -137,7 +137,7 @@ impl FT {
                             let mut closest : Option<usize> = None;
 
                             // Raymarching loop
-                            for _i in 0..120 {
+                            for _i in 0..10000 {
 
                                 let p = ro + rd.mult_f(&t);
 
@@ -150,7 +150,7 @@ impl FT {
                                     }
                                 }
 
-                                if d.abs() < 0.001 {
+                                if d.abs() < 0.0001 {
                                     hit = closest;
                                     break;
                                 } else
