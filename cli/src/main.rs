@@ -5,9 +5,6 @@ use forgedthoughts::prelude::*;
 
 fn main() {
 
-    let width = 800;
-    let height = 600;
-
     let file_name = "image.ft";
     let mut code = "".to_string();
     if let Some(input) = std::fs::read_to_string(file_name).ok() {
@@ -19,10 +16,10 @@ fn main() {
     let rc = ft.compile(code);
 
     if rc.is_ok() {
-        if let Some(scope) = rc.ok() {
+        if let Some(mut ctx) = rc.ok() {
 
-            let mut buffer = ColorBuffer::new(width, height, 0.0);
-            ft.render(scope, &mut buffer);
+            let mut buffer = ColorBuffer::new(ctx.settings.width as usize, ctx.settings.height as usize, 0.0);
+            ft.render(&mut ctx, &mut buffer);
 
             let out = buffer.to_u8_vec();
 
@@ -32,7 +29,7 @@ fn main() {
             let file = File::create(path).unwrap();
             let ref mut w = BufWriter::new(file);
 
-            let mut encoder = png::Encoder::new(w, width as u32, height as u32);
+            let mut encoder = png::Encoder::new(w, ctx.settings.width as u32, ctx.settings.height as u32);
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
             // Adding text chunks to the header

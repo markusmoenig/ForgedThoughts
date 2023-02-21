@@ -1,54 +1,94 @@
-use std::ops::Mul;
-
 pub use crate::prelude::*;
+
 pub use rhai::{Engine, Scope};
 pub mod fx;
 pub mod sdf;
+pub mod material;
+pub mod settings;
 
 use rayon::{slice::ParallelSliceMut, iter::{IndexedParallelIterator, ParallelIterator}};
 
 pub struct FT {
-
+    pub engine          : Option<Engine>,
 }
 
 impl FT {
     pub fn new() -> Self {
 
         Self {
-
+            engine      : None,
         }
     }
 
     /// Compile the given script
-    pub fn compile(&self, code: String) -> Result<Scope, String> {
+    pub fn compile(&self, code: String) -> Result<FTContext, String> {
 
-        let engine = self.create_engine();
+        let engine = crate::script::create_engine();
 
         let mut scope = Scope::new();
 
-        let rc = engine.eval_with_scope::<rhai::Dynamic>(&mut scope, code.as_str());
+        let settings = Settings::new();
+        scope.set_value("settings", settings);
 
-        println!("{:?}", rc);
+        let ast = engine.compile(code.as_str());
 
-        Ok(scope)
+        if ast.is_ok() {
+            if let Some(mut ast) = ast.ok() {
+                let rc = engine.eval_ast_with_scope::<rhai::Dynamic>(&mut scope, &mut ast);
+
+                let mut settings = Settings::new();
+
+                if let Some(mess) = scope.get_mut("settings") {
+                    if let Some(sett) = mess.read_lock::<Settings>() {
+                        settings = sett.clone();
+                    }
+                }
+
+                if let Some(_bc) = engine.call_fn::<F3>(&mut scope, &ast, "background", ( ( F2::new(0.0, 0.0 ) ), ) ).ok() {
+                    settings.background_fn = true;
+                }
+
+                if rc.is_ok() {
+                    Ok(FTContext {
+                        engine,
+                        ast,
+                        scope,
+                        settings,
+                    })
+                } else {
+                    Err("Error".to_string())
+                }
+            } else {
+                Err("Error".to_string())
+            }
+        } else {
+            Err("Error".to_string())
+        }
+
     }
 
     /// Render the given scope
-    pub fn render(&self, scope: Scope, buffer: &mut ColorBuffer) {
+    pub fn render(&self, ctx: &mut FTContext, buffer: &mut ColorBuffer) {
 
         let [width, height] = buffer.size;
 
         let mut sdfs : Vec<SDF> = vec![];
 
-        let iter = scope.iter();
+        let iter = ctx.scope.iter();
 
         for val in iter {
             if val.2.type_name().ends_with("::SDF") {
-                if let Some(s) = scope.get(val.0) {
+                if let Some(s) =ctx. scope.get(val.0) {
                     sdfs.push(s.clone().cast::<SDF>());
                 }
             }
         }
+
+        let w = width as F;
+        let h = height as F;
+
+        let aa = ctx.settings.antialias;
+        let aa_f = aa as F;
 
         let start = self.get_time();
 
@@ -62,12 +102,11 @@ impl FT {
                     let x = (i % width) as F;
                     let y = (i / width) as F;
 
-                    let xx = x as F / width as F;
-                    let yy = y as F / height as F;
+                    let xx = x as F / w;
+                    let yy = y as F / h;
 
                     let coord = F2::new(xx, 1.0 - yy);
 
-                    let aa = 2;
                     let mut total = [0.0, 0.0, 0.0, 0.0];
 
                     for m in 0..aa {
@@ -75,29 +114,46 @@ impl FT {
 
                             let mut color = [0.0, 0.0, 0.0, 1.0];
 
-                            let cam_offset = F2::new(m as F / aa as F, n as F / aa as F) - F2::new(0.5, 0.5);
-                            let [ro, rd] = self.create_camera_ray(coord, F3::new(0.0, 0.0, -3.0), F3::new(0.0, 0.0, 0.0), cam_offset, width as F, height as F);
+                            let cam_offset = F2::new(m as F / aa_f, n as F / aa_f) - F2::new(0.5, 0.5);
+                            let [ro, rd] = self.create_camera_ray(coord, F3::new(0.0, 0.0, 3.0), F3::new(0.0, 0.0, 0.0), cam_offset, w, h);
 
                             //let mut hit = false;
 
                             for s in &sdfs {
-                                //println!("{:?}", s);
-
                                 let dist = 0.0001;
 
                                 let mut t = dist;
-                                let t_max = 10.0;
+                                let t_max = 5.0;
 
                                 for _i in 0..24 {
                                     let p = ro + rd.mult_f(&t);
                                     let d = s.distance(p);
-                                    if d < 0.001 {
-                                        let n = s.normal(p);
-                                        color[0] = n.x;
-                                        color[1] = n.y;
-                                        color[2] = n.z;
-                                    }
+                                    if d.abs() < 0.1 {
+                                        //let n = s.normal(p);
+                                        color[0] = s.material.rgb.x;
+                                        color[1] = s.material.rgb.y;
+                                        color[2] = s.material.rgb.z;
+                                        break;
+                                    } else
                                     if t > t_max {
+
+                                        if ctx.settings.background_fn {
+                                            let mut s = ctx.scope.clone_visible();
+                                            if let Some(bc) = ctx.engine.call_fn::<F3>(&mut s, &ctx.ast, "background", ( ( F2::new(xx, yy ) ), ) ).ok() {
+                                                color[0] = bc.x;
+                                                color[1] = bc.y;
+                                                color[2] = bc.z;
+                                            } else {
+                                                color[0] = ctx.settings.background.x;
+                                                color[1] = ctx.settings.background.y;
+                                                color[2] = ctx.settings.background.z;
+                                            }
+                                        } else {
+                                            color[0] = ctx.settings.background.x;
+                                            color[1] = ctx.settings.background.y;
+                                            color[2] = ctx.settings.background.z;
+                                        }
+
                                         break;
                                     }
                                     t += d;
@@ -111,7 +167,7 @@ impl FT {
                         }
                     }
 
-                    let aa_aa = aa as F * aa as F;
+                    let aa_aa = aa_f * aa_f;
                     total[0] /= aa_aa;
                     total[1] /= aa_aa;
                     total[2] /= aa_aa;
@@ -171,59 +227,6 @@ impl FT {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("Time went backwards");
             stop.as_millis()
-    }
-
-    /// Create an Rhai engine instance and register all FT types
-    pub fn create_engine(&self) -> Engine {
-        let mut engine = Engine::new();
-
-        engine.set_fast_operators(false);
-
-        engine.register_type_with_name::<F2>("F2")
-            .register_fn("F2", F2::zeros)
-            .register_fn("F2", F2::new)
-            .register_fn("F2", F3::from)
-            .register_fn("normalize", F2::normalize)
-            .register_fn("length", F2::length)
-            .register_fn("copy", F2::clone)
-            .register_get_set("x", F2::get_x, F2::set_x)
-            .register_get_set("y", F2::get_y, F2::set_y);
-
-        engine.register_fn("+", |a: F2, b: F2| -> F2 {
-            F2::new(a.x + b.x, a.y + b.y)
-        });
-
-        engine.register_fn("-", |a: F2, b: F2| -> F2 {
-            F2::new(a.x - b.x, a.y - b.y)
-        });
-
-        engine.register_type_with_name::<F3>("F3")
-            .register_fn("F3", F3::zeros)
-            .register_fn("F3", F3::new)
-            .register_fn("F3", F3::from)
-            .register_fn("normalize", F3::normalize)
-            .register_fn("length", F3::length)
-            .register_fn("copy", F3::clone)
-            .register_get_set("x", F3::get_x, F3::set_x)
-            .register_get_set("y", F3::get_y, F3::set_y)
-            .register_get_set("z", F3::get_z, F3::set_z);
-
-        engine.register_fn("+", |a: F3, b: F3| -> F3 {
-            F3::new(a.x + b.x, a.y + b.y, a.z + b.z)
-        });
-
-        engine.register_fn("-", |a: F3, b: F3| -> F3 {
-            F3::new(a.x - b.x, a.y - b.y, a.z - b.z)
-        });
-
-        // Sdf3D
-
-        engine.register_type_with_name::<SDF>("Sphere")
-            .register_fn("Sphere", SDF::new_sphere);
-
-        engine.on_print(|x| println!("{}", x));
-
-        engine
     }
 
 }

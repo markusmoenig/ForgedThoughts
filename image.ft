@@ -1,2 +1,12 @@
+
+fn background(uv) {
+    return F3(uv.x, uv.y, 0.0);
+}
+
+settings.background = F3(1.0, 1.0, 1.0);
+settings.antialias = 1;
+
 let sphere = Sphere();
 
+sphere.radius = 1.2;
+sphere.material.rgb = F3(0.5, 0.1, 0.4);

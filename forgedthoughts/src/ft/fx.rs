@@ -6,6 +6,9 @@ use std::ops::Mul;
 use std::ops::Div;
 use std::ops::AddAssign;
 
+use std::iter::once;
+use rhai::FuncArgs;
+
 ///F2
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct F2 {
@@ -91,6 +94,12 @@ impl F2 {
 
     pub fn xxx(&self) -> F3 {
         F3::new(self.x, self.x, self.x)
+    }
+}
+
+impl FuncArgs for F2 {
+    fn parse<C: Extend<rhai::Dynamic>>(self, container: &mut C) {
+        container.extend(once(rhai::Dynamic::from(self)));
     }
 }
 

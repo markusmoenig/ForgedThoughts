@@ -11,6 +11,8 @@ pub struct SDF {
     pub sdf_type            : SDFType,
     pub position            : F3,
     pub radius              : F,
+
+    pub material            : Material,
 }
 
 impl SDF {
@@ -20,6 +22,8 @@ impl SDF {
             sdf_type        : SDFType::Sphere,
             position        : F3::zeros(),
             radius          : 1.0,
+
+            material        : Material::new(F3::new(0.5, 0.5, 0.5))
         }
     }
 
@@ -45,6 +49,32 @@ impl SDF {
         n += e.yxy().mult_f(&self.distance(p + e.yxy()));
         n += e.xxx().mult_f(&self.distance(p + e.xxx()));
         n.normalize()
+    }
+
+    // --------- Getter / Setter
+
+    pub fn get_material(&mut self) -> Material {
+        self.material
+    }
+
+    pub fn set_material(&mut self, new_val: Material) {
+        self.material = new_val;
+    }
+
+    pub fn get_position(&mut self) -> F3 {
+        self.position
+    }
+
+    pub fn set_position(&mut self, new_val: F3) {
+        self.position = new_val;
+    }
+
+    pub fn get_radius(&mut self) -> F {
+        self.radius
+    }
+
+    pub fn set_radius(&mut self, new_val: F) {
+        self.radius = new_val;
     }
 
     /*
