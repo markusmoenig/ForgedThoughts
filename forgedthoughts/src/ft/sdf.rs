@@ -2,13 +2,26 @@ use crate::prelude::*;
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum SDFType {
+    Container,
     Sphere,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum SDFOp {
+    Add,
+    Subtract,
 }
 
 /// SDF
 #[derive(PartialEq, Debug, Clone)]
 pub struct SDF {
+    pub id                  : Uuid,
+
+    pub subtractors         : Vec<SDF>,
+
     pub sdf_type            : SDFType,
+    pub sdf_op              : SDFOp,
+
     pub position            : F3,
     pub radius              : F,
 
@@ -19,7 +32,13 @@ impl SDF {
 
     pub fn new_sphere() -> Self {
         Self {
+            id              : Uuid::new_v4(),
+
+            subtractors     : vec![],
+
             sdf_type        : SDFType::Sphere,
+            sdf_op          : SDFOp::Add,
+
             position        : F3::zeros(),
             radius          : 1.0,
 
@@ -30,11 +49,20 @@ impl SDF {
     #[inline(always)]
     pub fn distance(&self, ray_position: F3) -> F {
 
-        match self.sdf_type {
+        let mut dist = match self.sdf_type {
             SDFType::Sphere => {
                 (ray_position - self.position).length() - self.radius
+            },
+            _ => {
+                std::f64::MAX
             }
+        };
+
+        for s in &self.subtractors {
+            dist = dist.max(-s.distance(ray_position));
         }
+
+        dist
     }
 
     #[inline(always)]

@@ -9,6 +9,8 @@ pub struct FTContext<'a> {
     pub ast         : AST,
     pub scope       : Scope<'a>,
     pub settings    : Settings,
+    pub camera      : Camera,
+    pub scene       : Scene,
 }
 
 /// Create an Rhai engine instance and register all FT types
@@ -65,6 +67,14 @@ pub fn create_engine() -> Engine {
         .register_get_set("antialias", Settings::get_antialias, Settings::set_antialias)
         .register_get_set("background", Settings::get_background, Settings::set_background);
 
+    // -- Settings
+
+    engine.register_type_with_name::<Camera>("Camera")
+        .register_fn("Camera", Camera::new)
+        .register_get_set("origin", Camera::get_origin, Camera::set_origin)
+        .register_get_set("center", Camera::get_center, Camera::set_center)
+        .register_get_set("fov", Camera::get_fov, Camera::set_fov);
+
     // -- Material
 
     engine.register_type_with_name::<Material>("Material")
@@ -83,12 +93,16 @@ pub fn create_engine() -> Engine {
 
     // -- SDF Types
 
-    engine.register_type_with_name::<SDF>("Sphere")
+    engine.register_type_with_name::<SDF>("SDF")
         .register_fn("Sphere", SDF::new_sphere)
         .register_get_set("material", SDF::get_material, SDF::set_material)
         .register_get_set("position", SDF::get_position, SDF::set_position)
         .register_get_set("radius", SDF::get_radius, SDF::set_radius);
 
+    engine.register_fn("-", |a: &mut SDF, b: SDF| -> SDF {
+        a.subtractors.push(b.clone());
+        a.clone()
+    });
 
     engine.on_print(|x| println!("{}", x));
 
