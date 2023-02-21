@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rhai = { version = "1.12.0", default-features = true, features = ["sync"] }
+rhai = { version = "1.12.0", default-features = true, features = ["sync", "internals"] }
 rayon = "1.5.3"

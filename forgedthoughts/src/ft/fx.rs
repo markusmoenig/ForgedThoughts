@@ -212,6 +212,10 @@ impl F3 {
         (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
     }
 
+    pub fn dot(&self, other: &F3) -> F {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
+
     pub fn cross(&self, other: &F3) -> F3 {
         F3::new(self.y * other.z - self.z * other.y,
             self.z * other.x - self.x * other.z,

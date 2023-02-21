@@ -71,6 +71,16 @@ pub fn create_engine() -> Engine {
         .register_fn("Material", Material::new)
         .register_get_set("rgb", Material::get_rgb, Material::set_rgb);
 
+    // -- Light Types
+
+    engine.register_type_with_name::<Light>("PointLight")
+        .register_fn("PointLight", Light::new_point_light)
+        .register_get_set("rgb", Light::get_rgb, Light::set_rgb)
+        .register_get_set("position", Light::get_position, Light::set_position)
+        .register_get_set("radius", Light::get_radius, Light::set_radius)
+        .register_get_set("intensity", Light::get_intensity, Light::set_intensity);
+
+
     // -- SDF Types
 
     engine.register_type_with_name::<SDF>("Sphere")

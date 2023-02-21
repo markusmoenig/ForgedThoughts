@@ -4,9 +4,12 @@ fn background(uv) {
 }
 
 settings.background = F3(1.0, 1.0, 1.0);
-settings.antialias = 1;
+settings.antialias = 2;
 
 let sphere = Sphere();
-
 sphere.radius = 1.2;
-sphere.material.rgb = F3(0.5, 0.1, 0.4);
+sphere.material.rgb = F3(0.2, 0.6, 0.8);
+
+let light = PointLight();
+light.position = F3(3.0, 3.0, 5.0);
+light.intensity = 1.0;

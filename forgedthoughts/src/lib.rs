@@ -23,6 +23,7 @@ pub mod prelude {
     pub use crate::ft::sdf::SDF;
     pub use crate::ft::material::Material;
     pub use crate::ft::settings::Settings;
+    pub use crate::ft::lights::Light;
 
     pub use crate::script::FTContext;
 

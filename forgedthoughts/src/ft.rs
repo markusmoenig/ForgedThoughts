@@ -1,10 +1,11 @@
 pub use crate::prelude::*;
 
-pub use rhai::{Engine, Scope};
+pub use rhai::{Engine, Scope, CallFnOptions};
 pub mod fx;
 pub mod sdf;
 pub mod material;
 pub mod settings;
+pub mod lights;
 
 use rayon::{slice::ParallelSliceMut, iter::{IndexedParallelIterator, ParallelIterator}};
 
@@ -34,6 +35,7 @@ impl FT {
 
         if ast.is_ok() {
             if let Some(mut ast) = ast.ok() {
+
                 let rc = engine.eval_ast_with_scope::<rhai::Dynamic>(&mut scope, &mut ast);
 
                 let mut settings = Settings::new();
@@ -47,6 +49,8 @@ impl FT {
                 if let Some(_bc) = engine.call_fn::<F3>(&mut scope, &ast, "background", ( ( F2::new(0.0, 0.0 ) ), ) ).ok() {
                     settings.background_fn = true;
                 }
+
+                ast.clear_statements();
 
                 if rc.is_ok() {
                     Ok(FTContext {
@@ -72,7 +76,9 @@ impl FT {
 
         let [width, height] = buffer.size;
 
+        // Collect sdfs and lights
         let mut sdfs : Vec<SDF> = vec![];
+        let mut lights : Vec<Light> = vec![];
 
         let iter = ctx.scope.iter();
 
@@ -80,6 +86,11 @@ impl FT {
             if val.2.type_name().ends_with("::SDF") {
                 if let Some(s) =ctx. scope.get(val.0) {
                     sdfs.push(s.clone().cast::<SDF>());
+                }
+            } else
+            if val.2.type_name().ends_with("::Light") {
+                if let Some(s) =ctx. scope.get(val.0) {
+                    lights.push(s.clone().cast::<Light>());
                 }
             }
         }
@@ -105,7 +116,7 @@ impl FT {
                     let xx = x as F / w;
                     let yy = y as F / h;
 
-                    let coord = F2::new(xx, 1.0 - yy);
+                    let coord = F2::new(xx, yy);
 
                     let mut total = [0.0, 0.0, 0.0, 0.0];
 
@@ -125,20 +136,47 @@ impl FT {
                                 let mut t = dist;
                                 let t_max = 5.0;
 
-                                for _i in 0..24 {
+                                for _i in 0..120 {
                                     let p = ro + rd.mult_f(&t);
                                     let d = s.distance(p);
-                                    if d.abs() < 0.1 {
-                                        //let n = s.normal(p);
-                                        color[0] = s.material.rgb.x;
-                                        color[1] = s.material.rgb.y;
-                                        color[2] = s.material.rgb.z;
+                                    if d.abs() < 0.001 {
+                                        let n = s.normal(p);
+                                        for l in &lights {
+                                            let light_dir = l.position - p;
+
+                                            // https://www.shadertoy.com/view/XlXGDj
+                                            let occ = 0.5 + 0.5 * n.y;
+                                            let amb = occ.clamp(0.0, 1.0);
+                                            let dif = n.dot(&light_dir).clamp(0.0, 1.0);
+
+                                            let h = (F3::new(-rd.x, -rd.y, -rd.z) + light_dir).normalize();
+                                            let spe = h.dot(&n).clamp(0.0, 1.0).powf(64.0);
+
+                                            let ambient_color = F3::new(0.05, 0.15, 0.2);
+
+                                            // Ambient
+                                            color[0] += ambient_color.x * amb * occ;
+                                            color[1] += ambient_color.y * amb * occ;
+                                            color[2] += ambient_color.z * amb * occ;
+
+                                            // Diffuse
+                                            color[0] += s.material.rgb.x * dif * l.intensity * occ;
+                                            color[1] += s.material.rgb.y * dif * l.intensity * occ;
+                                            color[2] += s.material.rgb.z * dif * l.intensity * occ;
+
+                                            // Specular
+                                            color[0] += l.rgb.x * dif * spe * occ;
+                                            color[1] += l.rgb.y * dif * spe * occ;
+                                            color[2] += l.rgb.z * dif * spe * occ;
+                                        }
                                         break;
                                     } else
                                     if t > t_max {
 
                                         if ctx.settings.background_fn {
-                                            let mut s = ctx.scope.clone_visible();
+
+                                            let mut s = Scope::new();
+
                                             if let Some(bc) = ctx.engine.call_fn::<F3>(&mut s, &ctx.ast, "background", ( ( F2::new(xx, yy ) ), ) ).ok() {
                                                 color[0] = bc.x;
                                                 color[1] = bc.y;
