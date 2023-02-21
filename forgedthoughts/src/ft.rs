@@ -1,3 +1,5 @@
+use std::ops::Mul;
+
 pub use crate::prelude::*;
 pub use rhai::{Engine, Scope};
 pub mod fx;
@@ -36,8 +38,6 @@ impl FT {
 
         let [width, height] = buffer.size;
 
-        let ratio = width as F / height as F;
-
         let mut sdfs : Vec<SDF> = vec![];
 
         let iter = scope.iter();
@@ -65,38 +65,59 @@ impl FT {
                     let xx = x as F / width as F;
                     let yy = y as F / height as F;
 
-                    let coord = F2::new((xx - 0.5) * ratio, (1.0 - yy) - 0.5);
+                    let coord = F2::new(xx, 1.0 - yy);
 
-                    let [ro, rd] = self.create_camera_ray(coord, F3::new(0.0, 0.0, -5.0), F3::zeros());
+                    let aa = 2;
+                    let mut total = [0.0, 0.0, 0.0, 0.0];
 
-                    let mut c = [0.0, 0.0, 0.0, 1.0];
-                    //let mut hit = false;
+                    for m in 0..aa {
+                        for n in 0..aa {
 
-                    for s in &sdfs {
-                        //println!("{:?}", s);
+                            let mut color = [0.0, 0.0, 0.0, 1.0];
 
-                        let dist = 0.0001;
+                            let cam_offset = F2::new(m as F / aa as F, n as F / aa as F) - F2::new(0.5, 0.5);
+                            let [ro, rd] = self.create_camera_ray(coord, F3::new(0.0, 0.0, -3.0), F3::new(0.0, 0.0, 0.0), cam_offset, width as F, height as F);
 
-                        let mut t = dist;
-                        let t_max = 10.0;
+                            //let mut hit = false;
 
-                        for _i in 0..24 {
-                            let p = ro + rd.mult_f(&t);
-                            let d = s.distance(p);
-                            if d < 0.001 {
-                                let n = s.normal(p);
-                                c[0] = n.x;
-                                c[1] = n.y;
-                                c[2] = n.z;
+                            for s in &sdfs {
+                                //println!("{:?}", s);
+
+                                let dist = 0.0001;
+
+                                let mut t = dist;
+                                let t_max = 10.0;
+
+                                for _i in 0..24 {
+                                    let p = ro + rd.mult_f(&t);
+                                    let d = s.distance(p);
+                                    if d < 0.001 {
+                                        let n = s.normal(p);
+                                        color[0] = n.x;
+                                        color[1] = n.y;
+                                        color[2] = n.z;
+                                    }
+                                    if t > t_max {
+                                        break;
+                                    }
+                                    t += d;
+                                }
                             }
-                            if t > t_max {
-                                break;
-                            }
-                            t += d;
+
+                            total[0] += color[0];
+                            total[1] += color[1];
+                            total[2] += color[2];
+                            total[3] += color[3];
                         }
                     }
 
-                    pixel.copy_from_slice(&c);
+                    let aa_aa = aa as F * aa as F;
+                    total[0] /= aa_aa;
+                    total[1] /= aa_aa;
+                    total[2] /= aa_aa;
+                    total[3] /= aa_aa;
+
+                    pixel.copy_from_slice(&total);
                 }
             });
 
@@ -104,15 +125,45 @@ impl FT {
         println!("Rendered in {} ms", t as f64);
     }
 
-    pub fn create_camera_ray(&self, uv: F2, origin: F3, center: F3) -> [F3; 2] {
+    pub fn create_camera_ray(&self, uv: F2, origin: F3, center: F3, cam_offset: F2, width: F, height: F) -> [F3; 2] {
 
+        /*
         let ww = (center - origin).normalize();
         let uu = ww.cross(&F3::new(0.0, 1.0, 0.0)).normalize();
         let vv = uu.cross(&ww).normalize();
 
-        let d = (uu.mult_f(&uv.x) + vv.mult_f(&uv.y) + ww.mult_f(&2.0)).normalize();
+        let d = (uu.mult_f(&(uv.x * cam_offset.x)) + vv.mult_f(&(uv.y * cam_offset.y)) + ww.mult_f(&2.0)).normalize();
 
         [origin, d]
+        */
+
+        let fov : f64 = 70.0;
+
+        let ratio = width / height;
+
+        let pixel_size = F2::new( 1.0 / width, 1.0 / height);
+
+        let t = (fov.to_radians() * 0.5).tan();
+
+        let half_width = F3::new(t, t, t);
+        let half_height = half_width.div_f(&ratio);
+
+        let up_vector = F3::new(0.0, 1.0, 0.0);
+
+        let w = (origin - center).normalize();
+        let u = up_vector.cross(&w);
+        let v = w.cross(&u);
+
+        let lower_left = origin - half_width * u - half_height * v - w;
+        let horizontal = (u * half_width).mult_f(&2.0);
+        let vertical = v * half_height.mult_f(&2.0);
+
+        let mut rd = lower_left - origin;
+        rd += horizontal.mult_f(&(pixel_size.x * cam_offset.x + uv.x));
+        rd += vertical.mult_f(&(pixel_size.y * cam_offset.y + uv.y));
+
+        [origin, rd.normalize()]
+
     }
 
     fn get_time(&self) -> u128 {

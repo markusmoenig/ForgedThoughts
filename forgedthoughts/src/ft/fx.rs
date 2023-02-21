@@ -3,6 +3,7 @@ use crate::prelude::*;
 use std::ops::Add;
 use std::ops::Sub;
 use std::ops::Mul;
+use std::ops::Div;
 use std::ops::AddAssign;
 
 ///F2
@@ -90,6 +91,30 @@ impl F2 {
 
     pub fn xxx(&self) -> F3 {
         F3::new(self.x, self.x, self.x)
+    }
+}
+
+impl Sub for F2 {
+    type Output = F2;
+
+    fn sub(self, other: F2) -> F2 {
+        F2::new( self.x - other.x, self.y - other.y )
+    }
+}
+
+impl Mul for F2 {
+    type Output = F2;
+
+    fn mul(self, other: F2) -> F2 {
+        F2::new( self.x * other.x, self.y * other.y )
+    }
+}
+
+impl Div for F2 {
+    type Output = F2;
+
+    fn div(self, other: F2) -> F2 {
+        F2::new( self.x / other.x, self.y / other.y )
     }
 }
 
@@ -189,6 +214,13 @@ impl F3 {
         F3::new(self.x * other,
             self.y * other,
             self.z * other
+        )
+    }
+
+    pub fn div_f(&self, other: &F) -> F3 {
+        F3::new(self.x / other,
+            self.y / other,
+            self.z / other
         )
     }
 
