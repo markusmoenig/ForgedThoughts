@@ -9,5 +9,5 @@ repository = "https://github.com/markusmoenig/ForgedThoughts.git"
 
 [dependencies]
 
-forgedthoughts = { path = "../forgedthoughts" }
+forgedthoughts = { version = "0.1", path = "../forgedthoughts" }
 png = "0.17.5"
