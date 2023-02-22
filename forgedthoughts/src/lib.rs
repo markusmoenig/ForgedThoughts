@@ -1,6 +1,7 @@
 pub mod ft;
 pub mod buffer;
 pub mod script;
+pub mod renderer;
 
 pub type I = i64;
 pub type F = f64;
@@ -26,6 +27,13 @@ pub mod prelude {
     pub use crate::ft::lights::Light;
     pub use crate::ft::camera::Camera;
     pub use crate::ft::scene::Scene;
+
+    pub use crate::ft::renderer::RendererType;
+    pub use crate::ft::renderer::Renderer;
+
+    pub use crate::ft::structs::HitRecord;
+
+    pub use crate::renderer::phong::phong;
 
     pub use crate::script::FTContext;
 

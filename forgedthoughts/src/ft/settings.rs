@@ -8,7 +8,14 @@ pub struct Settings {
     pub antialias           : I,
     pub background          : F3,
     pub background_fn       : bool,
+    pub opacity             : F,
 
+    // Raymarching
+    pub steps               : I,
+    pub max_distance        : F,
+
+    // Renderer
+    pub renderer            : Renderer,
 }
 
 impl Settings {
@@ -20,6 +27,12 @@ impl Settings {
             antialias       : 1,
             background      : F3::zeros(),
             background_fn   : false,
+            opacity         : 1.0,
+
+            steps           : 10000,
+            max_distance    : 5.0,
+
+            renderer        : Renderer::new_phong()
         }
     }
 
@@ -55,5 +68,37 @@ impl Settings {
 
     pub fn set_background(&mut self, new_val: F3) {
         self.background = new_val;
+    }
+
+    pub fn get_opacity(&mut self) -> F {
+        self.opacity
+    }
+
+    pub fn set_opacity(&mut self, new_val: F) {
+        self.opacity = new_val;
+    }
+
+    pub fn get_steps(&mut self) -> I {
+        self.steps
+    }
+
+    pub fn set_steps(&mut self, new_val: I) {
+        self.steps = new_val;
+    }
+
+    pub fn get_max_distance(&mut self) -> F {
+        self.max_distance
+    }
+
+    pub fn set_max_distance(&mut self, new_val: F) {
+        self.max_distance = new_val;
+    }
+
+    pub fn get_renderer(&mut self) -> Renderer {
+        self.renderer
+    }
+
+    pub fn set_renderer(&mut self, new_val: Renderer) {
+        self.renderer = new_val;
     }
 }

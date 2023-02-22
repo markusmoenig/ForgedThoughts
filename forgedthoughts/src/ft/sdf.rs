@@ -46,6 +46,22 @@ impl SDF {
         }
     }
 
+    pub fn new_sphere_radius(radius: F) -> Self {
+        Self {
+            id              : Uuid::new_v4(),
+
+            subtractors     : vec![],
+
+            sdf_type        : SDFType::Sphere,
+            sdf_op          : SDFOp::Add,
+
+            position        : F3::zeros(),
+            radius,
+
+            material        : Material::new(F3::new(0.5, 0.5, 0.5))
+        }
+    }
+
     #[inline(always)]
     pub fn distance(&self, ray_position: F3) -> F {
 

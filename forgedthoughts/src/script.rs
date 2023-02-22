@@ -58,6 +58,13 @@ pub fn create_engine() -> Engine {
         F3::new(a.x - b.x, a.y - b.y, a.z - b.z)
     });
 
+    // -- Renderer
+
+    engine.register_type_with_name::<Renderer>("Renderer")
+        .register_fn("Phong", Renderer::new_phong)
+        .register_get_set("ambient", Renderer::get_ambient, Renderer::set_ambient)
+        .register_get_set("specular", Renderer::get_specular, Renderer::set_specular);
+
     // -- Settings
 
     engine.register_type_with_name::<Settings>("Settings")
@@ -65,9 +72,14 @@ pub fn create_engine() -> Engine {
         .register_get_set("width", Settings::get_width, Settings::set_width)
         .register_get_set("height", Settings::get_height, Settings::set_height)
         .register_get_set("antialias", Settings::get_antialias, Settings::set_antialias)
-        .register_get_set("background", Settings::get_background, Settings::set_background);
+        .register_get_set("background", Settings::get_background, Settings::set_background)
+        .register_get_set("opacity", Settings::get_opacity, Settings::set_opacity)
+        .register_get_set("steps", Settings::get_steps, Settings::set_steps)
+        .register_get_set("max_distance", Settings::get_max_distance, Settings::set_max_distance)
+        .register_get_set("renderer", Settings::get_renderer, Settings::set_renderer);
 
-    // -- Settings
+
+    // -- Camera
 
     engine.register_type_with_name::<Camera>("Camera")
         .register_fn("Camera", Camera::new)
@@ -95,6 +107,7 @@ pub fn create_engine() -> Engine {
 
     engine.register_type_with_name::<SDF>("SDF")
         .register_fn("Sphere", SDF::new_sphere)
+        .register_fn("Sphere", SDF::new_sphere_radius)
         .register_get_set("material", SDF::get_material, SDF::set_material)
         .register_get_set("position", SDF::get_position, SDF::set_position)
         .register_get_set("radius", SDF::get_radius, SDF::set_radius);

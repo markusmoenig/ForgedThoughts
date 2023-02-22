@@ -8,6 +8,8 @@ pub mod settings;
 pub mod lights;
 pub mod camera;
 pub mod scene;
+pub mod renderer;
+pub mod structs;
 
 use rayon::{slice::ParallelSliceMut, iter::{IndexedParallelIterator, ParallelIterator}};
 use std::path::PathBuf;
@@ -57,17 +59,20 @@ impl FT {
 
                 let rc = engine.eval_ast_with_scope::<rhai::Dynamic>(&mut scope, &mut ast);
 
-                if rc.is_ok() {
-                    let mut settings = Settings::new();
+                // println!("{:?}", rc);
 
+                if rc.is_ok() {
+
+                    // Default Settings
+                    let mut settings = Settings::new();
                     if let Some(mess) = scope.get_mut("settings") {
                         if let Some(sett) = mess.read_lock::<Settings>() {
                             settings = sett.clone();
                         }
                     }
 
+                    // Default Camera
                     let mut camera = Camera::new();
-
                     if let Some(mess) = scope.get_mut("camera") {
                         if let Some(sett) = mess.read_lock::<Camera>() {
                             camera = sett.clone();
@@ -136,77 +141,15 @@ impl FT {
                     for m in 0..aa {
                         for n in 0..aa {
 
-                            let mut color = [0.0, 0.0, 0.0, 1.0];
+                            let mut color = [0.0, 0.0, 0.0, ctx.settings.opacity];
 
                             let cam_offset = F2::new(m as F / aa_f, n as F / aa_f) - F2::new(0.5, 0.5);
-                            let [ro, rd] = self.create_camera_ray(coord, ctx.camera.origin, ctx.camera.center, cam_offset, w, h);
-
-                            let dist = 0.0001;
-
-                            let mut t = dist;
-                            let t_max = 5.0;
-
-                            let mut d = std::f64::MAX;
-
-                            let mut hit : Option<usize> = None;
-                            let mut closest : Option<usize> = None;
-
-                            // Raymarching loop
-                            for _i in 0..10000 {
-
-                                let p = ro + rd.mult_f(&t);
-
-                                for (index, s) in ctx.scene.sdfs.iter().enumerate() {
-
-                                    let new_d = s.distance(p);
-                                    if new_d < d {
-                                        closest = Some(index);
-                                        d = new_d;
-                                    }
-                                }
-
-                                if d.abs() < 0.0001 {
-                                    hit = closest;
-                                    break;
-                                } else
-                                if t > t_max {
-                                    break;
-                                }
-                                t += d;
-                            }
+                            let [ro, rd] = self.create_camera_ray(coord, ctx.camera.origin, ctx.camera.center, ctx.camera.fov, cam_offset, w, h);
 
                             // Hit something ?
-                            if let Some(hit) = hit {
-                                let p = ro + rd.mult_f(&t);
-
-                                let n = ctx.scene.sdfs[hit].normal(p);
-                                for l in &ctx.scene.lights {
-                                    let light_dir = l.position - p;
-
-                                    // https://www.shadertoy.com/view/XlXGDj
-                                    let occ = 0.5 + 0.5 * n.y;
-                                    let amb = occ.clamp(0.0, 1.0);
-                                    let dif = n.dot(&light_dir).clamp(0.0, 1.0);
-
-                                    let h = (F3::new(-rd.x, -rd.y, -rd.z) + light_dir).normalize();
-                                    let spe = h.dot(&n).clamp(0.0, 1.0).powf(64.0);
-
-                                    let ambient_color = F3::new(0.05, 0.15, 0.2);
-
-                                    // Ambient
-                                    color[0] += ambient_color.x * amb * occ;
-                                    color[1] += ambient_color.y * amb * occ;
-                                    color[2] += ambient_color.z * amb * occ;
-
-                                    // Diffuse
-                                    color[0] += ctx.scene.sdfs[hit].material.rgb.x * dif * l.intensity * occ;
-                                    color[1] += ctx.scene.sdfs[hit].material.rgb.y * dif * l.intensity * occ;
-                                    color[2] += ctx.scene.sdfs[hit].material.rgb.z * dif * l.intensity * occ;
-
-                                    // Specular
-                                    color[0] += l.rgb.x * dif * spe * occ;
-                                    color[1] += l.rgb.y * dif * spe * occ;
-                                    color[2] += l.rgb.z * dif * spe * occ;
+                            if let Some(hit) = ctx.scene.raymarch(&ro, &rd, &ctx.settings, true) {
+                                if ctx.settings.renderer.renderer_type == RendererType::Phong {
+                                    phong(&ctx, &rd, &hit, &mut color);
                                 }
                             } else {
                                 if ctx.settings.background_fn {
@@ -250,7 +193,7 @@ impl FT {
         println!("Rendered in {} ms", t as f64);
     }
 
-    pub fn create_camera_ray(&self, uv: F2, origin: F3, center: F3, cam_offset: F2, width: F, height: F) -> [F3; 2] {
+    pub fn create_camera_ray(&self, uv: F2, origin: F3, center: F3, fov: F, cam_offset: F2, width: F, height: F) -> [F3; 2] {
 
         /*
         let ww = (center - origin).normalize();
@@ -261,8 +204,6 @@ impl FT {
 
         [origin, d]
         */
-
-        let fov : f64 = 70.0;
 
         let ratio = width / height;
 
