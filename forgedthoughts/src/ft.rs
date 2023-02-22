@@ -10,6 +10,7 @@ pub mod camera;
 pub mod scene;
 
 use rayon::{slice::ParallelSliceMut, iter::{IndexedParallelIterator, ParallelIterator}};
+use std::path::PathBuf;
 
 pub struct FT {
     pub engine          : Option<Engine>,
@@ -24,7 +25,21 @@ impl FT {
     }
 
     /// Compile the given script
-    pub fn compile(&self, code: String) -> Result<FTContext, String> {
+    pub fn compile(&self, path: PathBuf) -> Result<FTContext, String> {
+
+        let file_name = "main.ft";
+
+        let main_path = path.join(file_name);
+
+        if let Some(code) = std::fs::read_to_string(main_path).ok() {
+            self.compile_code(code)
+        } else {
+            Err("Error".to_string())
+        }
+    }
+
+    /// Compile the given script
+    pub fn compile_code(&self, code: String) -> Result<FTContext, String> {
 
         let engine = crate::script::create_engine();
 

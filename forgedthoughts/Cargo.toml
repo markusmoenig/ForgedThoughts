@@ -2,6 +2,11 @@
 name = "forgedthoughts"
 version = "0.1.0"
 edition = "2021"
+description = "A 3D modeling and rendering programming language utilizing SDFs."
+license = "MIT"
+keywords = ["modeling", "rendering", "programming", "language", "3d"]
+repository = "https://github.com/markusmoenig/ForgedThoughts.git"
+
 
 [dependencies]
 rhai = { version = "1.12.0", default-features = true, features = ["sync", "internals"] }

@@ -2,5 +2,5 @@
 
 members = [
     "forgedthoughts",
-    "cli",
+    "ftc",
 ]

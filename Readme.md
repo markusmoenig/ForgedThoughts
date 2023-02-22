@@ -29,4 +29,4 @@ sphere2.radius = 1.2;
 sphere1 -= sphere2;
 ```
 
-![image](image.png)
+![image](main.png)

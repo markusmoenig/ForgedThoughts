@@ -1,19 +1,14 @@
 use std::fs::File;
 use std::io::BufWriter;
+use std::path::PathBuf;
 
 use forgedthoughts::prelude::*;
 
 fn main() {
 
-    let file_name = "image.ft";
-    let mut code = "".to_string();
-    if let Some(input) = std::fs::read_to_string(file_name).ok() {
-        code = input;
-    }
-
     let ft = FT::new();
 
-    let rc = ft.compile(code);
+    let rc = ft.compile(PathBuf::new());
 
     if rc.is_ok() {
         if let Some(mut ctx) = rc.ok() {
@@ -25,7 +20,7 @@ fn main() {
 
             // Write it to file
 
-            let path = "image.png";
+            let path = "main.png";
             let file = File::create(path).unwrap();
             let ref mut w = BufWriter::new(file);
 
