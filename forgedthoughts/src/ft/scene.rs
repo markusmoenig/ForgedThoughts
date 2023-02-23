@@ -3,7 +3,7 @@ use crate::prelude::*;
 pub use rhai::{Scope};
 
 /// Scene
-#[derive(PartialEq, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Scene {
 
     pub sdfs            : Vec<SDF>,
@@ -60,10 +60,10 @@ impl Scene {
 
     #[inline(always)]
     /// Raymarch the scene and return the
-    pub fn raymarch(&self, ro: &F3, rd: &F3, settings: &Settings, normals: bool) -> Option<HitRecord> {
+    pub fn raymarch(&self, ro: &F3, rd: &F3, ctx: &FTContext) -> Option<HitRecord> {
 
         let mut t = 0.0001;
-        let t_max = settings.max_distance;
+        let t_max = ctx.settings.max_distance;
 
         let mut d = std::f64::MAX;
 
@@ -71,7 +71,7 @@ impl Scene {
         let mut closest : Option<usize> = None;
 
         // Raymarching loop
-        for _i in 0..settings.steps {
+        for _i in 0..ctx.settings.steps {
 
             let p = *ro + rd.mult_f(&t);
 
@@ -98,20 +98,29 @@ impl Scene {
 
             let hit_point = *ro + rd.mult_f(&t);
 
-            let normal;
+            let normal = self.sdfs[hit].normal(hit_point);
 
-            if normals {
-                normal = self.sdfs[hit].normal(hit_point);
-            } else {
-                normal = F3::zeros();
-            }
-
-            Some(HitRecord {
+            let mut hit_record = HitRecord {
                 sdf_index           : hit,
                 distance            : t,
                 hit_point,
                 normal,
-            })
+                material            : self.sdfs[hit].material
+            };
+
+            if let Some(shade_ptr) = &self.sdfs[hit].shade {
+
+                // Get a pointer to the shade function if available.
+                let f = move |hit: HitRecord| -> Result<Material, _> {
+                    shade_ptr.call(&ctx.engine, &ctx.ast, (hit,))
+                };
+
+                if let Some(m) = f(hit_record).ok() {
+                    hit_record.material = m;
+                }
+            }
+
+            Some(hit_record)
         } else {
             None
         }

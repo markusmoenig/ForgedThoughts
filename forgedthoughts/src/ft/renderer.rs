@@ -1,5 +1,7 @@
 use crate::prelude::*;
 
+use rhai::{Engine};
+
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum RendererType {
     Phong,
@@ -45,4 +47,11 @@ impl Renderer {
         self.specular = new_val;
     }
 
+    /// Register to the engine
+    pub fn register(engine: &mut Engine) {
+        engine.register_type_with_name::<Renderer>("Renderer")
+            .register_fn("Phong", Renderer::new_phong)
+            .register_get_set("ambient", Renderer::get_ambient, Renderer::set_ambient)
+            .register_get_set("specular", Renderer::get_specular, Renderer::set_specular);
+    }
 }

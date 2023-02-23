@@ -1,5 +1,7 @@
 use crate::prelude::*;
 
+use rhai::{Engine};
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum LightType {
     Point,
@@ -61,5 +63,15 @@ impl Light {
 
     pub fn set_intensity(&mut self, new_val: F) {
         self.intensity = new_val;
+    }
+
+    /// Register to the engine
+    pub fn register(engine: &mut Engine) {
+        engine.register_type_with_name::<Light>("PointLight")
+            .register_fn("PointLight", Light::new_point_light)
+            .register_get_set("rgb", Light::get_rgb, Light::set_rgb)
+            .register_get_set("position", Light::get_position, Light::set_position)
+            .register_get_set("radius", Light::get_radius, Light::set_radius)
+            .register_get_set("intensity", Light::get_intensity, Light::set_intensity);
     }
 }

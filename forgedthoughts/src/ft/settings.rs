@@ -1,5 +1,7 @@
 use crate::prelude::*;
 
+use rhai::{Engine};
+
 /// SDF
 #[derive(PartialEq, Debug, Clone)]
 pub struct Settings {
@@ -100,5 +102,19 @@ impl Settings {
 
     pub fn set_renderer(&mut self, new_val: Renderer) {
         self.renderer = new_val;
+    }
+
+    /// Register to the engine
+    pub fn register(engine: &mut Engine) {
+        engine.register_type_with_name::<Settings>("Settings")
+            .register_fn("Settings", Settings::new)
+            .register_get_set("width", Settings::get_width, Settings::set_width)
+            .register_get_set("height", Settings::get_height, Settings::set_height)
+            .register_get_set("antialias", Settings::get_antialias, Settings::set_antialias)
+            .register_get_set("background", Settings::get_background, Settings::set_background)
+            .register_get_set("opacity", Settings::get_opacity, Settings::set_opacity)
+            .register_get_set("steps", Settings::get_steps, Settings::set_steps)
+            .register_get_set("max_distance", Settings::get_max_distance, Settings::set_max_distance)
+            .register_get_set("renderer", Settings::get_renderer, Settings::set_renderer);
     }
 }

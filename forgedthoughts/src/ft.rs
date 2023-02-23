@@ -10,6 +10,7 @@ pub mod camera;
 pub mod scene;
 pub mod renderer;
 pub mod structs;
+pub mod math;
 
 use rayon::{slice::ParallelSliceMut, iter::{IndexedParallelIterator, ParallelIterator}};
 use std::path::PathBuf;
@@ -54,12 +55,15 @@ impl FT {
         scope.set_value("camera", camera);
 
         let ast = engine.compile(code.as_str());
+
+        //println!("{:?}", ast);
+
         if ast.is_ok() {
             if let Some(mut ast) = ast.ok() {
 
                 let rc = engine.eval_ast_with_scope::<rhai::Dynamic>(&mut scope, &mut ast);
 
-                // println!("{:?}", rc);
+                //println!("{:?}", rc);
 
                 if rc.is_ok() {
 
@@ -147,7 +151,7 @@ impl FT {
                             let [ro, rd] = self.create_camera_ray(coord, ctx.camera.origin, ctx.camera.center, ctx.camera.fov, cam_offset, w, h);
 
                             // Hit something ?
-                            if let Some(hit) = ctx.scene.raymarch(&ro, &rd, &ctx.settings, true) {
+                            if let Some(hit) = ctx.scene.raymarch(&ro, &rd, &ctx) {
                                 if ctx.settings.renderer.renderer_type == RendererType::Phong {
                                     phong(&ctx, &rd, &hit, &mut color);
                                 }

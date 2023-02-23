@@ -2,12 +2,12 @@
 name = "ftc"
 version = "0.1.0"
 edition = "2021"
-description = "A 3D modeling and rendering programming language utilizing SDFs."
+description = "A modeling and rendering programming language utilizing SDFs."
 license = "MIT"
 keywords = ["modeling", "rendering", "programming", "language", "3d"]
 repository = "https://github.com/markusmoenig/ForgedThoughts.git"
 
 [dependencies]
 
-forgedthoughts = { version = "0.1", path = "../forgedthoughts" }
+forgedthoughts = { version = "0.1.1", path = "../forgedthoughts" }
 png = "0.17.5"

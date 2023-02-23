@@ -1,5 +1,7 @@
 use crate::prelude::*;
 
+use rhai::{Engine};
+
 /// SDF
 #[derive(PartialEq, Debug, Clone)]
 pub struct Camera {
@@ -43,4 +45,14 @@ impl Camera {
     pub fn set_fov(&mut self, new_val: F) {
         self.fov = new_val;
     }
+
+    /// Register to the engine
+    pub fn register(engine: &mut Engine) {
+        engine.register_type_with_name::<Camera>("Camera")
+            .register_fn("Camera", Camera::new)
+            .register_get_set("origin", Camera::get_origin, Camera::set_origin)
+            .register_get_set("center", Camera::get_center, Camera::set_center)
+            .register_get_set("fov", Camera::get_fov, Camera::set_fov);
+    }
+
 }

@@ -1,9 +1,11 @@
 use crate::prelude::*;
 
+use rhai::{Engine, FnPtr};
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum SDFType {
-    Container,
     Sphere,
+    Plane,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -13,7 +15,7 @@ pub enum SDFOp {
 }
 
 /// SDF
-#[derive(PartialEq, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct SDF {
     pub id                  : Uuid,
 
@@ -25,7 +27,11 @@ pub struct SDF {
     pub position            : F3,
     pub radius              : F,
 
+    pub normal              : F3,
+
     pub material            : Material,
+
+    pub shade               : Option<FnPtr>
 }
 
 impl SDF {
@@ -42,7 +48,11 @@ impl SDF {
             position        : F3::zeros(),
             radius          : 1.0,
 
-            material        : Material::new(F3::new(0.5, 0.5, 0.5))
+            normal          : F3::zeros(),
+
+            material        : Material::new(),
+
+            shade           : None,
         }
     }
 
@@ -58,24 +68,48 @@ impl SDF {
             position        : F3::zeros(),
             radius,
 
-            material        : Material::new(F3::new(0.5, 0.5, 0.5))
+            normal          : F3::zeros(),
+
+            material        : Material::new(),
+
+            shade           : None,
+        }
+    }
+
+    pub fn new_plane() -> Self {
+        Self {
+            id              : Uuid::new_v4(),
+
+            subtractors     : vec![],
+
+            sdf_type        : SDFType::Plane,
+            sdf_op          : SDFOp::Add,
+
+            position        : F3::zeros(),
+            radius          : 1.0,
+
+            normal          : F3::new(0.0, 1.0, 0.0),
+
+            material        : Material::new(),
+
+            shade           : None,
         }
     }
 
     #[inline(always)]
-    pub fn distance(&self, ray_position: F3) -> F {
+    pub fn distance(&self, p: F3) -> F {
 
         let mut dist = match self.sdf_type {
             SDFType::Sphere => {
-                (ray_position - self.position).length() - self.radius
+                (p - self.position).length() - self.radius
             },
-            _ => {
-                std::f64::MAX
-            }
+            SDFType::Plane => {
+                p.dot(&self.normal)
+            },
         };
 
         for s in &self.subtractors {
-            dist = dist.max(-s.distance(ray_position));
+            dist = dist.max(-s.distance(p));
         }
 
         dist
@@ -121,4 +155,32 @@ impl SDF {
         self.radius = new_val;
     }
 
+    pub fn get_shade(&mut self) -> FnPtr {
+        if let Some(shade) = &self.shade {
+            shade.clone()
+        } else {
+            FnPtr::new("empty_shade").ok().unwrap()
+        }
+    }
+
+    pub fn set_shade(&mut self, new_val: FnPtr) {
+        self.shade = Some(new_val)
+    }
+
+    /// Register to the engine
+    pub fn register(engine: &mut Engine) {
+        engine.register_type_with_name::<SDF>("SDF")
+            .register_fn("Sphere", SDF::new_sphere)
+            .register_fn("Sphere", SDF::new_sphere_radius)
+            .register_fn("Plane", SDF::new_plane)
+            .register_get_set("material", SDF::get_material, SDF::set_material)
+            .register_get_set("position", SDF::get_position, SDF::set_position)
+            .register_get_set("radius", SDF::get_radius, SDF::set_radius)
+            .register_get_set("shade", SDF::get_shade, SDF::set_shade);
+
+        engine.register_fn("-", |a: &mut SDF, b: SDF| -> SDF {
+            a.subtractors.push(b.clone());
+            a.clone()
+        });
+    }
 }

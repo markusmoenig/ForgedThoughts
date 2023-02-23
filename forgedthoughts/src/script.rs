@@ -1,5 +1,5 @@
 
-use crate::prelude::*;
+use crate::{prelude::*, ft::math};
 
 pub use rhai::{Engine, AST, Scope};
 
@@ -19,103 +19,34 @@ pub fn create_engine() -> Engine {
 
     engine.set_fast_operators(false);
 
-    engine.register_type_with_name::<F2>("F2")
-        .register_fn("F2", F2::zeros)
-        .register_fn("F2", F2::new)
-        .register_fn("F2", F3::from)
-        .register_fn("normalize", F2::normalize)
-        .register_fn("length", F2::length)
-        .register_fn("copy", F2::clone)
-        .register_get_set("x", F2::get_x, F2::set_x)
-        .register_get_set("y", F2::get_y, F2::set_y);
-
-    engine.register_fn("+", |a: F2, b: F2| -> F2 {
-        F2::new(a.x + b.x, a.y + b.y)
-    });
-
-    engine.register_fn("-", |a: F2, b: F2| -> F2 {
-        F2::new(a.x - b.x, a.y - b.y)
-    });
-
-    // -- F3
-
-    engine.register_type_with_name::<F3>("F3")
-        .register_fn("F3", F3::zeros)
-        .register_fn("F3", F3::new)
-        .register_fn("F3", F3::from)
-        .register_fn("normalize", F3::normalize)
-        .register_fn("length", F3::length)
-        .register_fn("copy", F3::clone)
-        .register_get_set("x", F3::get_x, F3::set_x)
-        .register_get_set("y", F3::get_y, F3::set_y)
-        .register_get_set("z", F3::get_z, F3::set_z);
-
-    engine.register_fn("+", |a: F3, b: F3| -> F3 {
-        F3::new(a.x + b.x, a.y + b.y, a.z + b.z)
-    });
-
-    engine.register_fn("-", |a: F3, b: F3| -> F3 {
-        F3::new(a.x - b.x, a.y - b.y, a.z - b.z)
-    });
+    // Vectors
+    F2::register(&mut engine);
+    F3::register(&mut engine);
 
     // -- Renderer
-
-    engine.register_type_with_name::<Renderer>("Renderer")
-        .register_fn("Phong", Renderer::new_phong)
-        .register_get_set("ambient", Renderer::get_ambient, Renderer::set_ambient)
-        .register_get_set("specular", Renderer::get_specular, Renderer::set_specular);
+    Renderer::register(&mut engine);
 
     // -- Settings
-
-    engine.register_type_with_name::<Settings>("Settings")
-        .register_fn("Settings", Settings::new)
-        .register_get_set("width", Settings::get_width, Settings::set_width)
-        .register_get_set("height", Settings::get_height, Settings::set_height)
-        .register_get_set("antialias", Settings::get_antialias, Settings::set_antialias)
-        .register_get_set("background", Settings::get_background, Settings::set_background)
-        .register_get_set("opacity", Settings::get_opacity, Settings::set_opacity)
-        .register_get_set("steps", Settings::get_steps, Settings::set_steps)
-        .register_get_set("max_distance", Settings::get_max_distance, Settings::set_max_distance)
-        .register_get_set("renderer", Settings::get_renderer, Settings::set_renderer);
-
+    Settings::register(&mut engine);
 
     // -- Camera
-
-    engine.register_type_with_name::<Camera>("Camera")
-        .register_fn("Camera", Camera::new)
-        .register_get_set("origin", Camera::get_origin, Camera::set_origin)
-        .register_get_set("center", Camera::get_center, Camera::set_center)
-        .register_get_set("fov", Camera::get_fov, Camera::set_fov);
+    Camera::register(&mut engine);
 
     // -- Material
+    Material::register(&mut engine);
 
-    engine.register_type_with_name::<Material>("Material")
-        .register_fn("Material", Material::new)
-        .register_get_set("rgb", Material::get_rgb, Material::set_rgb);
+    // -- HitRecord
+    HitRecord::register(&mut engine);
 
-    // -- Light Types
-
-    engine.register_type_with_name::<Light>("PointLight")
-        .register_fn("PointLight", Light::new_point_light)
-        .register_get_set("rgb", Light::get_rgb, Light::set_rgb)
-        .register_get_set("position", Light::get_position, Light::set_position)
-        .register_get_set("radius", Light::get_radius, Light::set_radius)
-        .register_get_set("intensity", Light::get_intensity, Light::set_intensity);
-
+    // -- Lights
+    Light::register(&mut engine);
 
     // -- SDF Types
+    SDF::register(&mut engine);
 
-    engine.register_type_with_name::<SDF>("SDF")
-        .register_fn("Sphere", SDF::new_sphere)
-        .register_fn("Sphere", SDF::new_sphere_radius)
-        .register_get_set("material", SDF::get_material, SDF::set_material)
-        .register_get_set("position", SDF::get_position, SDF::set_position)
-        .register_get_set("radius", SDF::get_radius, SDF::set_radius);
+    // -- Math functions
+    crate::ft::math::register_math(&mut engine);
 
-    engine.register_fn("-", |a: &mut SDF, b: SDF| -> SDF {
-        a.subtractors.push(b.clone());
-        a.clone()
-    });
 
     engine.on_print(|x| println!("{}", x));
 

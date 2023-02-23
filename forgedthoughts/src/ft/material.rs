@@ -1,5 +1,7 @@
 use crate::prelude::*;
 
+use rhai::{Engine};
+
 // Medium
 
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -75,10 +77,10 @@ pub struct Material {
 
 impl Material {
 
-    pub fn new(rgb: F3) -> Self {
+    pub fn new() -> Self {
 
         Self {
-            rgb,
+            rgb                 : F3::new(0.5, 0.5, 0.5),
             emission            : F3::new(0.0, 0.0, 0.0),
 
             anisotropic         : 0.0,
@@ -134,4 +136,10 @@ impl Material {
         self.rgb = new_val;
     }
 
+    /// Register to the engine
+    pub fn register(engine: &mut Engine) {
+        engine.register_type_with_name::<Material>("Material")
+            .register_fn("Material", Material::new)
+            .register_get_set("rgb", Material::get_rgb, Material::set_rgb);
+    }
 }

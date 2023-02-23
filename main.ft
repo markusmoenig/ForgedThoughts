@@ -1,12 +1,15 @@
 
-fn background(uv) {
-    return F3(uv.x, uv.y, 0.0);
-}
+//fn background(uv) {
+//    return F3(uv.x, uv.y, 0.0);
+//}
 
 camera.origin.x = 2.0;
+//camera.origin.y = 0.5;
 
 settings.background = F3(1.0, 1.0, 1.0);
-settings.antialias = 1;
+settings.antialias = 3;
+//settings.max_distance = 200.0;
+//settings.steps = 20000;
 
 let light = PointLight();
 light.position = F3(3.0, 3.0, 5.0);
@@ -14,8 +17,22 @@ light.intensity = 1.5;
 
 let sphere1 = Sphere(1.2);
 sphere1.material.rgb = F3(0.2, 0.6, 0.8);
+//sphere1.shade = |hit| {
+//    let m = hit.material;
+//    m.rgb.x = 1.0;
+//    m
+//};
 
 let sphere2 = Sphere(1.2);
 sphere2.position.x = 1.0;
+
+//let plane = Plane();
+//plane.material.rgb = F3(0.2, 0.6, 0.3);
+//plane.shade = |hit| {
+//
+//    let f = mod(floor(6.0 * hit.hit_point.z + 10000.0) + floor(6.0 * hit.hit_point.x + 10000.0), 2.0);
+// hit.material.rgb.x = f;
+//   hit.material
+//};
 
 sphere1 -= sphere2;

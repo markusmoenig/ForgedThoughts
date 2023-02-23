@@ -3,6 +3,7 @@ use crate::prelude::*;
 #[inline(always)]
 /// Phong renderer, based on https://www.shadertoy.com/view/XlXGDj
 pub fn phong(ctx: &FTContext, rd: &F3, hit: &HitRecord, color: &mut [F; 4]) {
+
     for l in &ctx.scene.lights {
         let light_dir = l.position - hit.hit_point;
 
@@ -19,9 +20,9 @@ pub fn phong(ctx: &FTContext, rd: &F3, hit: &HitRecord, color: &mut [F; 4]) {
         color[2] += ctx.settings.renderer.ambient.z * amb * occ;
 
         // Diffuse
-        color[0] += ctx.scene.sdfs[hit.sdf_index].material.rgb.x * dif * l.intensity * occ;
-        color[1] += ctx.scene.sdfs[hit.sdf_index].material.rgb.y * dif * l.intensity * occ;
-        color[2] += ctx.scene.sdfs[hit.sdf_index].material.rgb.z * dif * l.intensity * occ;
+        color[0] += hit.material.rgb.x * dif * l.intensity * occ;
+        color[1] += hit.material.rgb.y * dif * l.intensity * occ;
+        color[2] += hit.material.rgb.z * dif * l.intensity * occ;
 
         // Specular
         color[0] += ctx.settings.renderer.specular.x * dif * spe * occ;

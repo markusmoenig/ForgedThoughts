@@ -1,5 +1,7 @@
 use crate::prelude::*;
 
+use rhai::{Engine};
+
 use std::ops::Add;
 use std::ops::Sub;
 use std::ops::Mul;
@@ -95,6 +97,27 @@ impl F2 {
     pub fn xxx(&self) -> F3 {
         F3::new(self.x, self.x, self.x)
     }
+
+    /// Register to the engine
+    pub fn register(engine: &mut Engine) {
+        engine.register_type_with_name::<F2>("F2")
+            .register_fn("F2", F2::zeros)
+            .register_fn("F2", F2::new)
+            .register_fn("F2", F3::from)
+            .register_fn("normalize", F2::normalize)
+            .register_fn("length", F2::length)
+            .register_fn("copy", F2::clone)
+            .register_get_set("x", F2::get_x, F2::set_x)
+            .register_get_set("y", F2::get_y, F2::set_y);
+
+            engine.register_fn("+", |a: F2, b: F2| -> F2 {
+                F2::new(a.x + b.x, a.y + b.y)
+            });
+
+            engine.register_fn("-", |a: F2, b: F2| -> F2 {
+                F2::new(a.x - b.x, a.y - b.y)
+            });
+        }
 }
 
 impl FuncArgs for F2 {
@@ -237,6 +260,27 @@ impl F3 {
         )
     }
 
+    /// Register to the engine
+    pub fn register(engine: &mut Engine) {
+        engine.register_type_with_name::<F3>("F3")
+            .register_fn("F3", F3::zeros)
+            .register_fn("F3", F3::new)
+            .register_fn("F3", F3::from)
+            .register_fn("normalize", F3::normalize)
+            .register_fn("length", F3::length)
+            .register_fn("copy", F3::clone)
+            .register_get_set("x", F3::get_x, F3::set_x)
+            .register_get_set("y", F3::get_y, F3::set_y)
+            .register_get_set("z", F3::get_z, F3::set_z);
+
+        engine.register_fn("+", |a: F3, b: F3| -> F3 {
+            F3::new(a.x + b.x, a.y + b.y, a.z + b.z)
+        });
+
+        engine.register_fn("-", |a: F3, b: F3| -> F3 {
+            F3::new(a.x - b.x, a.y - b.y, a.z - b.z)
+        });
+    }
 }
 
 impl Add for F3 {
