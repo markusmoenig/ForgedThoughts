@@ -81,6 +81,16 @@ impl F2 {
         (self.x * self.x + self.y * self.y).sqrt()
     }
 
+    pub fn dot(&self, other: &F2) -> F {
+        self.x * other.x + self.y * other.y
+    }
+
+    pub fn mult_f(&self, other: &F) -> F2 {
+        F2::new(self.x * other,
+            self.y * other
+        )
+    }
+
     // Temporaries until proper implementation
     pub fn xyy(&self) -> F3 {
         F3::new(self.x, self.y, self.y)
@@ -123,6 +133,14 @@ impl F2 {
 impl FuncArgs for F2 {
     fn parse<C: Extend<rhai::Dynamic>>(self, container: &mut C) {
         container.extend(once(rhai::Dynamic::from(self)));
+    }
+}
+
+impl Add for F2 {
+    type Output = F2;
+
+    fn add(self, other: F2) -> F2 {
+        F2::new( self.x + other.x, self.y + other.y)
     }
 }
 
@@ -230,6 +248,11 @@ impl F3 {
         self.clone()
     }
 
+    /// abs this vector
+    pub fn abs(&self) -> F3 {
+        F3::new(self.x.abs(), self.y.abs(), self.z.abs())
+    }
+
     /// Returns the length
     pub fn length(&self) -> F {
         (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
@@ -258,6 +281,10 @@ impl F3 {
             self.y / other,
             self.z / other
         )
+    }
+
+    pub fn max_f(&self, other: &F) -> F3 {
+        F3::new(self.x.max(*other), self.y.max(*other), self.z.max(*other))
     }
 
     /// Register to the engine
