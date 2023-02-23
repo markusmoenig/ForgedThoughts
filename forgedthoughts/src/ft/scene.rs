@@ -31,8 +31,8 @@ impl Scene {
             if val.2.type_name().ends_with("::SDF") {
                 if let Some(df) = scope.get(val.0) {
                     let sdf = df.clone().cast::<SDF>();
-                    for s in sdf.subtractors {
-                        used_up.push(s.id);
+                    for s in sdf.booleans {
+                        used_up.push(s.other_id());
                     }
                 }
             }

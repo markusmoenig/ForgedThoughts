@@ -2,6 +2,29 @@ use crate::prelude::*;
 
 use rhai::{Engine, FnPtr};
 
+/// Supported Boolean Operations
+#[derive(Debug, Clone)]
+pub enum Boolean {
+    Subtract(SDF),
+    SMin(SDF, F)
+}
+
+use Boolean::*;
+
+impl Boolean {
+    pub fn other_id(&self) -> Uuid {
+        match self {
+            Subtract(other) => {
+                other.id
+            },
+            SMin(other, _k) => {
+                other.id
+            }
+        }
+    }
+}
+
+/// Supported SDF Types
 #[derive(PartialEq, Debug, Clone)]
 pub enum SDFType {
     Sphere,
@@ -10,21 +33,14 @@ pub enum SDFType {
     CappedCone,
 }
 
-#[derive(PartialEq, Debug, Clone)]
-pub enum SDFOp {
-    Add,
-    Subtract,
-}
-
 /// SDF
 #[derive(Debug, Clone)]
 pub struct SDF {
     pub id                  : Uuid,
 
-    pub subtractors         : Vec<SDF>,
+    pub booleans            : Vec<Boolean>,
 
     pub sdf_type            : SDFType,
-    pub sdf_op              : SDFOp,
 
     pub position            : F3,
     pub size                : F3,
@@ -44,10 +60,9 @@ impl SDF {
         Self {
             id              : Uuid::new_v4(),
 
-            subtractors     : vec![],
+            booleans        : vec![],
 
             sdf_type        : SDFType::Sphere,
-            sdf_op          : SDFOp::Add,
 
             position        : F3::zeros(),
             size            : F3::new(1.0, 1.0, 1.0),
@@ -66,10 +81,9 @@ impl SDF {
         Self {
             id              : Uuid::new_v4(),
 
-            subtractors     : vec![],
+            booleans        : vec![],
 
             sdf_type        : SDFType::Sphere,
-            sdf_op          : SDFOp::Add,
 
             position        : F3::zeros(),
             size            : F3::new(1.0, 1.0, 1.0),
@@ -88,10 +102,9 @@ impl SDF {
         Self {
             id              : Uuid::new_v4(),
 
-            subtractors     : vec![],
+            booleans        : vec![],
 
             sdf_type        : SDFType::Plane,
-            sdf_op          : SDFOp::Add,
 
             position        : F3::zeros(),
             size            : F3::new(1.0, 1.0, 1.0),
@@ -110,10 +123,9 @@ impl SDF {
         Self {
             id              : Uuid::new_v4(),
 
-            subtractors     : vec![],
+            booleans        : vec![],
 
             sdf_type        : SDFType::Plane,
-            sdf_op          : SDFOp::Add,
 
             position        : F3::zeros(),
             size            : F3::new(1.0, 1.0, 1.0),
@@ -132,10 +144,9 @@ impl SDF {
         Self {
             id              : Uuid::new_v4(),
 
-            subtractors     : vec![],
+            booleans        : vec![],
 
             sdf_type        : SDFType::Box,
-            sdf_op          : SDFOp::Add,
 
             position        : F3::zeros(),
             size            : F3::new(1.0, 1.0, 1.0),
@@ -154,10 +165,9 @@ impl SDF {
         Self {
             id              : Uuid::new_v4(),
 
-            subtractors     : vec![],
+            booleans        : vec![],
 
             sdf_type        : SDFType::Box,
-            sdf_op          : SDFOp::Add,
 
             position        : F3::zeros(),
             size,
@@ -178,10 +188,9 @@ impl SDF {
         Self {
             id              : Uuid::new_v4(),
 
-            subtractors     : vec![],
+            booleans        : vec![],
 
             sdf_type        : SDFType::CappedCone,
-            sdf_op          : SDFOp::Add,
 
             position        : F3::zeros(),
             size            : F3::new(1.0, 1.0, 1.0),
@@ -200,10 +209,9 @@ impl SDF {
         Self {
             id              : Uuid::new_v4(),
 
-            subtractors     : vec![],
+            booleans        : vec![],
 
             sdf_type        : SDFType::CappedCone,
-            sdf_op          : SDFOp::Add,
 
             position        : F3::zeros(),
             size            : F3::new(1.0, 1.0, 1.0),
@@ -219,7 +227,7 @@ impl SDF {
     }
 
     #[inline(always)]
-    pub fn distance(&self, p: F3) -> F {
+    pub fn distance(&self, mut p: F3) -> F {
 
         let mut dist = match self.sdf_type {
             SDFType::Sphere => {
@@ -234,17 +242,11 @@ impl SDF {
             },
             SDFType::CappedCone => {
 
-                let h = self.offset;
-                let r1 = self.normal.x;
-                let r2 = self.normal.y;
+                p = p - self.position;
 
-                //  vec2 q = vec2( length(p.xz), p.y );
-                //   vec2 k1 = vec2(r2,h);
-                //   vec2 k2 = vec2(r2-r1,2.0*h);
-                //   vec2 ca = vec2(q.x-min(q.x,(q.y<0.0)?r1:r2), abs(q.y)-h);
-                //   vec2 cb = q - k1 + k2*clamp( dot(k1-q,k2)/dot2(k2), 0.0, 1.0 );
-                //   float s = (cb.x<0.0 && ca.y<0.0) ? -1.0 : 1.0;
-                //   return s*sqrt( min(dot2(ca),dot2(cb)) );
+                let h = (self.offset - self.rounding).max(0.0);
+                let r1 = (self.normal.x - self.rounding).max(0.0);
+                let r2 = (self.normal.y - self.rounding).max(0.0);
 
                 let q = F2::new( F2::new(p.x, p.z).length(), p.y );
                 let k1 = F2::new(r2, h);
@@ -253,12 +255,30 @@ impl SDF {
                 let cb = q - k1 + k2.mult_f( &((k1 - q).dot(&k2)/k2.dot(&k2) ).clamp(0.0, 1.0) );
                 let s = if cb.x < 0.0 && ca.y < 0.0 { -1.0 } else { 1.0 };
 
-                s * ca.dot(&ca).min(cb.dot(&cb)).sqrt()
+                s * ca.dot(&ca).min(cb.dot(&cb)).sqrt() - self.rounding
             }
         };
 
-        for s in &self.subtractors {
-            dist = dist.max(-s.distance(p));
+        for s in &self.booleans {
+            match s {
+                Boolean::Subtract(other) => {
+                    dist = dist.max(-other.distance(p));
+                },
+                Boolean::SMin(other, k) => {
+                    //float h = clamp( 0.5+0.5*(b-a)/k, 0.0, 1.0 );
+                    //return mix( b, a, h ) - k*h*(1.0-h);
+
+                    #[inline(always)]
+                    fn mix(x: F, y: F, a: F) -> F {
+                        x * (1.0 - a) + y * a
+                    }
+
+                    let a = dist; let b = other.distance(p);
+
+                    let h = (0.5 + 0.5 * (b - a) / k).clamp(0.0, 1.0);
+                    dist = mix(b, a, h) - k * h * (1.0 - h);
+                },
+            }
         }
 
         dist
@@ -356,6 +376,11 @@ impl SDF {
         self.shade = Some(new_val)
     }
 
+    /// Smin Boolean
+    pub fn smin(&mut self, other: SDF, k: F) {
+        self.booleans.push(SMin(other, k));
+    }
+
     /// Register to the engine
     pub fn register(engine: &mut Engine) {
         engine.register_type_with_name::<SDF>("SDF")
@@ -369,6 +394,9 @@ impl SDF {
             .register_fn("Cone", SDF::new_capped_cone_h_r1_r2)
             .register_fn("CappedCone", SDF::new_capped_cone)
             .register_fn("CappedCone", SDF::new_capped_cone_h_r1_r2)
+
+            .register_fn("smin", SDF::smin)
+
             .register_get_set("material", SDF::get_material, SDF::set_material)
             .register_get_set("position", SDF::get_position, SDF::set_position)
             .register_get_set("normal", SDF::get_normal, SDF::set_normal)
@@ -381,7 +409,7 @@ impl SDF {
             .register_get_set("shade", SDF::get_shade, SDF::set_shade);
 
         engine.register_fn("-", |a: &mut SDF, b: SDF| -> SDF {
-            a.subtractors.push(b.clone());
+            a.booleans.push(Boolean::Subtract(b.clone()));
             a.clone()
         });
     }
