@@ -43,6 +43,9 @@ pub struct SDF {
     pub sdf_type            : SDFType,
 
     pub position            : F3,
+    pub rotation            : F3,
+    pub scale               : F,
+
     pub size                : F3,
     pub radius              : F,
     pub normal              : F3,
@@ -65,6 +68,9 @@ impl SDF {
             sdf_type        : SDFType::Sphere,
 
             position        : F3::zeros(),
+            rotation        : F3::zeros(),
+            scale           : 1.0,
+
             size            : F3::new(1.0, 1.0, 1.0),
             radius          : 1.0,
             normal          : F3::zeros(),
@@ -86,6 +92,9 @@ impl SDF {
             sdf_type        : SDFType::Sphere,
 
             position        : F3::zeros(),
+            rotation        : F3::zeros(),
+            scale           : 1.0,
+
             size            : F3::new(1.0, 1.0, 1.0),
             radius,
             normal          : F3::zeros(),
@@ -107,6 +116,9 @@ impl SDF {
             sdf_type        : SDFType::Plane,
 
             position        : F3::zeros(),
+            rotation        : F3::zeros(),
+            scale           : 1.0,
+
             size            : F3::new(1.0, 1.0, 1.0),
             radius          : 1.0,
             normal          : F3::new(0.0, 1.0, 0.0),
@@ -128,6 +140,9 @@ impl SDF {
             sdf_type        : SDFType::Plane,
 
             position        : F3::zeros(),
+            rotation        : F3::zeros(),
+            scale           : 1.0,
+
             size            : F3::new(1.0, 1.0, 1.0),
             radius          : 1.0,
             normal,
@@ -149,6 +164,9 @@ impl SDF {
             sdf_type        : SDFType::Box,
 
             position        : F3::zeros(),
+            rotation        : F3::zeros(),
+            scale           : 1.0,
+
             size            : F3::new(1.0, 1.0, 1.0),
             radius          : 1.0,
             normal          : F3::new(0.0, 1.0, 0.0),
@@ -170,6 +188,9 @@ impl SDF {
             sdf_type        : SDFType::Box,
 
             position        : F3::zeros(),
+            rotation        : F3::zeros(),
+            scale           : 1.0,
+
             size,
             radius          : 1.0,
             normal          : F3::new(0.0, 1.0, 0.0),
@@ -193,6 +214,9 @@ impl SDF {
             sdf_type        : SDFType::CappedCone,
 
             position        : F3::zeros(),
+            rotation        : F3::zeros(),
+            scale           : 1.0,
+
             size            : F3::new(1.0, 1.0, 1.0),
             radius          : 1.0,
             normal          : F3::new(1.0, 0.0, 0.0),
@@ -214,6 +238,9 @@ impl SDF {
             sdf_type        : SDFType::CappedCone,
 
             position        : F3::zeros(),
+            rotation        : F3::zeros(),
+            scale           : 1.0,
+
             size            : F3::new(1.0, 1.0, 1.0),
             radius          : 1.0,
             normal          : F3::new(r1, r2, 0.0),
@@ -226,12 +253,21 @@ impl SDF {
         }
     }
 
+    pub fn copy(&mut self) -> SDF {
+        let mut c = self.clone();
+        c.id = Uuid::new_v4();
+        c
+    }
+
     #[inline(always)]
     pub fn distance(&self, mut p: F3) -> F {
 
+        p = p - self.position;
+        p = p.div_f(&self.scale);
+
         let mut dist = match self.sdf_type {
             SDFType::Sphere => {
-                (p - self.position).length() - self.radius
+                p.length() - self.radius
             },
             SDFType::Plane => {
                 p.dot(&self.normal) + self.offset
@@ -268,20 +304,27 @@ impl SDF {
                     //float h = clamp( 0.5+0.5*(b-a)/k, 0.0, 1.0 );
                     //return mix( b, a, h ) - k*h*(1.0-h);
 
-                    #[inline(always)]
-                    fn mix(x: F, y: F, a: F) -> F {
-                        x * (1.0 - a) + y * a
-                    }
+                    // https://iquilezles.org/articles/smin/
+                    //float h = max( k-abs(a-b), 0.0 )/k;
+                    //return min( a, b ) - h*h*h*k*(1.0/6.0);
+
+                    // #[inline(always)]
+                    // fn mix(x: F, y: F, a: F) -> F {
+                    //     x * (1.0 - a) + y * a
+                    // }
 
                     let a = dist; let b = other.distance(p);
 
-                    let h = (0.5 + 0.5 * (b - a) / k).clamp(0.0, 1.0);
-                    dist = mix(b, a, h) - k * h * (1.0 - h);
+                    // let h = (0.5 + 0.5 * (b - a) / k).clamp(0.0, 1.0);
+                    // dist = mix(b, a, h) - k * h * (1.0 - h);
+
+                    let h = (k - (a-b).abs()).max(0.0) / k;
+                    dist = a.min(b) - h * h * h * k * (1.0 / 6.0);
                 },
             }
         }
 
-        dist
+        dist * self.scale
     }
 
     #[inline(always)]
@@ -314,6 +357,22 @@ impl SDF {
 
     pub fn set_position(&mut self, new_val: F3) {
         self.position = new_val;
+    }
+
+    pub fn get_rotation(&mut self) -> F3 {
+        self.rotation
+    }
+
+    pub fn set_rotation(&mut self, new_val: F3) {
+        self.rotation = new_val;
+    }
+
+    pub fn get_scale(&mut self) -> F {
+        self.scale
+    }
+
+    pub fn set_scale(&mut self, new_val: F) {
+        self.scale = new_val;
     }
 
     pub fn get_normal(&mut self) -> F3 {
@@ -395,10 +454,15 @@ impl SDF {
             .register_fn("CappedCone", SDF::new_capped_cone)
             .register_fn("CappedCone", SDF::new_capped_cone_h_r1_r2)
 
+            .register_fn("copy", SDF::copy)
             .register_fn("smin", SDF::smin)
 
             .register_get_set("material", SDF::get_material, SDF::set_material)
+
             .register_get_set("position", SDF::get_position, SDF::set_position)
+            .register_get_set("rotation", SDF::get_rotation, SDF::set_rotation)
+            .register_get_set("scale", SDF::get_scale, SDF::set_scale)
+
             .register_get_set("normal", SDF::get_normal, SDF::set_normal)
             .register_get_set("radius", SDF::get_radius, SDF::set_radius)
             .register_get_set("offset", SDF::get_offset, SDF::set_offset)

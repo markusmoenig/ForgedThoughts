@@ -11,6 +11,7 @@ pub mod scene;
 pub mod renderer;
 pub mod structs;
 pub mod math;
+pub mod modifier;
 
 use rayon::{slice::ParallelSliceMut, iter::{IndexedParallelIterator, ParallelIterator}};
 use std::path::PathBuf;
@@ -28,21 +29,18 @@ impl FT {
     }
 
     /// Compile the given script
-    pub fn compile(&self, path: PathBuf) -> Result<FTContext, String> {
-
-        let file_name = "main.ft";
-
-        let main_path = path.join(file_name);
+    pub fn compile(&self, path: PathBuf, file_name: String) -> Result<FTContext, String> {
+        let main_path = path.join(file_name.clone());
 
         if let Some(code) = std::fs::read_to_string(main_path).ok() {
-            self.compile_code(code)
+            self.compile_code(code, file_name.to_string())
         } else {
-            Err("Error".to_string())
+            Err(format!("Error reading file `{}`", file_name))
         }
     }
 
     /// Compile the given script
-    pub fn compile_code(&self, code: String) -> Result<FTContext, String> {
+    pub fn compile_code(&self, code: String, file_name: String) -> Result<FTContext, String> {
 
         let engine = crate::script::create_engine();
 
@@ -56,14 +54,14 @@ impl FT {
 
         let ast = engine.compile(code.as_str());
 
-        //println!("{:?}", ast);
-
+        if ast.is_err() {
+            let err = ast.err().unwrap();
+            Err(format!("Error in file '{}': {}", file_name, err.to_string()))
+        } else
         if ast.is_ok() {
             if let Some(mut ast) = ast.ok() {
 
                 let rc = engine.eval_ast_with_scope::<rhai::Dynamic>(&mut scope, &mut ast);
-
-                //println!("{:?}", rc);
 
                 if rc.is_ok() {
 
@@ -101,7 +99,8 @@ impl FT {
                         scene
                     })
                 } else {
-                    Err("Error".to_string())
+                    let err = rc.err().unwrap();
+                    Err(format!("Error in file '{}': {}", file_name, err.to_string()))
                 }
             } else {
                 Err("Error".to_string())
