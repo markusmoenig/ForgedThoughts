@@ -1,1 +1,1 @@
-For documentation and more info please visit the [Website](https://forgedthoughts.com).
+For documentation and examples please visit the [Website](https://forgedthoughts.com).

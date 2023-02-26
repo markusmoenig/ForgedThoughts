@@ -1,8 +1,11 @@
-ForgedThoughts is under early development.
 
-ForgedThoughts is a modeling and rendering programming language utilizing SDFs.
+ForgedThoughts is a modeling and rendering programming language utilizing SDFs and is in early development.
 
-# Example
+For documentation and examples see the [Website](https://forgedthoughts.com).
+
+![image](main.png)
+
+# Created with
 
 ```rust
 camera.origin.z = 0.75;
@@ -64,5 +67,3 @@ cut.modifier = modifier;
 
 sphere -= cut;
 ```
-
-![image](main.png)
