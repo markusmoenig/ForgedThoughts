@@ -663,5 +663,11 @@ impl SDF {
             a.booleans.push(Boolean::Subtract(b.clone()));
             a.clone()
         });
+
+        // engine.register_fn("=", |a: &mut SDF, b: SDF| {
+        //     let mut c = b.clone();
+        //     c.id = Uuid::new_v4();
+        //     *a = c;
+        // });
     }
 }

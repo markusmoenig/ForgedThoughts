@@ -215,6 +215,6 @@ impl RayModifier {
             .register_get_set("frequency", RayModifier::get_frequency, RayModifier::set_frequency)
             .register_get_set("amplitude", RayModifier::get_amplitude, RayModifier::set_amplitude)
 
-            .register_get_set("add", RayModifier::get_addend, RayModifier::set_addend);
+            .register_get_set("addend", RayModifier::get_addend, RayModifier::set_addend);
     }
 }
