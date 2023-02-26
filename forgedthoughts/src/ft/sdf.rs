@@ -636,6 +636,14 @@ impl SDF {
         self.modifier = Some(new_val);
     }
 
+    pub fn get_visible(&mut self) -> bool {
+        self.visible
+    }
+
+    pub fn set_visible(&mut self, new_val: bool) {
+        self.visible = new_val;
+    }
+
     /// Register to the engine
     pub fn register(engine: &mut Engine) {
         engine.register_type_with_name::<SDF>("SDF")
@@ -672,7 +680,9 @@ impl SDF {
             .register_get_set("rounding", SDF::get_rounding, SDF::set_rounding)
             .register_get_set("ray_modifier", SDF::get_ray_modifier, SDF::set_ray_modifier)
             .register_get_set("shade", SDF::get_shade, SDF::set_shade)
-            .register_get_set("modifier", SDF::get_modifier, SDF::set_modifier);
+            .register_get_set("modifier", SDF::get_modifier, SDF::set_modifier)
+
+            .register_get_set("visible", SDF::get_visible, SDF::set_visible);
 
 
         engine.register_fn("-", |a: &mut SDF, b: SDF| -> SDF {

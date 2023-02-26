@@ -5,7 +5,7 @@ settings.width = 600;
 settings.height = 600;
 
 settings.background = F3("444");
-settings.antialias = 1;
+settings.antialias = 3;
 //settings.opacity = 0.0;
 
 let phong = Phong();
