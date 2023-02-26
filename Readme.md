@@ -27,12 +27,11 @@ light.intensity = 1.5;
 
 // Main shape
 
-let helmet = Sphere(0.24);
-
-helmet.material.rgb = F3("9F6F4A");
+let sphere = Sphere(0.24);
 let cone = Cone(0.3, 0.25, 0.0);
 
-helmet.smin(cone, 0.5);
+let helmet = smin(sphere, cone, 0.5);
+helmet.material.rgb = F3("9F6F4A");
 
 // Make it hollow
 

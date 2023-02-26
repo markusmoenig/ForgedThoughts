@@ -63,6 +63,8 @@ pub struct SDF {
     pub ray_modifier        : Option<FnPtr>,
 
     pub modifier            : Option<RayModifier>,
+
+    pub visible             : bool,
 }
 
 impl SDF {
@@ -93,6 +95,8 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            visible         : true,
         }
     }
 
@@ -122,6 +126,8 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            visible         : true,
         }
     }
 
@@ -151,6 +157,8 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            visible         : true,
         }
     }
 
@@ -180,6 +188,8 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            visible         : true,
         }
     }
 
@@ -209,6 +219,8 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            visible         : true,
         }
     }
 
@@ -238,6 +250,8 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            visible         : true,
         }
     }
 
@@ -269,6 +283,8 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            visible         : true,
         }
     }
 
@@ -298,6 +314,8 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            visible         : true,
         }
     }
 
@@ -327,6 +345,8 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            visible         : true,
         }
     }
 
@@ -356,6 +376,8 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            visible         : true,
         }
     }
 
@@ -614,11 +636,6 @@ impl SDF {
         self.modifier = Some(new_val);
     }
 
-    /// Smin Boolean
-    pub fn smin(&mut self, other: SDF, k: F) {
-        self.booleans.push(SMin(other, k));
-    }
-
     /// Register to the engine
     pub fn register(engine: &mut Engine) {
         engine.register_type_with_name::<SDF>("SDF")
@@ -636,7 +653,6 @@ impl SDF {
             .register_fn("Ellipsoid", SDF::new_ellipsoid_size)
 
             .register_fn("copy", SDF::copy)
-            .register_fn("smin", SDF::smin)
 
             .register_get_set("material", SDF::get_material, SDF::set_material)
 
@@ -662,6 +678,14 @@ impl SDF {
         engine.register_fn("-", |a: &mut SDF, b: SDF| -> SDF {
             a.booleans.push(Boolean::Subtract(b.clone()));
             a.clone()
+        });
+
+        engine.register_fn("smin", |a: &mut SDF, b: SDF, k: F| -> SDF {
+            a.booleans.push(SMin(b, k));
+            let mut c = a.clone();
+            c.id = Uuid::new_v4();
+            a.visible = false;
+            c
         });
 
         // engine.register_fn("=", |a: &mut SDF, b: SDF| {
