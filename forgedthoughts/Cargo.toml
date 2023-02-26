@@ -10,7 +10,7 @@ repository = "https://github.com/markusmoenig/ForgedThoughts.git"
 [dependencies]
 rhai = { version = "1.12.0", default-features = true, features = ["sync", "internals"] }
 rayon = "1.5.3"
-marching-cubes = "0.1.2"
+colors-transform = "0.2.11"
 
 [dependencies.uuid]
 version = "1.1.2"

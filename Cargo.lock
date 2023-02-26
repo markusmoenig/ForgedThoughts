@@ -68,6 +68,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "colors-transform"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9226dbc05df4fb986f48d730b001532580883c4c06c5d1c213f4b34c1c157178"
+
+[[package]]
 name = "const-random"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -188,7 +194,7 @@ dependencies = [
 name = "forgedthoughts"
 version = "0.1.1"
 dependencies = [
- "marching-cubes",
+ "colors-transform",
  "rayon",
  "rhai",
  "uuid",
@@ -271,12 +277,6 @@ name = "linux-raw-sys"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f051f77a7c8e6957c0696eac88f26b0117e54f52d3fc682ab19397a8812846a4"
-
-[[package]]
-name = "marching-cubes"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3789d0ce591676c041a2c460cdca511777fed6eacccd3acf25e6c35fc23d28f0"
 
 [[package]]
 name = "memoffset"

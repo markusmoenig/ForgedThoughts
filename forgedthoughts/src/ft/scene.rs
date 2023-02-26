@@ -77,7 +77,7 @@ impl Scene {
 
             for (index, s) in self.sdfs.iter().enumerate() {
 
-                let new_d = s.distance(p);
+                let new_d = s.distance(ctx, p);
                 if new_d < d {
                     closest = Some(index);
                     d = new_d;
@@ -98,7 +98,7 @@ impl Scene {
 
             let hit_point = *ro + rd.mult_f(&t);
 
-            let normal = self.sdfs[hit].normal(hit_point);
+            let normal = self.sdfs[hit].normal(ctx, hit_point);
 
             let mut hit_record = HitRecord {
                 sdf_index           : hit,
@@ -124,5 +124,19 @@ impl Scene {
         } else {
             None
         }
+    }
+
+    /// Returns the distance for the given position. Used for polygonization
+    pub fn distance(&self, ctx: &FTContext, p: F3) -> F {
+        let mut d : F = std::f64::MAX;
+
+        for s in &self.sdfs {
+            let new_d = s.distance(ctx, p);
+            if new_d < d {
+                d = new_d;
+            }
+        }
+
+        d
     }
 }

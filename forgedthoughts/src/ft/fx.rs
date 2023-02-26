@@ -1,5 +1,6 @@
 use crate::prelude::*;
 
+use colors_transform::Color;
 use rhai::{Engine};
 
 use std::ops::Add;
@@ -210,6 +211,34 @@ impl F3 {
         }
     }
 
+    pub fn color(mut color: String) -> Self {
+
+        if color.starts_with('#') {
+            //println!("Color {}", value);
+            let mut chars = color.chars();
+            chars.next();
+            color = chars.as_str().to_string();
+        }
+
+        use colors_transform::{Rgb};
+
+        let mut x = 0.0;
+        let mut y = 0.0;
+        let mut z = 0.0;
+
+        if let Some(rgb) = Rgb::from_hex_str(color.as_str()).ok() {
+            x = rgb.get_red() as F / 255.0;
+            y = rgb.get_green() as F / 255.0;
+            z = rgb.get_blue() as F / 255.0;
+        }
+
+        Self {
+            x,
+            y,
+            z
+        }
+    }
+
     pub fn get_x(&mut self) -> F {
         self.x
     }
@@ -293,6 +322,7 @@ impl F3 {
             .register_fn("F3", F3::zeros)
             .register_fn("F3", F3::new)
             .register_fn("F3", F3::from)
+            .register_fn("F3", F3::color)
             .register_fn("normalize", F3::normalize)
             .register_fn("length", F3::length)
             .register_fn("copy", F3::clone)
@@ -342,62 +372,88 @@ impl Mul for F3 {
     }
 }
 
-/*
-// F4
-#[derive(PartialEq, Debug, Clone)]
-pub struct F4 {
-    pub value               : GF4
+impl Div for F3 {
+    type Output = F3;
+
+    fn div(self, other: F3) -> F3 {
+        F3::new( self.x / other.x, self.y / other.y, self.z / other.z )
+    }
 }
 
-impl F4 {
+/// B3
+#[derive(PartialEq, Debug, Copy, Clone)]
+pub struct B3 {
+    pub x                   : bool,
+    pub y                   : bool,
+    pub z                   : bool,
+}
 
-    pub fn new(v: Vector4<F>) -> Self {
+impl B3 {
+
+    pub fn from(v: B3) -> Self {
         Self {
-            value           : v,
+            x               : v.x,
+            y               : v.y,
+            z               : v.z,
         }
     }
 
-    pub fn new_1(x: F) -> Self {
+    pub fn falsed() -> Self {
         Self {
-            value           : GF4::new(x, x, x, x)
+            x               : false,
+            y               : false,
+            z               : false,
         }
     }
 
-    pub fn new_4(x: F, y: F, z: F, w: F) -> Self {
+    pub fn new_x(x: bool) -> Self {
         Self {
-            value           : GF4::new(x, y, z, w),
+            x               : x,
+            y               : x,
+            z               : x,
         }
     }
 
-    fn get_x(&mut self) -> F {
-        self.value.x
+    pub fn new(x: bool, y: bool, z: bool) -> Self {
+        Self {
+            x               : x,
+            y               : y,
+            z               : z,
+        }
     }
 
-    fn set_x(&mut self, new_val: F) {
-        self.value.x = new_val;
+    pub fn get_x(&mut self) -> bool {
+        self.x
     }
 
-    fn get_y(&mut self) -> F {
-        self.value.y
+    pub fn set_x(&mut self, new_val: bool) {
+        self.x = new_val;
     }
 
-    fn set_y(&mut self, new_val: F) {
-        self.value.y = new_val;
+    pub fn get_y(&mut self) -> bool {
+        self.y
     }
 
-    fn get_z(&mut self) -> F {
-        self.value.z
+    pub fn set_y(&mut self, new_val: bool) {
+        self.y = new_val;
     }
 
-    fn set_z(&mut self, new_val: F) {
-        self.value.z = new_val;
+    pub fn get_z(&mut self) -> bool {
+        self.z
     }
 
-    fn get_w(&mut self) -> F {
-        self.value.w
+    pub fn set_z(&mut self, new_val: bool) {
+        self.z = new_val;
     }
 
-    fn set_w(&mut self, new_val: F) {
-        self.value.w = new_val;
+    /// Register to the engine
+    pub fn register(engine: &mut Engine) {
+        engine.register_type_with_name::<B3>("B3")
+            .register_fn("B3", B3::falsed)
+            .register_fn("B3", B3::new)
+            .register_fn("B3", B3::from)
+            .register_get_set("x", B3::get_x, B3::set_x)
+            .register_get_set("y", B3::get_y, B3::set_y)
+            .register_get_set("z", B3::get_z, B3::set_z);
     }
-}*/
+}

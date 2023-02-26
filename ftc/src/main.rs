@@ -62,6 +62,8 @@ fn main() {
             if polygonize == true {
 
                 // Polygonize and save to an OBJ file
+                let obj = ft.polygonize(&mut ctx);
+                _ = std::fs::write("main.obj", obj);
 
             } else {
 

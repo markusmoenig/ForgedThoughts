@@ -2,6 +2,7 @@ pub mod ft;
 pub mod buffer;
 pub mod script;
 pub mod renderer;
+pub mod marching_cubes;
 
 pub type I = i64;
 pub type F = f64;
@@ -20,6 +21,7 @@ pub mod prelude {
 
     pub use crate::ft::fx::F2;
     pub use crate::ft::fx::F3;
+    pub use crate::ft::fx::B3;
 
     pub use crate::ft::sdf::SDF;
     pub use crate::ft::material::Material;
@@ -32,10 +34,14 @@ pub mod prelude {
     pub use crate::ft::renderer::Renderer;
 
     pub use crate::ft::structs::HitRecord;
+    pub use crate::ft::ray_modifier::RayModifier;
+
 
     pub use crate::renderer::phong::phong;
 
     pub use crate::script::FTContext;
+
+    pub use crate::marching_cubes::MarchingCubes;
 
     pub use uuid::Uuid;
 }

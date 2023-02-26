@@ -11,7 +11,7 @@ pub mod scene;
 pub mod renderer;
 pub mod structs;
 pub mod math;
-pub mod modifier;
+pub mod ray_modifier;
 
 use rayon::{slice::ParallelSliceMut, iter::{IndexedParallelIterator, ParallelIterator}};
 use std::path::PathBuf;
@@ -240,6 +240,71 @@ impl FT {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("Time went backwards");
             stop.as_millis()
+    }
+
+
+    // Polygonize into an OBJ String
+    pub fn polygonize(&self, ctx: &FTContext) -> String {
+
+        let bb_size : F = 1.0;
+        let step_size : F = 0.1;
+
+        let mut x = -bb_size;
+        let mut y = -bb_size;
+        let mut z = -bb_size;
+
+        let mut volume : Vec<F> = vec![];
+
+        while x <= bb_size {
+            while y <= bb_size {
+                while z <= bb_size {
+
+                    let p = F3::new(x, y, z);
+                    let d = ctx.scene.distance(ctx, p);
+
+                    //value[index] = -d as f32;
+                    volume.push(d);
+
+                    z += step_size;
+                }
+                z = 0.0;
+                y += step_size;
+            }
+            y = 0.0;
+            x += step_size;
+        }
+
+        let dim = (bb_size * 2.0 / step_size) as u32 / 2;
+        println!("dim {}", dim);
+
+        let mut mc = MarchingCubes::new();
+        mc.set_volume(volume, dim, dim, dim);
+        let triangles = mc.marching_cubes(0.0);
+
+        println!("{}", triangles);
+
+        let mut obj = "".to_string();
+
+        let mut indices = vec![];
+
+        for i in 0..triangles {
+
+            let index = i * 3;
+
+            let v = format!("v {}    {}    {}\n", mc.triangles[index], mc.triangles[index+1], mc.triangles[index+2]);
+            obj += v.as_str();
+
+            indices.push(index);
+        }
+
+        let mut index = 0;
+        for _i in 0..indices.len() {
+            let f = format!("f {}    {}    {}\n", index, index+1, index+2);
+            obj += f.as_str();
+            index += 3;
+        }
+
+        obj
     }
 
 }

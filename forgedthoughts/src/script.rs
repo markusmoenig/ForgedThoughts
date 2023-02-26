@@ -22,6 +22,7 @@ pub fn create_engine() -> Engine {
     // Vectors
     F2::register(&mut engine);
     F3::register(&mut engine);
+    B3::register(&mut engine);
 
     // -- Renderer
     Renderer::register(&mut engine);
@@ -43,6 +44,9 @@ pub fn create_engine() -> Engine {
 
     // -- SDF Types
     SDF::register(&mut engine);
+
+    // --Modifer
+    RayModifier::register(&mut engine);
 
     // -- Math functions
     crate::ft::math::register_math(&mut engine);
