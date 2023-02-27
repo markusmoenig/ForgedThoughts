@@ -44,6 +44,7 @@ pub fn create_engine() -> Engine {
 
     // -- SDF Types
     SDF::register(&mut engine);
+    Smooth::register(&mut engine);
 
     // --Modifer
     RayModifier::register(&mut engine);

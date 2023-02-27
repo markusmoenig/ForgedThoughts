@@ -36,6 +36,7 @@ pub mod prelude {
     pub use crate::ft::structs::HitRecord;
     pub use crate::ft::ray_modifier::RayModifier;
 
+    pub use crate::ft::smooth::Smooth;
 
     pub use crate::renderer::phong::phong;
 

@@ -5,7 +5,12 @@ use rhai::{Engine, FnPtr};
 /// Supported Boolean Operations
 #[derive(Debug, Clone)]
 pub enum Boolean {
+    Addition(SDF),
+    AdditionSmooth(SDF, F),
     Subtract(SDF),
+    SubtractSmooth(SDF, F),
+    Intersection(SDF),
+    IntersectionSmooth(SDF, F),
     SMin(SDF, F)
 }
 
@@ -14,7 +19,22 @@ use Boolean::*;
 impl Boolean {
     pub fn other_id(&self) -> Uuid {
         match self {
+            Addition(other) => {
+                other.id
+            },
+            AdditionSmooth(other, _smoothing) => {
+                other.id
+            },
             Subtract(other) => {
+                other.id
+            },
+            SubtractSmooth(other, _smoothing) => {
+                other.id
+            },
+            Intersection(other) => {
+                other.id
+            },
+            IntersectionSmooth(other, _smoothing) => {
                 other.id
             },
             SMin(other, _k) => {
@@ -458,8 +478,45 @@ impl SDF {
 
         for s in &self.booleans {
             match s {
+                Boolean::Addition(other) => {
+                    dist = dist.min(other.distance(ctx, p));
+                },
+                Boolean::AdditionSmooth(other, smoothing) => {
+
+                    #[inline(always)]
+                    fn op_smooth_union(d1: F, d2: F, k: F) -> F {
+                        let h = (0.5 + 0.5 * (d2 - d1) / k).clamp(0.0, 1.0);
+                        d2 * (1.0 - h) + d1 * h - k * h * (1.0 - h)
+                    }
+
+                    dist = op_smooth_union(other.distance(ctx, p), dist, *smoothing);
+                },
                 Boolean::Subtract(other) => {
                     dist = dist.max(-other.distance(ctx, p));
+                },
+                Boolean::SubtractSmooth(other, smoothing) => {
+
+                    #[inline(always)]
+                    fn op_smooth_subtraction(d1: F, d2: F, k: F) -> F {
+                        let h = (0.5 - 0.5 * (d2 + d1) / k).clamp(0.0, 1.0);
+                        d2 * (1.0 - h) - d1 * h + k * h * (1.0 - h)
+                    }
+
+                    dist = op_smooth_subtraction(other.distance(ctx, p), dist, *smoothing);
+                },
+                Boolean::Intersection(other) => {
+                    dist = dist.max(other.distance(ctx, p));
+                },
+                Boolean::IntersectionSmooth(other, smoothing) => {
+
+                    #[inline(always)]
+                    fn op_smooth_intersection(d1: F, d2: F, k: F) -> F {
+                        let h = (0.5 - 0.5 * (d2 - d1) / k).clamp(0.0, 1.0);
+                        d2 * (1.0 - h) + d1 * h + k * h * (1.0 - h)
+                    }
+
+
+                    dist = op_smooth_intersection(other.distance(ctx, p), dist, *smoothing);
                 },
                 Boolean::SMin(other, k) => {
                     //float h = clamp( 0.5+0.5*(b-a)/k, 0.0, 1.0 );
@@ -684,9 +741,33 @@ impl SDF {
 
             .register_get_set("visible", SDF::get_visible, SDF::set_visible);
 
+        engine.register_fn("+", |a: &mut SDF, b: SDF| -> SDF {
+            a.booleans.push(Boolean::Addition(b.clone()));
+            a.clone()
+        });
+
+        engine.register_fn("+", |a: &mut SDF, b: Smooth| -> SDF {
+            a.booleans.push(Boolean::AdditionSmooth(b.sdf.clone(), b.smoothing));
+            a.clone()
+        });
 
         engine.register_fn("-", |a: &mut SDF, b: SDF| -> SDF {
             a.booleans.push(Boolean::Subtract(b.clone()));
+            a.clone()
+        });
+
+        engine.register_fn("-", |a: &mut SDF, b: Smooth| -> SDF {
+            a.booleans.push(Boolean::SubtractSmooth(b.sdf.clone(), b.smoothing));
+            a.clone()
+        });
+
+        engine.register_fn("&", |a: &mut SDF, b: SDF| -> SDF {
+            a.booleans.push(Boolean::Intersection(b.clone()));
+            a.clone()
+        });
+
+        engine.register_fn("&", |a: &mut SDF, b: Smooth| -> SDF {
+            a.booleans.push(Boolean::IntersectionSmooth(b.sdf.clone(), b.smoothing));
             a.clone()
         });
 

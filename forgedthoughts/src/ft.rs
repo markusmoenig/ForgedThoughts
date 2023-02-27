@@ -12,6 +12,7 @@ pub mod renderer;
 pub mod structs;
 pub mod math;
 pub mod ray_modifier;
+pub mod smooth;
 
 use rayon::{slice::ParallelSliceMut, iter::{IndexedParallelIterator, ParallelIterator}};
 use std::path::PathBuf;
