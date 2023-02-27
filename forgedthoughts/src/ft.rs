@@ -293,7 +293,7 @@ impl FT {
 
         // Generate faces
         for i in 0..indices.len()/3 {
-            let f = format!("f {} {} {}\n", indices[i*3]+1, indices[i*3+1]+1, indices[i*3+2]+1);
+            let f = format!("f {} {} {}\n", indices[i*3+2]+1, indices[i*3+1]+1, indices[i*3]+1);
             obj += f.as_str();
         }
 
