@@ -321,6 +321,7 @@ impl F3 {
         engine.register_type_with_name::<F3>("F3")
             .register_fn("F3", F3::zeros)
             .register_fn("F3", F3::new)
+            .register_fn("F3", F3::new_x)
             .register_fn("F3", F3::from)
             .register_fn("F3", F3::color)
             .register_fn("normalize", F3::normalize)

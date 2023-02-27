@@ -51,7 +51,7 @@ eyes.position.z = 0.3;
 eyes.mirror.x = true;
 helmet -= eyes;
 
-// Node and mouth
+// Nose and mouth
 
 let cut = Box(F3(0.07, 0.2, 0.1));
 cut.position.y -= 0.25;
@@ -64,5 +64,12 @@ modifier.addend = 1.0;
 cut.modifier = modifier;
 
 helmet -= cut;
+
+// Stripe
+
+let stripe = Box(F3(0.011, 0.17, 0.2));
+stripe.position.y = 0.16;
+stripe.position.z = 0.2;
+helmet += Groove(stripe, 0.01, 0.02);
 
 ```

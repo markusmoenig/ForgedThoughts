@@ -44,14 +44,16 @@ pub fn create_engine() -> Engine {
 
     // -- SDF Types
     SDF::register(&mut engine);
+
+    // -- Operators
     Smooth::register(&mut engine);
+    Groove::register(&mut engine);
 
     // --Modifer
     RayModifier::register(&mut engine);
 
     // -- Math functions
     crate::ft::math::register_math(&mut engine);
-
 
     engine.on_print(|x| println!("{}", x));
 

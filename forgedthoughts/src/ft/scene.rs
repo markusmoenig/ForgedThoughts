@@ -97,7 +97,7 @@ impl Scene {
             if t > t_max {
                 break;
             }
-            t += d;
+            t += d * ctx.settings.step_size;
         }
 
         if let Some(hit) = hit {

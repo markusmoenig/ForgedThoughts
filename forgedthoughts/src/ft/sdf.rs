@@ -7,11 +7,12 @@ use rhai::{Engine, FnPtr};
 pub enum Boolean {
     Addition(SDF),
     AdditionSmooth(SDF, F),
+    AdditionGroove(SDF, F, F),
     Subtract(SDF),
     SubtractSmooth(SDF, F),
     Intersection(SDF),
     IntersectionSmooth(SDF, F),
-    SMin(SDF, F)
+    SMin(SDF, F),
 }
 
 use Boolean::*;
@@ -23,6 +24,9 @@ impl Boolean {
                 other.id
             },
             AdditionSmooth(other, _smoothing) => {
+                other.id
+            },
+            AdditionGroove(other, _ra, _rb) => {
                 other.id
             },
             Subtract(other) => {
@@ -84,6 +88,15 @@ pub struct SDF {
 
     pub modifier            : Option<RayModifier>,
 
+    pub twist               : F3,
+    pub bend                : F3,
+
+    pub onion               : F,
+    pub onion_depth         : I,
+
+    pub max                 : F3,
+    pub min                 : F3,
+
     pub visible             : bool,
 }
 
@@ -116,6 +129,15 @@ impl SDF {
 
             modifier        : None,
 
+            twist           : F3::zeros(),
+            bend            : F3::zeros(),
+
+            onion           : 0.0,
+            onion_depth     : 1,
+
+            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
+            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
             visible         : true,
         }
     }
@@ -146,6 +168,15 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            twist           : F3::zeros(),
+            bend            : F3::zeros(),
+
+            onion           : 0.0,
+            onion_depth     : 1,
+
+            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
+            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
 
             visible         : true,
         }
@@ -178,6 +209,15 @@ impl SDF {
 
             modifier        : None,
 
+            twist           : F3::zeros(),
+            bend            : F3::zeros(),
+
+            onion           : 0.0,
+            onion_depth     : 1,
+
+            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
+            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
             visible         : true,
         }
     }
@@ -208,6 +248,15 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            twist           : F3::zeros(),
+            bend            : F3::zeros(),
+
+            onion           : 0.0,
+            onion_depth     : 1,
+
+            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
+            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
 
             visible         : true,
         }
@@ -240,6 +289,15 @@ impl SDF {
 
             modifier        : None,
 
+            twist           : F3::zeros(),
+            bend            : F3::zeros(),
+
+            onion           : 0.0,
+            onion_depth     : 1,
+
+            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
+            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
             visible         : true,
         }
     }
@@ -270,6 +328,15 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            twist           : F3::zeros(),
+            bend            : F3::zeros(),
+
+            onion           : 0.0,
+            onion_depth     : 1,
+
+            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
+            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
 
             visible         : true,
         }
@@ -304,6 +371,15 @@ impl SDF {
 
             modifier        : None,
 
+            twist           : F3::zeros(),
+            bend            : F3::zeros(),
+
+            onion           : 0.0,
+            onion_depth     : 1,
+
+            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
+            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
             visible         : true,
         }
     }
@@ -334,6 +410,15 @@ impl SDF {
             ray_modifier    : None,
 
             modifier        : None,
+
+            twist           : F3::zeros(),
+            bend            : F3::zeros(),
+
+            onion           : 0.0,
+            onion_depth     : 1,
+
+            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
+            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
 
             visible         : true,
         }
@@ -366,6 +451,15 @@ impl SDF {
 
             modifier        : None,
 
+            twist           : F3::zeros(),
+            bend            : F3::zeros(),
+
+            onion           : 0.0,
+            onion_depth     : 1,
+
+            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
+            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
             visible         : true,
         }
     }
@@ -397,6 +491,15 @@ impl SDF {
 
             modifier        : None,
 
+            twist           : F3::zeros(),
+            bend            : F3::zeros(),
+
+            onion           : 0.0,
+            onion_depth     : 1,
+
+            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
+            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
             visible         : true,
         }
     }
@@ -409,6 +512,131 @@ impl SDF {
 
     #[inline(always)]
     pub fn distance(&self, ctx: &FTContext, mut p: F3) -> F {
+
+        let orig_p = p;
+
+        // Twist
+
+        if self.twist.x != 0.0 {
+            #[inline(always)]
+            fn op_twist_x(p: F3, k: F) -> F3 {
+                let cx = f64::cos(k * p.x);
+                let sx = f64::sin(k * p.x);
+                let m11 = 1.0;
+                let m12 = 0.0;
+                let m13 = 0.0;
+                let m21 = 0.0;
+                let m22 = cx;
+                let m23 = -sx;
+                let m31 = 0.0;
+                let m32 = sx;
+                let m33 = cx;
+                let qx = m11 * p.x + m12 * p.y + m13 * p.z;
+                let qy = m21 * p.x + m22 * p.y + m23 * p.z;
+                let qz = m31 * p.x + m32 * p.y + m33 * p.z;
+                F3::new(qx, qy, qz)
+            }
+            p = op_twist_x(p, self.twist.x);
+        }
+
+        if self.twist.y != 0.0 {
+            #[inline(always)]
+            fn op_twist(p: F3, k: F) -> F3 {
+                let cy = f64::cos(k * p.y);
+                let sy = f64::sin(k * p.y);
+                let m11 = cy;
+                let m12 = -sy;
+                let m21 = sy;
+                let m22 = cy;
+                let qx = m11 * p.x + m12 * p.z;
+                let qz = m21 * p.x + m22 * p.z;
+                let qy = p.y;
+                F3::new(qx, qy, qz)
+            }
+            p = op_twist(p, self.twist.y);
+        }
+
+        if self.twist.z != 0.0 {
+            #[inline(always)]
+            fn op_twist_z(p: F3, k: F) -> F3 {
+                let cz = f64::cos(k * p.z);
+                let sz = f64::sin(k * p.z);
+                let m11 = cz;
+                let m12 = -sz;
+                let m13 = 0.0;
+                let m21 = sz;
+                let m22 = cz;
+                let m23 = 0.0;
+                let m31 = 0.0;
+                let m32 = 0.0;
+                let m33 = 1.0;
+                let qx = m11 * p.x + m12 * p.y + m13 * p.z;
+                let qy = m21 * p.x + m22 * p.y + m23 * p.z;
+                let qz = m31 * p.x + m32 * p.y + m33 * p.z;
+                F3::new(qx, qy, qz)
+            }
+            p = op_twist_z(p, self.twist.z);
+        }
+
+        // Bend
+
+        if self.bend.x != 0.0 {
+            #[inline(always)]
+            fn op_bend_x(p: F3, k: F) -> F3 {
+                let cx = f64::cos(k * p.x);
+                let sx = f64::sin(k * p.x);
+                let m11 = cx;
+                let m12 = -sx;
+                let m21 = sx;
+                let m22 = cx;
+                let qx = m11 * p.x + m12 * p.y;
+                let qy = m21 * p.x + m22 * p.y;
+                let qz = p.z;
+                F3::new(qx, qy, qz)
+            }
+            p = op_bend_x(p, self.bend.x);
+        }
+
+        if self.bend.y != 0.0 {
+            #[inline(always)]
+            fn op_bend_y(p: F3, k: F) -> F3 {
+                let cx = f64::cos(k * p.x);
+                let sx = f64::sin(k * p.x);
+                let m11 = 1.0;
+                let m12 = 0.0;
+                let m13 = 0.0;
+                let m21 = 0.0;
+                let m22 = cx;
+                let m23 = -sx;
+                let m31 = 0.0;
+                let m32 = sx;
+                let m33 = cx;
+                let qx = m11 * p.x + m12 * p.y + m13 * p.z;
+                let qy = m21 * p.x + m22 * p.y + m23 * p.z;
+                let qz = m31 * p.x + m32 * p.y + m33 * p.z;
+                F3::new(qx, qy, qz)
+            }
+            p = op_bend_y(p, self.bend.y);
+        }
+
+        if self.bend.z != 0.0 {
+            #[inline(always)]
+            fn op_bend_z(p: F3, k: F) -> F3 {
+                let cx = f64::cos(k * p.x);
+                let sx = f64::sin(k * p.x);
+                let m11 = cx;
+                let m12 = -sx;
+                let m21 = sx;
+                let m22 = cx;
+                let qx = m11 * p.x + m12 * p.y;
+                let qy = m21 * p.x + m22 * p.y;
+                let qz = p.z;
+                F3::new(qx, qy, qz)
+            }
+            p = op_bend_z(p, self.bend.z);
+        }
+
+        // Mirror
 
         if self.mirror.x {
             p.x = p.x.abs();
@@ -476,6 +704,16 @@ impl SDF {
             }
         };
 
+        // Onion
+
+        if self.onion != 0.0 {
+            for _i in 0..self.onion_depth {
+                dist = dist.abs() - self.onion;
+            }
+        }
+
+        // Booleans
+
         for s in &self.booleans {
             match s {
                 Boolean::Addition(other) => {
@@ -490,6 +728,11 @@ impl SDF {
                     }
 
                     dist = op_smooth_union(other.distance(ctx, p), dist, *smoothing);
+                },
+                Boolean::AdditionGroove(other, ra, rb) => {
+                    let a = dist;
+                    let b = other.distance(ctx, p);
+                    dist = a.min((a - ra).max(b.abs() - rb));
                 },
                 Boolean::Subtract(other) => {
                     dist = dist.max(-other.distance(ctx, p));
@@ -541,6 +784,16 @@ impl SDF {
                 },
             }
         }
+
+        // Max
+        dist = dist.max(orig_p.x - self.max.x);
+        dist = dist.max(orig_p.y - self.max.y);
+        dist = dist.max(orig_p.z - self.max.z);
+
+        // Min
+        // dist = dist.min(orig_p.x - self.min.x);
+        // dist = dist.min(orig_p.y - self.min.y);
+        // dist = dist.min(orig_p.z - self.min.z);
 
         dist * self.scale
     }
@@ -607,6 +860,54 @@ impl SDF {
 
     pub fn set_mirror(&mut self, new_val: B3) {
         self.mirror = new_val;
+    }
+
+    pub fn get_twist(&mut self) -> F3 {
+        self.twist
+    }
+
+    pub fn set_twist(&mut self, new_val: F3) {
+        self.twist = new_val;
+    }
+
+    pub fn get_bend(&mut self) -> F3 {
+        self.bend
+    }
+
+    pub fn set_bend(&mut self, new_val: F3) {
+        self.bend = new_val;
+    }
+
+    pub fn get_onion(&mut self) -> F {
+        self.onion
+    }
+
+    pub fn set_onion(&mut self, new_val: F) {
+        self.onion = new_val;
+    }
+
+    pub fn get_onion_layers(&mut self) -> I {
+        self.onion_depth
+    }
+
+    pub fn set_onion_layers(&mut self, new_val: I) {
+        self.onion_depth = new_val;
+    }
+
+    pub fn get_max(&mut self) -> F3 {
+        self.max
+    }
+
+    pub fn set_max(&mut self, new_val: F3) {
+        self.max = new_val;
+    }
+
+    pub fn get_min(&mut self) -> F3 {
+        self.min
+    }
+
+    pub fn set_min(&mut self, new_val: F3) {
+        self.min = new_val;
     }
 
     pub fn get_size(&mut self) -> F3 {
@@ -727,6 +1028,15 @@ impl SDF {
 
             .register_get_set("normal", SDF::get_normal, SDF::set_normal)
             .register_get_set("mirror", SDF::get_mirror, SDF::set_mirror)
+            .register_get_set("twist", SDF::get_twist, SDF::set_twist)
+            .register_get_set("bend", SDF::get_bend, SDF::set_bend)
+
+            .register_get_set("max", SDF::get_max, SDF::set_max)
+            .register_get_set("min", SDF::get_min, SDF::set_min)
+
+            .register_get_set("onion", SDF::get_onion, SDF::set_onion)
+
+            .register_get_set("onion_layers", SDF::get_onion_layers, SDF::set_onion_layers)
 
             .register_get_set("size", SDF::get_size, SDF::set_size)
             .register_get_set("radius", SDF::get_radius, SDF::set_radius)
@@ -749,6 +1059,14 @@ impl SDF {
         engine.register_fn("+", |a: &mut SDF, b: Smooth| -> SDF {
             a.booleans.push(Boolean::AdditionSmooth(b.sdf.clone(), b.smoothing));
             a.clone()
+        });
+
+        engine.register_fn("+", |a: &mut SDF, b: Groove| -> SDF {
+            a.booleans.push(AdditionGroove(b.sdf.clone(), b.ra, b.rb));
+            let mut c = a.clone();
+            c.id = Uuid::new_v4();
+            a.visible = false;
+            c
         });
 
         engine.register_fn("-", |a: &mut SDF, b: SDF| -> SDF {

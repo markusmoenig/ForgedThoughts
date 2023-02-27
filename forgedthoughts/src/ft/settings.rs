@@ -14,6 +14,7 @@ pub struct Settings {
 
     // Raymarching
     pub steps               : I,
+    pub step_size           : F,
     pub max_distance        : F,
 
     // Renderer
@@ -33,6 +34,7 @@ impl Settings {
 
             steps           : 10000,
             max_distance    : 5.0,
+            step_size       : 1.0,
 
             renderer        : Renderer::new_phong()
         }
@@ -88,6 +90,14 @@ impl Settings {
         self.steps = new_val;
     }
 
+    pub fn get_step_size(&mut self) -> F {
+        self.step_size
+    }
+
+    pub fn set_step_size(&mut self, new_val: F) {
+        self.step_size = new_val;
+    }
+
     pub fn get_max_distance(&mut self) -> F {
         self.max_distance
     }
@@ -114,6 +124,7 @@ impl Settings {
             .register_get_set("background", Settings::get_background, Settings::set_background)
             .register_get_set("opacity", Settings::get_opacity, Settings::set_opacity)
             .register_get_set("steps", Settings::get_steps, Settings::set_steps)
+            .register_get_set("step_size", Settings::get_step_size, Settings::set_step_size)
             .register_get_set("max_distance", Settings::get_max_distance, Settings::set_max_distance)
             .register_get_set("renderer", Settings::get_renderer, Settings::set_renderer);
     }
