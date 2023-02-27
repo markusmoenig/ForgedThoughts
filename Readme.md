@@ -5,7 +5,28 @@ For documentation and examples see the [Website](https://forgedthoughts.com).
 
 ![image](main.png)
 
-# Created with
+## Goals
+
+Forged Thoughts strives to create high-quality distance field models for rendering and poligonization. It utilizes multi-threaded CPU based rendering in 64-bit to prevent the limitations of SDFs on the GPU. The focus is on quality, rather than speed.
+
+The overall project goals are:
+
+* Create signed distance fields for rendering and poligonization.
+* Focus is on quality rather than speed (although all example render in just a few hundred ms on my machine).
+* CPU based rather than GPU based. All computation is done in 64-bit.
+* Provide an easy but powerful syntax to model and render SDFs without any limitations.
+* Access to all SDF modeling primitives, modifiers and tricks (In progress).
+* Various integrated renderers (TODO)\
+* Animation( TODO)
+* Object hierarchies by including sub-class scripts (TODO)
+* Share objects and materials via an integrated database (TODO)
+* Model and work with 2D SDFs and Text as an overlay to the 3D layer (TODO)
+* Terrain (TODO)
+* Physics (TODO)
+
+## Example
+
+The above helmet was created with the following code:
 
 ```rust
 camera.origin.z = 0.75;
@@ -71,5 +92,14 @@ let stripe = Box(F3(0.011, 0.17, 0.2));
 stripe.position.y = 0.16;
 stripe.position.z = 0.2;
 helmet += Groove(stripe, 0.01, 0.02);
-
 ```
+
+## Supporting Forged Thoughts
+
+You can support the Forged Thoughts project by becoming a [GitHub Sponsor](https://github.com/sponsors/markusmoenig).
+
+## License
+
+Forged Thoughts is licensed under the MIT.
+
+Unless explicitly stated otherwise, any contribution intentionally submitted for inclusion in Forged Thoughts, shall be MIT licensed as above, without any additional terms or conditions.

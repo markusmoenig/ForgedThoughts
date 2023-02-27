@@ -1,12 +1,18 @@
 
 camera.origin.z = 0.75;
 
+// For rendering
 settings.width = 600;
 settings.height = 600;
 
 settings.background = F3("444");
 settings.antialias = 3;
 //settings.opacity = 0.0;
+
+// For polygonization
+settings.grid_size = 0.5;
+settings.grid_step_size = 0.002;
+settings.iso_value = 0.0001;
 
 let phong = Phong();
 phong.specular = F3(0.5, 0.5, 0.5);

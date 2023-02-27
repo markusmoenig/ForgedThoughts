@@ -247,8 +247,8 @@ impl FT {
     // Polygonize into an OBJ String
     pub fn polygonize(&self, ctx: &FTContext) -> String {
 
-        let bb_size : F = 2.0;
-        let step_size : F = 0.005;
+        let bb_size : F = ctx.settings.grid_size;
+        let step_size : F = ctx.settings.grid_step_size;
 
         let mut volume : Vec<F> = vec![];
 
@@ -271,11 +271,11 @@ impl FT {
 
         println!("Triangulating normal data");
 
-        let iso_value = 0.006;
+        let iso_value = ctx.settings.iso_value;
 
         let mut mc = MarchingCubes::new();
         mc.set_volume(volume, dim, dim, dim);
-        let triangles = mc.marching_cubes(iso_value);
+        let triangles = mc.marching_cubes(iso_value as f32);
 
         println!("Generated {} polygons", triangles);
 

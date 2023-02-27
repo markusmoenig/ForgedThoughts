@@ -17,6 +17,11 @@ pub struct Settings {
     pub step_size           : F,
     pub max_distance        : F,
 
+    // Polygonization
+    pub grid_size           : F,
+    pub grid_step_size      : F,
+    pub iso_value           : F,
+
     // Renderer
     pub renderer            : Renderer,
 }
@@ -35,6 +40,10 @@ impl Settings {
             steps           : 10000,
             max_distance    : 5.0,
             step_size       : 1.0,
+
+            grid_size       : 1.0,
+            grid_step_size  : 0.01,
+            iso_value       : 0.006,
 
             renderer        : Renderer::new_phong()
         }
@@ -106,6 +115,30 @@ impl Settings {
         self.max_distance = new_val;
     }
 
+    pub fn get_grid_size(&mut self) -> F {
+        self.grid_size
+    }
+
+    pub fn set_grid_size(&mut self, new_val: F) {
+        self.grid_size = new_val;
+    }
+
+    pub fn get_grid_step_size(&mut self) -> F {
+        self.grid_step_size
+    }
+
+    pub fn set_grid_step_size(&mut self, new_val: F) {
+        self.grid_step_size = new_val;
+    }
+
+    pub fn get_iso_value(&mut self) -> F {
+        self.iso_value
+    }
+
+    pub fn set_iso_value(&mut self, new_val: F) {
+        self.iso_value = new_val;
+    }
+
     pub fn get_renderer(&mut self) -> Renderer {
         self.renderer
     }
@@ -123,8 +156,15 @@ impl Settings {
             .register_get_set("antialias", Settings::get_antialias, Settings::set_antialias)
             .register_get_set("background", Settings::get_background, Settings::set_background)
             .register_get_set("opacity", Settings::get_opacity, Settings::set_opacity)
+
             .register_get_set("steps", Settings::get_steps, Settings::set_steps)
             .register_get_set("step_size", Settings::get_step_size, Settings::set_step_size)
+
+            .register_get_set("grid_size", Settings::get_grid_size, Settings::set_grid_size)
+            .register_get_set("grid_step_size", Settings::get_grid_step_size, Settings::set_grid_step_size)
+            .register_get_set("iso_value", Settings::get_iso_value, Settings::set_iso_value)
+
+
             .register_get_set("max_distance", Settings::get_max_distance, Settings::set_max_distance)
             .register_get_set("renderer", Settings::get_renderer, Settings::set_renderer);
     }
