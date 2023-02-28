@@ -5,9 +5,10 @@ use rhai::{Engine};
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum RendererType {
     Phong,
+    PBR,
 }
 
-/// SDF
+/// Renderer Class
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct Renderer {
     pub renderer_type       : RendererType,
@@ -26,6 +27,16 @@ impl Renderer {
             // Phong
             ambient         : F3::new(0.05, 0.1, 0.15),
             specular        : F3::new(1.0, 1.0, 1.0)
+        }
+    }
+
+    pub fn new_pbr() -> Self {
+        Self {
+            renderer_type   : RendererType::PBR,
+
+            // Phong
+            ambient         : F3::zeros(),
+            specular        : F3::zeros()
         }
     }
 

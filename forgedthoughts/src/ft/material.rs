@@ -136,10 +136,30 @@ impl Material {
         self.rgb = new_val;
     }
 
+    pub fn get_roughness(&mut self) -> F {
+        self.roughness
+    }
+
+    pub fn set_roughness(&mut self, new_val: F) {
+        self.roughness = new_val;
+    }
+
+    pub fn get_metallic(&mut self) -> F {
+        self.metallic
+    }
+
+    pub fn set_metallic(&mut self, new_val: F) {
+        self.metallic = new_val;
+    }
+
     /// Register to the engine
     pub fn register(engine: &mut Engine) {
         engine.register_type_with_name::<Material>("Material")
             .register_fn("Material", Material::new)
+
+            .register_get_set("roughness", Material::get_roughness, Material::set_roughness)
+            .register_get_set("metallic", Material::get_metallic, Material::set_metallic)
+
             .register_get_set("rgb", Material::get_rgb, Material::set_rgb);
     }
 }

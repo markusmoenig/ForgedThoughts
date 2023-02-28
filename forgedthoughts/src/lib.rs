@@ -40,10 +40,13 @@ pub mod prelude {
     pub use crate::ft::operators::Groove;
 
     pub use crate::renderer::phong::phong;
+    pub use crate::renderer::pbr::pbr;
 
     pub use crate::script::FTContext;
 
     pub use crate::marching_cubes::MarchingCubes;
+
+    pub use std::f64::consts::PI;
 
     pub use uuid::Uuid;
 }

@@ -1,5 +1,5 @@
 
-ForgedThoughts is a modeling and rendering programming language utilizing SDFs and is in early development.
+Forged Thoughts is a modeling and rendering programming language. It is open source under the MIT license and currently in early development. The language utilizes 3D and 2D SDFs and is written in Rust and can be easily installed as a Rust subcommand.
 
 For documentation and examples see the [Website](https://forgedthoughts.com).
 
@@ -29,23 +29,6 @@ The overall project goals are:
 The above helmet was created with the following code:
 
 ```rust
-camera.origin.z = 0.75;
-
-settings.width = 600;
-settings.height = 600;
-
-settings.background = F3("444");
-settings.antialias = 5;
-//settings.opacity = 0.0;
-
-let phong = Phong();
-phong.specular = F3(0.5, 0.5, 0.5);
-settings.renderer = phong;
-
-let light = PointLight();
-light.position = F3(3.0, 3.0, 5.0);
-light.intensity = 1.5;
-
 // Main shape
 
 let sphere = Sphere(0.24);
@@ -103,3 +86,7 @@ You can support the Forged Thoughts project by becoming a [GitHub Sponsor](https
 Forged Thoughts is licensed under the MIT.
 
 Unless explicitly stated otherwise, any contribution intentionally submitted for inclusion in Forged Thoughts, shall be MIT licensed as above, without any additional terms or conditions.
+
+## Sponsors
+
+None yet

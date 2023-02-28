@@ -45,7 +45,7 @@ impl Settings {
             grid_step_size  : 0.01,
             iso_value       : 0.006,
 
-            renderer        : Renderer::new_phong()
+            renderer        : Renderer::new_pbr()
         }
     }
 

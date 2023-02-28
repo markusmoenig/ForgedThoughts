@@ -152,8 +152,13 @@ impl FT {
 
                             // Hit something ?
                             if let Some(hit) = ctx.scene.raymarch(&ro, &rd, &ctx) {
-                                if ctx.settings.renderer.renderer_type == RendererType::Phong {
-                                    phong(&ctx, &rd, &hit, &mut color);
+                                match ctx.settings.renderer.renderer_type {
+                                    RendererType::Phong => {
+                                        phong(&ctx, &rd, &hit, &mut color);
+                                    },
+                                    RendererType::PBR => {
+                                        pbr(&ctx, &rd, &hit, &mut color);
+                                    }
                                 }
                             } else {
                                 if ctx.settings.background_fn {
