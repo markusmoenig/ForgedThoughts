@@ -132,6 +132,44 @@ impl Scene {
         }
     }
 
+    #[inline(always)]
+    /// Raymarch the scene for a shadow ray
+    pub fn shadow_march(&self, ro: &F3, rd: &F3, ctx: &FTContext) -> bool{
+
+        let mut t = 0.0001;
+        let t_max = ctx.settings.max_distance;
+
+        let mut d = std::f64::MAX;
+
+        let mut hit : Option<usize> = None;
+        let mut closest : Option<usize> = None;
+
+        // Raymarching loop
+        for _i in 0..ctx.settings.steps {
+
+            let p = *ro + rd.mult_f(&t);
+
+            for (index, s) in self.sdfs.iter().enumerate() {
+
+                let new_d = s.distance(ctx, p);
+                if new_d < d {
+                    closest = Some(index);
+                    d = new_d;
+                }
+            }
+
+            if d.abs() < 0.0001 {
+                hit = closest;
+                break;
+            } else
+            if t > t_max {
+                break;
+            }
+            t += d * ctx.settings.step_size;
+        }
+        hit.is_some()
+    }
+
     /// Returns the distance for the given position. Used for polygonization
     pub fn distance(&self, ctx: &FTContext, p: F3) -> F {
         let mut d : F = std::f64::MAX;

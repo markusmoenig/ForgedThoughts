@@ -42,6 +42,9 @@ pub mod prelude {
     pub use crate::renderer::phong::phong;
     pub use crate::renderer::pbr::pbr;
 
+    pub use crate::renderer::bsdf::BSDFScene;
+    pub use crate::renderer::bsdf::FTScene;
+
     pub use crate::script::FTContext;
 
     pub use crate::marching_cubes::MarchingCubes;

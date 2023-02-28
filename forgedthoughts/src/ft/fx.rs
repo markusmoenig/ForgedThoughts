@@ -12,6 +12,9 @@ use std::ops::AddAssign;
 use std::iter::once;
 use rhai::FuncArgs;
 
+pub use nalgebra::*;
+extern crate nalgebra_glm as glm;
+
 ///F2
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct F2 {
@@ -314,6 +317,20 @@ impl F3 {
 
     pub fn max_f(&self, other: &F) -> F3 {
         F3::new(self.x.max(*other), self.y.max(*other), self.z.max(*other))
+    }
+
+    // Compatibility to glm
+
+    pub fn from_v3(v: &glm::DVec3) -> Self {
+        Self {
+            x           : v.x,
+            y           : v.y,
+            z           : v.z
+        }
+    }
+
+    pub fn to_v3(&self) -> glm::DVec3 {
+        glm::DVec3::new(self.x, self.y, self.z)
     }
 
     /// Register to the engine

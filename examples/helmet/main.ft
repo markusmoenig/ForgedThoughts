@@ -6,21 +6,31 @@ settings.width = 600;
 settings.height = 600;
 
 settings.background = F3("444");
-settings.antialias = 3;
+settings.antialias = 1;
 //settings.opacity = 0.0;
+
+settings.steps = 400;
+settings.max_distance = 3.0;
 
 // For polygonization
 settings.grid_size = 0.5;
 settings.grid_step_size = 0.002;
 settings.iso_value = 0.0001;
 
-let phong = Phong();
-phong.specular = F3(0.5, 0.5, 0.5);
-settings.renderer = phong;
+let bsdf = BSDF();
+
+bsdf.iterations = 300;
+bsdf.depth = 2;
+
+settings.renderer = bsdf;
 
 let light = PointLight();
-light.position = F3(3.0, 3.0, 5.0);
-light.intensity = 1.5;
+light.position = F3(4.0, 3.0, 5.0);
+light.intensity = 1.0;
+
+let light2 = PointLight();
+light2.position = F3(-5.0, 0.0, 5.0);
+light2.intensity = 1.0;
 
 // Main shape
 
@@ -28,7 +38,10 @@ let sphere = Sphere(0.24);
 let cone = Cone(0.3, 0.25, 0.0);
 
 let helmet = smin(sphere, cone, 0.5);
+
 helmet.material.rgb = F3("9F6F4A");
+helmet.material.metallic = 0.7;
+helmet.material.roughness = 0.3;
 
 // Make it hollow
 
@@ -40,8 +53,8 @@ helmet -= cut_out;
 // Eye holes
 
 let eyes = Ellipsoid();
-eyes.size = F3(0.10, 0.03, 0.1);
-eyes.position = F3(0.07, -0.03, 0.3);
+eyes.size = F3(0.11, 0.03, 0.1);
+eyes.position = F3(0.06, -0.03, 0.3);
 eyes.mirror.x = true;
 helmet -= eyes;
 

@@ -37,7 +37,7 @@ impl Settings {
             background_fn   : false,
             opacity         : 1.0,
 
-            steps           : 10000,
+            steps           : 500,
             max_distance    : 5.0,
             step_size       : 1.0,
 

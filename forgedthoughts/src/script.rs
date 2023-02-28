@@ -2,6 +2,7 @@
 use crate::prelude::*;
 
 pub use rhai::{Engine, AST, Scope};
+use rust_pathtracer::tracer::Tracer;
 
 /// FTContext
 pub struct FTContext<'a> {
@@ -11,6 +12,10 @@ pub struct FTContext<'a> {
     pub settings    : Settings,
     pub camera      : Camera,
     pub scene       : Scene,
+
+    // Pathtracer
+    pub bsdf_buffer : Option<rust_pathtracer::buffer::ColorBuffer>,
+    pub bsdf_tracer : Option<Tracer>,
 }
 
 /// Create an Rhai engine instance and register all FT types

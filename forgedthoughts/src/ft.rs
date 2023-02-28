@@ -1,4 +1,5 @@
 pub use crate::prelude::*;
+use crate::script::create_engine;
 
 pub use rhai::{Engine, Scope, CallFnOptions};
 pub mod fx;
@@ -16,6 +17,8 @@ pub mod operators;
 
 use rayon::{slice::ParallelSliceMut, iter::{IndexedParallelIterator, ParallelIterator}};
 use std::path::PathBuf;
+
+use rust_pathtracer::{tracer::Tracer};
 
 pub struct FT {
     pub engine          : Option<Engine>,
@@ -86,10 +89,33 @@ impl FT {
                         settings.background_fn = true;
                     }
 
-                    let mut scene = Scene::new();
+                    let mut scene = crate::ft::scene::Scene::new();
                     scene.build(&scope);
 
                     ast.clear_statements();
+
+                    let mut bsdf_buffer : Option<rust_pathtracer::buffer::ColorBuffer> = None;
+                    let mut bsdf_tracer : Option<Tracer> = None;
+
+                    // Setup the BSDF renderer if needed
+                    if settings.renderer.renderer_type == RendererType::BSDF {
+
+                        let bsdf_ctx = FTContext {
+                            engine          : create_engine(),
+                            ast             : ast.clone(),
+                            scope           : scope.clone(),
+                            settings        : settings.clone(),
+                            camera          : camera.clone(),
+                            scene           : scene.clone(),
+
+                            bsdf_buffer     : None,
+                            bsdf_tracer     :  None,
+                        };
+
+                        let bsdf_scene = Box::new(BSDFScene::new_ctx(bsdf_ctx));
+                        bsdf_buffer = Some(rust_pathtracer::buffer::ColorBuffer::new(settings.width as usize, settings.height as usize));
+                        bsdf_tracer = Some(Tracer::new(bsdf_scene))
+                    }
 
                     Ok(FTContext {
                         engine,
@@ -97,7 +123,10 @@ impl FT {
                         scope,
                         settings,
                         camera,
-                        scene
+                        scene,
+
+                        bsdf_buffer,
+                        bsdf_tracer
                     })
                 } else {
                     let err = rc.err().unwrap();
@@ -114,6 +143,14 @@ impl FT {
 
     /// Render the given scope
     pub fn render(&self, ctx: &mut FTContext, buffer: &mut ColorBuffer) {
+
+        if ctx.settings.renderer.renderer_type == RendererType::BSDF {
+            if let Some(tracer) = &mut ctx.bsdf_tracer {
+                tracer.render(&mut ctx.bsdf_buffer.as_mut().unwrap());
+                buffer.pixels = ctx.bsdf_buffer.as_ref().unwrap().pixels.clone();
+            }
+            return
+        }
 
         let [width, height] = buffer.size;
 
@@ -148,7 +185,7 @@ impl FT {
                             let mut color = [0.0, 0.0, 0.0, ctx.settings.opacity];
 
                             let cam_offset = F2::new(m as F / aa_f, n as F / aa_f) - F2::new(0.5, 0.5);
-                            let [ro, rd] = self.create_camera_ray(coord, ctx.camera.origin, ctx.camera.center, ctx.camera.fov, cam_offset, w, h);
+                            let [ro, rd] = ctx.camera.create_ray(coord, cam_offset, w, h);
 
                             // Hit something ?
                             if let Some(hit) = ctx.scene.raymarch(&ro, &rd, &ctx) {
@@ -158,7 +195,7 @@ impl FT {
                                     },
                                     RendererType::PBR => {
                                         pbr(&ctx, &rd, &hit, &mut color);
-                                    }
+                                    }, _ => {},
                                 }
                             } else {
                                 if ctx.settings.background_fn {
@@ -200,45 +237,6 @@ impl FT {
 
         let t = self.get_time() - start;
         println!("Rendered in {} ms", t as f64);
-    }
-
-    pub fn create_camera_ray(&self, uv: F2, origin: F3, center: F3, fov: F, cam_offset: F2, width: F, height: F) -> [F3; 2] {
-
-        /*
-        let ww = (center - origin).normalize();
-        let uu = ww.cross(&F3::new(0.0, 1.0, 0.0)).normalize();
-        let vv = uu.cross(&ww).normalize();
-
-        let d = (uu.mult_f(&(uv.x * cam_offset.x)) + vv.mult_f(&(uv.y * cam_offset.y)) + ww.mult_f(&2.0)).normalize();
-
-        [origin, d]
-        */
-
-        let ratio = width / height;
-
-        let pixel_size = F2::new( 1.0 / width, 1.0 / height);
-
-        let t = (fov.to_radians() * 0.5).tan();
-
-        let half_width = F3::new(t, t, t);
-        let half_height = half_width.div_f(&ratio);
-
-        let up_vector = F3::new(0.0, 1.0, 0.0);
-
-        let w = (origin - center).normalize();
-        let u = up_vector.cross(&w);
-        let v = w.cross(&u);
-
-        let lower_left = origin - half_width * u - half_height * v - w;
-        let horizontal = (u * half_width).mult_f(&2.0);
-        let vertical = v * half_height.mult_f(&2.0);
-
-        let mut rd = lower_left - origin;
-        rd += horizontal.mult_f(&(pixel_size.x * cam_offset.x + uv.x));
-        rd += vertical.mult_f(&(pixel_size.y * cam_offset.y + uv.y));
-
-        [origin, rd.normalize()]
-
     }
 
     fn get_time(&self) -> u128 {
