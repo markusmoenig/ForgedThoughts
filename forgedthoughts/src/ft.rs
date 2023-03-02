@@ -253,6 +253,8 @@ impl FT {
 
         println!("Generating volume data");
 
+        let iso_value = ctx.settings.iso_value;
+
         for iz in 0..dim {
             let z = -bb_size + iz as F * step_size;
             for iy in 0..dim {
@@ -260,15 +262,13 @@ impl FT {
                 for ix in 0..dim {
                     let x = -bb_size + ix as F * step_size;
                     let p = F3::new(x, y, z);
-                    let d = ctx.scene.distance(ctx, p);
+                    let d = ctx.scene.distance(ctx, p, iso_value);
                     volume.push(d);
                 }
             }
         }
 
         println!("Triangulating normal data");
-
-        let iso_value = ctx.settings.iso_value;
 
         let mut mc = MarchingCubes::new();
         mc.set_volume(volume, dim, dim, dim);

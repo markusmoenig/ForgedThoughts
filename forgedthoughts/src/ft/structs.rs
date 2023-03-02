@@ -2,6 +2,7 @@ use crate::prelude::*;
 
 use rhai::{Engine};
 
+/// HitRecord
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct HitRecord {
     pub sdf_index       : usize,

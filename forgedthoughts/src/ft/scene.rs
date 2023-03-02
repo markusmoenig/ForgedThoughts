@@ -76,6 +76,9 @@ impl Scene {
         let mut hit : Option<usize> = None;
         let mut closest : Option<usize> = None;
 
+        let mut material = Material::new();
+        let iso_value = 0.0001;
+
         // Raymarching loop
         for _i in 0..ctx.settings.steps {
 
@@ -83,14 +86,20 @@ impl Scene {
 
             for (index, s) in self.sdfs.iter().enumerate() {
 
-                let new_d = s.distance(ctx, p);
-                if new_d < d {
+                let rc = s.distance(ctx, p, iso_value);
+
+                // If there is a material, assign it
+                if rc.1.is_some() {
+                    material = rc.1.unwrap();
+                }
+
+                if rc.0 < d {
                     closest = Some(index);
-                    d = new_d;
+                    d = rc.0;
                 }
             }
 
-            if d.abs() < 0.0001 {
+            if d.abs() < iso_value {
                 hit = closest;
                 break;
             } else
@@ -111,7 +120,7 @@ impl Scene {
                 distance            : t,
                 hit_point,
                 normal,
-                material            : self.sdfs[hit].material
+                material,
             };
 
             if let Some(shade_ptr) = &self.sdfs[hit].shade {
@@ -144,6 +153,8 @@ impl Scene {
         let mut hit : Option<usize> = None;
         let mut closest : Option<usize> = None;
 
+        let iso_value = 0.0001;
+
         // Raymarching loop
         for _i in 0..ctx.settings.steps {
 
@@ -151,14 +162,14 @@ impl Scene {
 
             for (index, s) in self.sdfs.iter().enumerate() {
 
-                let new_d = s.distance(ctx, p);
+                let new_d = s.distance(ctx, p, iso_value).0;
                 if new_d < d {
                     closest = Some(index);
                     d = new_d;
                 }
             }
 
-            if d.abs() < 0.0001 {
+            if d.abs() < iso_value{
                 hit = closest;
                 break;
             } else
@@ -171,11 +182,11 @@ impl Scene {
     }
 
     /// Returns the distance for the given position. Used for polygonization
-    pub fn distance(&self, ctx: &FTContext, p: F3) -> F {
+    pub fn distance(&self, ctx: &FTContext, p: F3, iso_value: F) -> F {
         let mut d : F = std::f64::MAX;
 
         for s in &self.sdfs {
-            let new_d = s.distance(ctx, p);
+            let new_d = s.distance(ctx, p, iso_value).0;
             if new_d < d {
                 d = new_d;
             }

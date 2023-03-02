@@ -438,7 +438,7 @@ impl SDF {
             rotation        : F3::zeros(),
             scale           : 1.0,
 
-            size            : F3::new(1.0, 1.0, 1.0),
+            size            : F3::new(1.0, 0.5, 0.5),
             radius          : 1.0,
             normal          : F3::new(0.0, 1.0, 0.0),
             offset          : 0.0,
@@ -511,7 +511,7 @@ impl SDF {
     }
 
     #[inline(always)]
-    pub fn distance(&self, ctx: &FTContext, mut p: F3) -> F {
+    pub fn distance(&self, ctx: &FTContext, mut p: F3, iso_value: F) -> (F, Option<Material>) {
 
         let orig_p = p;
 
@@ -712,54 +712,101 @@ impl SDF {
             }
         }
 
+        // If the distance is smaller than the is_value we automatically mix the materials
+
+        let mut material : Option<Material> = None;
+
+        // Assign our own material (in case there are no booleans)
+        if dist < iso_value {
+            material = Some(self.material);
+        }
+
         // Booleans
 
         for s in &self.booleans {
             match s {
                 Boolean::Addition(other) => {
-                    dist = dist.min(other.distance(ctx, p));
+                    let other_hit = other.distance(ctx, p, iso_value);
+
+                    if other_hit.0 < dist {
+                        dist = other_hit.0;
+                        material = other_hit.1;
+                    }
                 },
                 Boolean::AdditionSmooth(other, smoothing) => {
 
                     #[inline(always)]
-                    fn op_smooth_union(d1: F, d2: F, k: F) -> F {
+                    fn op_smooth_union(d1: F, d2: F, k: F) -> (F, F) {
                         let h = (0.5 + 0.5 * (d2 - d1) / k).clamp(0.0, 1.0);
-                        d2 * (1.0 - h) + d1 * h - k * h * (1.0 - h)
+                        (d2 * (1.0 - h) + d1 * h - k * h * (1.0 - h), h)
                     }
 
-                    dist = op_smooth_union(other.distance(ctx, p), dist, *smoothing);
+                    let other_hit = other.distance(ctx, p, iso_value);
+
+                    let dh = op_smooth_union(other_hit.0, dist, *smoothing);
+
+                    dist = dh.0;
+                    if dist < iso_value {
+                        material = Some(self.material.mix(&other.material, dh.1));
+                    }
                 },
                 Boolean::AdditionGroove(other, ra, rb) => {
+                    let other_hit = other.distance(ctx, p, iso_value);
+
                     let a = dist;
-                    let b = other.distance(ctx, p);
-                    dist = a.min((a - ra).max(b.abs() - rb));
+                    let b = other_hit.0;
+
+                    let d = a.min((a - ra).max(b.abs() - rb));
+                    if d < iso_value {
+                        if d != a {
+                            material = Some(other.material);
+                        }
+                    }
+                    dist = d;
                 },
                 Boolean::Subtract(other) => {
-                    dist = dist.max(-other.distance(ctx, p));
+                    let other_hit = other.distance(ctx, p, iso_value);
+
+                    dist = dist.max(-other_hit.0);
                 },
                 Boolean::SubtractSmooth(other, smoothing) => {
 
                     #[inline(always)]
-                    fn op_smooth_subtraction(d1: F, d2: F, k: F) -> F {
+                    fn op_smooth_subtraction(d1: F, d2: F, k: F) -> (F, F) {
                         let h = (0.5 - 0.5 * (d2 + d1) / k).clamp(0.0, 1.0);
-                        d2 * (1.0 - h) - d1 * h + k * h * (1.0 - h)
+                        (d2 * (1.0 - h) - d1 * h + k * h * (1.0 - h), h)
                     }
 
-                    dist = op_smooth_subtraction(other.distance(ctx, p), dist, *smoothing);
+                    let other_hit = other.distance(ctx, p, iso_value);
+
+                    let dh = op_smooth_subtraction(other_hit.0, dist, *smoothing);
+
+                    dist = dh.0;
+                    if dist < iso_value {
+                        material = Some(self.material.mix(&other.material, dh.1));
+                    }
                 },
                 Boolean::Intersection(other) => {
-                    dist = dist.max(other.distance(ctx, p));
+                    let other_hit = other.distance(ctx, p, iso_value);
+
+                    dist = dist.max(other_hit.0);
                 },
                 Boolean::IntersectionSmooth(other, smoothing) => {
 
                     #[inline(always)]
-                    fn op_smooth_intersection(d1: F, d2: F, k: F) -> F {
+                    fn op_smooth_intersection(d1: F, d2: F, k: F) -> (F, F) {
                         let h = (0.5 - 0.5 * (d2 - d1) / k).clamp(0.0, 1.0);
-                        d2 * (1.0 - h) + d1 * h + k * h * (1.0 - h)
+                        (d2 * (1.0 - h) + d1 * h + k * h * (1.0 - h), h)
                     }
 
+                    let other_hit = other.distance(ctx, p, iso_value);
 
-                    dist = op_smooth_intersection(other.distance(ctx, p), dist, *smoothing);
+                    let dh = op_smooth_intersection(other_hit.0, dist, *smoothing);
+
+                    dist = dh.0;
+                    if dist < iso_value {
+                        material = Some(self.material.mix(&other.material, dh.1));
+                    }
                 },
                 Boolean::SMin(other, k) => {
                     //float h = clamp( 0.5+0.5*(b-a)/k, 0.0, 1.0 );
@@ -774,13 +821,20 @@ impl SDF {
                     //     x * (1.0 - a) + y * a
                     // }
 
-                    let a = dist; let b = other.distance(ctx, p);
+                    let other_hit = other.distance(ctx, p, iso_value);
+
+                    let a = dist;
+                    let b = other_hit.0;
 
                     // let h = (0.5 + 0.5 * (b - a) / k).clamp(0.0, 1.0);
                     // dist = mix(b, a, h) - k * h * (1.0 - h);
 
                     let h = (k - (a-b).abs()).max(0.0) / k;
                     dist = a.min(b) - h * h * h * k * (1.0 / 6.0);
+
+                    if dist < iso_value {
+                        material = Some(self.material.mix(&other.material, h));
+                    }
                 },
             }
         }
@@ -795,7 +849,7 @@ impl SDF {
         // dist = dist.min(orig_p.y - self.min.y);
         // dist = dist.min(orig_p.z - self.min.z);
 
-        dist * self.scale
+        (dist * self.scale, material)
     }
 
     #[inline(always)]
@@ -805,10 +859,10 @@ impl SDF {
 
         // IQs normal function
 
-        let mut n = e.xyy().mult_f(&self.distance(ctx, p + e.xyy()));
-        n += e.yyx().mult_f(&self.distance(ctx, p + e.yyx()));
-        n += e.yxy().mult_f(&self.distance(ctx, p + e.yxy()));
-        n += e.xxx().mult_f(&self.distance(ctx, p + e.xxx()));
+        let mut n = e.xyy().mult_f(&self.distance(ctx, p + e.xyy(), 0.0).0);
+        n += e.yyx().mult_f(&self.distance(ctx, p + e.yyx(), 0.0).0);
+        n += e.yxy().mult_f(&self.distance(ctx, p + e.yxy(), 0.0).0);
+        n += e.xxx().mult_f(&self.distance(ctx, p + e.xxx(), 0.0).0);
         n.normalize()
     }
 
