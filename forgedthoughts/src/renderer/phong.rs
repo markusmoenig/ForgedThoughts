@@ -2,7 +2,7 @@ use crate::prelude::*;
 
 #[inline(always)]
 /// Phong renderer, based on https://www.shadertoy.com/view/XlXGDj
-pub fn phong(ctx: &FTContext, rd: &F3, hit: &HitRecord, color: &mut [F; 4]) {
+pub fn phong(ctx: &FTContext, rd: &F3, hit: &HitRecord, color: &mut [f64; 4]) {
 
     for l in &ctx.scene.lights {
         let light_dir = l.position - hit.hit_point;

@@ -2,9 +2,7 @@ pub use crate::prelude::*;
 use crate::script::create_engine;
 
 pub use rhai::{Engine, Scope, CallFnOptions};
-pub mod fx;
 pub mod sdf;
-pub mod material;
 pub mod settings;
 pub mod lights;
 pub mod camera;
@@ -94,7 +92,6 @@ impl FT {
 
                     ast.clear_statements();
 
-                    let mut bsdf_buffer : Option<rust_pathtracer::buffer::ColorBuffer> = None;
                     let mut bsdf_tracer : Option<Tracer> = None;
 
                     // Setup the BSDF renderer if needed
@@ -108,12 +105,10 @@ impl FT {
                             camera          : camera.clone(),
                             scene           : scene.clone(),
 
-                            bsdf_buffer     : None,
                             bsdf_tracer     :  None,
                         };
 
                         let bsdf_scene = Box::new(BSDFScene::new_ctx(bsdf_ctx));
-                        bsdf_buffer = Some(rust_pathtracer::buffer::ColorBuffer::new(settings.width as usize, settings.height as usize));
                         bsdf_tracer = Some(Tracer::new(bsdf_scene))
                     }
 
@@ -125,7 +120,6 @@ impl FT {
                         camera,
                         scene,
 
-                        bsdf_buffer,
                         bsdf_tracer
                     })
                 } else {
@@ -146,13 +140,13 @@ impl FT {
 
         if ctx.settings.renderer.renderer_type == RendererType::BSDF {
             if let Some(tracer) = &mut ctx.bsdf_tracer {
-                tracer.render(&mut ctx.bsdf_buffer.as_mut().unwrap());
-                buffer.pixels = ctx.bsdf_buffer.as_ref().unwrap().pixels.clone();
+                tracer.render(buffer);
             }
             return
         }
 
-        let [width, height] = buffer.size;
+        let width = buffer.width;
+        let height = buffer.height;
 
         let w = width as F;
         let h = height as F;

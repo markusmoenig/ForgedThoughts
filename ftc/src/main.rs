@@ -69,7 +69,7 @@ fn main() {
 
                 // Render and save to an PNG file
 
-                let mut buffer = ColorBuffer::new(ctx.settings.width as usize, ctx.settings.height as usize, 0.0);
+                let mut buffer = ColorBuffer::new(ctx.settings.width as usize, ctx.settings.height as usize);
 
                 let is_path_tracer = ctx.settings.renderer.iterations > 1;
 

@@ -14,7 +14,6 @@ pub struct FTContext<'a> {
     pub scene       : Scene,
 
     // Pathtracer
-    pub bsdf_buffer : Option<rust_pathtracer::buffer::ColorBuffer>,
     pub bsdf_tracer : Option<Tracer>,
 }
 

@@ -2,9 +2,6 @@ use crate::prelude::*;
 
 use rust_pathtracer::prelude::*;
 
-pub use nalgebra::*;
-extern crate nalgebra_glm as glm;
-
 pub struct BSDFScene<'a> {
     ctx                 : Option<FTContext<'a>>,
     lights              : Vec<AnalyticalLight>,
@@ -32,8 +29,8 @@ impl rust_pathtracer::scene::Scene for BSDFScene<'_> {
         &self.pinhole
     }
 
-    fn background(&self, _ray: &Ray) -> PTF3 {
-        self.ctx.as_ref().unwrap().settings.background.to_v3()
+    fn background(&self, _ray: &Ray) -> F3 {
+        self.ctx.as_ref().unwrap().settings.background
     }
 
     /// The closest hit, includes light sources.
@@ -43,31 +40,22 @@ impl rust_pathtracer::scene::Scene for BSDFScene<'_> {
 
         state.depth = 0;
 
-        let o = F3::from_v3(&ray[0]);
-        let d = F3::from_v3(&ray[1]);
-
-        if let Some(hit_record) = self.ctx.as_ref().unwrap().scene.raymarch(&o, &d, &mut self.ctx.as_ref().unwrap()) {
+        if let Some(hit_record) = self.ctx.as_ref().unwrap().scene.raymarch(&ray[0], &ray[1], &mut self.ctx.as_ref().unwrap()) {
             hit = true;
 
             state.hit_dist = hit_record.distance;
-            state.normal = hit_record.normal.to_v3();
+            state.normal = hit_record.normal;
 
-            state.material.base_color = hit_record.material.rgb.to_v3();
-
-            state.material.roughness = hit_record.material.roughness;
-            state.material.metallic = hit_record.material.metallic;
+            state.material = hit_record.material;
         }
 
         hit
     }
 
     /// Any hit
-    fn any_hit(&self, ray: &Ray, _max_dist: PTF) -> bool {
+    fn any_hit(&self, ray: &Ray, _max_dist: F) -> bool {
 
-        let o = F3::from_v3(&ray[0]);
-        let d = F3::from_v3(&ray[1]);
-
-        self.ctx.as_ref().unwrap().scene.shadow_march(&o, &d, &mut self.ctx.as_ref().unwrap())
+        self.ctx.as_ref().unwrap().scene.shadow_march(&ray[0], &ray[1], &mut self.ctx.as_ref().unwrap())
     }
 
     /// Returns the light at the given index
@@ -91,7 +79,7 @@ impl rust_pathtracer::scene::Scene for BSDFScene<'_> {
 impl AnalyticalIntersections for BSDFScene<'_> {
 
     // Based on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
-    fn sphere(&self, ray: &Ray, center: PTF3, radius: PTF) -> Option<PTF> {
+    fn sphere(&self, ray: &Ray, center: F3, radius: F) -> Option<F> {
         let l = center - ray[0];
         let tca = l.dot(&ray[1]);
         let d2 = l.dot(&l) - tca * tca;
@@ -118,12 +106,12 @@ impl AnalyticalIntersections for BSDFScene<'_> {
    }
 
     // Ray plane intersection
-    fn plane(&self, ray: &Ray) -> Option<PTF> {
-        let normal = PTF3::new(0.0, 1.0, 0.0);
-        let denom = glm::dot(&normal, &ray[1]);
+    fn plane(&self, ray: &Ray) -> Option<F> {
+        let normal = F3::new(0.0, 1.0, 0.0);
+        let denom = dot(&normal, &ray[1]);
 
         if denom.abs() > 0.0001 {
-            let t = glm::dot(&(PTF3::new(0.0, -1.0, 0.0) - ray[0]), &normal) / denom;
+            let t = dot(&(F3::new(0.0, -1.0, 0.0) - ray[0]), &normal) / denom;
             if t >= 0.0 {
                 return Some(t);
             }
@@ -135,8 +123,8 @@ impl AnalyticalIntersections for BSDFScene<'_> {
 #[allow(unused)]
 pub trait AnalyticalIntersections : Sync + Send {
 
-    fn sphere(&self, ray: &Ray, center: PTF3, radius: PTF) -> Option<PTF>;
-    fn plane(&self, ray: &Ray) -> Option<PTF>;
+    fn sphere(&self, ray: &Ray, center: F3, radius: F) -> Option<F>;
+    fn plane(&self, ray: &Ray) -> Option<F>;
 
 }
 
@@ -153,8 +141,8 @@ impl<'a>  FTScene<'a> for BSDFScene<'a> {
 
         for light in &ctx.scene.lights {
 
-            let position = light.position.to_v3();
-            let emission = PTF3::new(
+            let position = light.position;
+            let emission = F3::new(
                 light.rgb.x * light.intensity * light_scale,
                 light.rgb.y * light.intensity * light_scale,
                 light.rgb.z * light.intensity * light_scale);
@@ -166,10 +154,7 @@ impl<'a>  FTScene<'a> for BSDFScene<'a> {
 
         let mut pinhole = Box::new(Pinhole::new());
 
-        let origin = ctx.camera.origin.to_v3();
-        let center = ctx.camera.center.to_v3();
-
-        pinhole.set(origin, center);
+        pinhole.set(ctx.camera.origin, ctx.camera.center);
         pinhole.set_fov(ctx.camera.fov);
 
         Self {

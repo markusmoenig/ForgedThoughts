@@ -41,7 +41,7 @@ fn compute_pbr_lighting(light: &Light, position: F3, n: F3, v: F3, albedo: F3, r
 }
 
 #[inline(always)]
-pub fn pbr(ctx: &FTContext, rd: &F3, hit: &HitRecord, color: &mut [F; 4]) {
+pub fn pbr(ctx: &FTContext, rd: &F3, hit: &HitRecord, color: &mut [f64; 4]) {
 
     let reflectance = 0.5;
 
