@@ -21,7 +21,7 @@ impl Camera {
     }
 
     /// Create a camera ray. Have todo modular later on to support iso cameras etc.
-    pub fn create_ray(&self, uv: F2, cam_offset: F2, width: F, height: F) -> [F3; 2] {
+    pub fn create_ray(&self, uv: F2, cam_offset: F2, width: F, height: F) -> Ray {
 
         /*
         let ww = (center - origin).normalize();
@@ -60,7 +60,7 @@ impl Camera {
         rd += horizontal.mult_f(&(pixel_size.x * cam_offset.x + uv.x));
         rd += vertical.mult_f(&(pixel_size.y * cam_offset.y + uv.y));
 
-        [origin, rd.normalize()]
+        Ray::new(origin, rd.normalize())
 
     }
 

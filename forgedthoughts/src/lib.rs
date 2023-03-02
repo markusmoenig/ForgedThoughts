@@ -15,6 +15,7 @@ pub mod prelude {
     pub use rust_pathtracer::buffer::ColorBuffer;
 
     pub use crate::ft::FT;
+    pub use crate::ft::analytical::Analytical;
     pub use crate::ft::sdf::SDF;
     pub use crate::ft::settings::Settings;
     pub use crate::ft::lights::Light;

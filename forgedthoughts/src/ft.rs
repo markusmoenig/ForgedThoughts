@@ -12,6 +12,7 @@ pub mod structs;
 pub mod math;
 pub mod ray_modifier;
 pub mod operators;
+pub mod analytical;
 
 use rayon::{slice::ParallelSliceMut, iter::{IndexedParallelIterator, ParallelIterator}};
 use std::path::PathBuf;
@@ -179,16 +180,16 @@ impl FT {
                             let mut color = [0.0, 0.0, 0.0, ctx.settings.opacity];
 
                             let cam_offset = F2::new(m as F / aa_f, n as F / aa_f) - F2::new(0.5, 0.5);
-                            let [ro, rd] = ctx.camera.create_ray(coord, cam_offset, w, h);
+                            let ray = ctx.camera.create_ray(coord, cam_offset, w, h);
 
                             // Hit something ?
-                            if let Some(hit) = ctx.scene.raymarch(&ro, &rd, &ctx) {
+                            if let Some(hit) = ctx.scene.raymarch(&ray, &ctx) {
                                 match ctx.settings.renderer.renderer_type {
                                     RendererType::Phong => {
-                                        phong(&ctx, &rd, &hit, &mut color);
+                                        phong(&ctx, &hit, &mut color);
                                     },
                                     RendererType::PBR => {
-                                        pbr(&ctx, &rd, &hit, &mut color);
+                                        pbr(&ctx, &hit, &mut color);
                                     }, _ => {},
                                 }
                             } else {

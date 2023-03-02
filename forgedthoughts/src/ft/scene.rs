@@ -6,6 +6,7 @@ pub use rhai::{Scope};
 #[derive(Debug, Clone)]
 pub struct Scene {
 
+    pub analytical      : Vec<Analytical>,
     pub sdfs            : Vec<SDF>,
     pub lights          : Vec<Light>,
 }
@@ -14,6 +15,7 @@ impl Scene {
 
     pub fn new() -> Self {
         Self {
+            analytical  : vec![],
             sdfs        : vec![],
             lights      : vec![],
         }
@@ -24,7 +26,7 @@ impl Scene {
 
         let mut used_up : Vec<Uuid> = vec![];
 
-        // First collect all operations
+        // First filter all SDFs which have been used in boolean ops
         let mut iter = scope.iter();
 
         for val in iter {
@@ -42,9 +44,18 @@ impl Scene {
             }
         }
 
+        // Now collect all top level objects (except the filtered ones)
+
         iter = scope.iter();
 
         for val in iter {
+            if val.2.type_name().ends_with("::Analytical") {
+                if let Some(s) = scope.get(val.0) {
+                    let analytical = s.clone().cast::<Analytical>();
+
+                    self.analytical.push(analytical);
+                }
+            } else
             if val.2.type_name().ends_with("::SDF") {
                 if let Some(s) = scope.get(val.0) {
                     let sdf = s.clone().cast::<SDF>();
@@ -66,24 +77,40 @@ impl Scene {
 
     #[inline(always)]
     /// Raymarch the scene and return the
-    pub fn raymarch(&self, ro: &F3, rd: &F3, ctx: &FTContext) -> Option<HitRecord> {
+    pub fn raymarch(&self, ray: &Ray, ctx: &FTContext) -> Option<HitRecord> {
 
         let mut t = 0.0001;
         let t_max = ctx.settings.max_distance;
 
+        let mut hit_point = F3::zeros();
         let mut d = std::f64::MAX;
+        let mut normal = F3::zeros();
 
-        let mut hit : Option<usize> = None;
-        let mut closest : Option<usize> = None;
+        let mut hit = false;
 
         let mut material = Material::new();
         let iso_value = 0.0001;
 
+        // Analytical
+        for a in &self.analytical {
+
+            if let Some(rc) = a.distance(ctx, &ray) {
+                if rc.0 < d {
+                    hit = true;
+                    d = rc.0;
+                    material = rc.1;
+                    normal = rc.2;
+                    hit_point = ray.at(&d);
+                }
+            }
+        }
+
         // Raymarching loop
         for _i in 0..ctx.settings.steps {
 
-            let p = *ro + rd.mult_f(&t);
+            let p = ray.at(&t);
 
+            let mut sdf_index = 0;
             for (index, s) in self.sdfs.iter().enumerate() {
 
                 let rc = s.distance(ctx, p, iso_value);
@@ -94,13 +121,15 @@ impl Scene {
                 }
 
                 if rc.0 < d {
-                    closest = Some(index);
+                    sdf_index = index;
                     d = rc.0;
                 }
             }
 
             if d.abs() < iso_value {
-                hit = closest;
+                hit = true;
+                hit_point = ray.at(&d);
+                normal = self.sdfs[sdf_index].normal(ctx, hit_point);
                 break;
             } else
             if t > t_max {
@@ -109,20 +138,17 @@ impl Scene {
             t += d * ctx.settings.step_size;
         }
 
-        if let Some(hit) = hit {
-
-            let hit_point = *ro + rd.mult_f(&t);
-
-            let normal = self.sdfs[hit].normal(ctx, hit_point);
-
-            let mut hit_record = HitRecord {
-                sdf_index           : hit,
+        if hit
+        {
+            let hit_record = HitRecord {
                 distance            : t,
                 hit_point,
                 normal,
+                ray                 : *ray,
                 material,
             };
 
+            /*
             if let Some(shade_ptr) = &self.sdfs[hit].shade {
 
                 // Get a pointer to the shade function if available.
@@ -133,7 +159,7 @@ impl Scene {
                 if let Some(m) = f(hit_record).ok() {
                     hit_record.material = m;
                 }
-            }
+            }*/
 
             Some(hit_record)
         } else {
@@ -143,7 +169,7 @@ impl Scene {
 
     #[inline(always)]
     /// Raymarch the scene for a shadow ray
-    pub fn shadow_march(&self, ro: &F3, rd: &F3, ctx: &FTContext) -> bool{
+    pub fn shadow_march(&self, ray: &Ray, ctx: &FTContext) -> bool{
 
         let mut t = 0.0001;
         let t_max = ctx.settings.max_distance;
@@ -158,7 +184,7 @@ impl Scene {
         // Raymarching loop
         for _i in 0..ctx.settings.steps {
 
-            let p = *ro + rd.mult_f(&t);
+            let p = ray.at(&t);
 
             for (index, s) in self.sdfs.iter().enumerate() {
 

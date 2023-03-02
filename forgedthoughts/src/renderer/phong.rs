@@ -2,7 +2,7 @@ use crate::prelude::*;
 
 #[inline(always)]
 /// Phong renderer, based on https://www.shadertoy.com/view/XlXGDj
-pub fn phong(ctx: &FTContext, rd: &F3, hit: &HitRecord, color: &mut [f64; 4]) {
+pub fn phong(ctx: &FTContext, hit: &HitRecord, color: &mut [f64; 4]) {
 
     for l in &ctx.scene.lights {
         let light_dir = l.position - hit.hit_point;
@@ -11,7 +11,7 @@ pub fn phong(ctx: &FTContext, rd: &F3, hit: &HitRecord, color: &mut [f64; 4]) {
         let amb = occ.clamp(0.0, 1.0);
         let dif = hit.normal.dot(&light_dir).clamp(0.0, 1.0);
 
-        let h = (F3::new(-rd.x, -rd.y, -rd.z) + light_dir).normalize();
+        let h = (F3::new(-hit.ray.direction.x, -hit.ray.direction.y, -hit.ray.direction.z) + light_dir).normalize();
         let spe = h.dot(&hit.normal).clamp(0.0, 1.0).powf(64.0);
 
         // Ambient

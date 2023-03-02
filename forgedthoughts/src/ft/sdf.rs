@@ -504,12 +504,6 @@ impl SDF {
         }
     }
 
-    pub fn copy(&mut self) -> SDF {
-        let mut c = self.clone();
-        c.id = Uuid::new_v4();
-        c
-    }
-
     #[inline(always)]
     pub fn distance(&self, ctx: &FTContext, mut p: F3, iso_value: F) -> (F, Option<Material>) {
 
@@ -867,6 +861,12 @@ impl SDF {
     }
 
     // --------- Getter / Setter
+
+    pub fn copy(&mut self) -> SDF {
+        let mut c = self.clone();
+        c.id = Uuid::new_v4();
+        c
+    }
 
     pub fn get_material(&mut self) -> Material {
         self.material

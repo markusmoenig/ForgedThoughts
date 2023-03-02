@@ -40,7 +40,7 @@ impl rust_pathtracer::scene::Scene for BSDFScene<'_> {
 
         state.depth = 0;
 
-        if let Some(hit_record) = self.ctx.as_ref().unwrap().scene.raymarch(&ray[0], &ray[1], &mut self.ctx.as_ref().unwrap()) {
+        if let Some(hit_record) = self.ctx.as_ref().unwrap().scene.raymarch(&ray, &mut self.ctx.as_ref().unwrap()) {
             hit = true;
 
             state.hit_dist = hit_record.distance;
@@ -55,7 +55,7 @@ impl rust_pathtracer::scene::Scene for BSDFScene<'_> {
     /// Any hit
     fn any_hit(&self, ray: &Ray, _max_dist: F) -> bool {
 
-        self.ctx.as_ref().unwrap().scene.shadow_march(&ray[0], &ray[1], &mut self.ctx.as_ref().unwrap())
+        self.ctx.as_ref().unwrap().scene.shadow_march(&ray, &mut self.ctx.as_ref().unwrap())
     }
 
     /// Returns the light at the given index
@@ -76,6 +76,7 @@ impl rust_pathtracer::scene::Scene for BSDFScene<'_> {
 
 // Analytical Intersections
 
+/*
 impl AnalyticalIntersections for BSDFScene<'_> {
 
     // Based on https://www.scratchapixel.com/lessons/3d-basic-rendering/minimal-ray-tracer-rendering-simple-shapes/ray-sphere-intersection
@@ -126,7 +127,7 @@ pub trait AnalyticalIntersections : Sync + Send {
     fn sphere(&self, ray: &Ray, center: F3, radius: F) -> Option<F>;
     fn plane(&self, ray: &Ray) -> Option<F>;
 
-}
+}*/
 
 pub trait FTScene<'a> : Sync + Send {
 

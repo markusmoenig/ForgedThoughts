@@ -40,11 +40,15 @@ pub fn create_engine() -> Engine {
     // -- Material
     Material::register(&mut engine);
 
-    // -- HitRecord
+    // -- HitRecord / Ray
     HitRecord::register(&mut engine);
+    Ray::register(&mut engine);
 
     // -- Lights
     Light::register(&mut engine);
+
+    // -- Analytical Types
+    Analytical::register(&mut engine);
 
     // -- SDF Types
     SDF::register(&mut engine);

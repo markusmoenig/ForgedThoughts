@@ -5,12 +5,11 @@ use rhai::{Engine};
 /// HitRecord
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct HitRecord {
-    pub sdf_index       : usize,
-
     pub distance        : F,
     pub hit_point       : F3,
     pub normal          : F3,
 
+    pub ray             : Ray,
     pub material        : Material
 }
 
@@ -38,3 +37,4 @@ impl HitRecord {
             .register_get_set("material", HitRecord::get_material, HitRecord::set_material);
     }
 }
+
