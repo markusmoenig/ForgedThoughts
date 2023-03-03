@@ -1,6 +1,6 @@
 use crate::prelude::*;
 
-pub use rhai::{Scope};
+pub use rhai::{Engine, Scope, FnPtr};
 
 /// Scene
 #[derive(Debug, Clone)]
@@ -140,7 +140,7 @@ impl Scene {
 
         if hit
         {
-            let hit_record = HitRecord {
+            let mut hit_record = HitRecord {
                 distance            : t,
                 hit_point,
                 normal,
@@ -148,18 +148,17 @@ impl Scene {
                 material,
             };
 
-            /*
-            if let Some(shade_ptr) = &self.sdfs[hit].shade {
+            if let Some(procedural_ptr) = &hit_record.material.procedural {
 
                 // Get a pointer to the shade function if available.
-                let f = move |hit: HitRecord| -> Result<Material, _> {
-                    shade_ptr.call(&ctx.engine, &ctx.ast, (hit,))
+                let f = move |hit_record: HitRecord| -> Result<Material, _> {
+                    procedural_ptr.call(&ctx.engine, &ctx.ast, (hit_record.clone(),))
                 };
 
-                if let Some(m) = f(hit_record).ok() {
+                if let Some(m) = f(hit_record.clone()).ok() {
                     hit_record.material = m;
                 }
-            }*/
+            }
 
             Some(hit_record)
         } else {

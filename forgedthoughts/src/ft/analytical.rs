@@ -184,7 +184,7 @@ impl Analytical {
         };
 
         if hit {
-            Some((d, self.material, normal))
+            Some((d, self.material.clone(), normal))
         } else {
             None
         }
@@ -200,7 +200,7 @@ impl Analytical {
     }
 
     pub fn get_material(&mut self) -> Material {
-        self.material
+        self.material.clone()
     }
 
     pub fn set_material(&mut self, new_val: Material) {

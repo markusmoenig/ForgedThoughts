@@ -712,7 +712,7 @@ impl SDF {
 
         // Assign our own material (in case there are no booleans)
         if dist < iso_value {
-            material = Some(self.material);
+            material = Some(self.material.clone());
         }
 
         // Booleans
@@ -753,7 +753,7 @@ impl SDF {
                     let d = a.min((a - ra).max(b.abs() - rb));
                     if d < iso_value {
                         if d != a {
-                            material = Some(other.material);
+                            material = Some(other.material.clone());
                         }
                     }
                     dist = d;
@@ -869,7 +869,7 @@ impl SDF {
     }
 
     pub fn get_material(&mut self) -> Material {
-        self.material
+        self.material.clone()
     }
 
     pub fn set_material(&mut self, new_val: Material) {
@@ -1016,7 +1016,7 @@ impl SDF {
         if let Some(shade) = &self.shade {
             shade.clone()
         } else {
-            FnPtr::new("empty_shade").ok().unwrap()
+            FnPtr::new("empty").ok().unwrap()
         }
     }
 
@@ -1028,7 +1028,7 @@ impl SDF {
         if let Some(ray_modifier) = &self.ray_modifier {
             ray_modifier.clone()
         } else {
-            FnPtr::new("empty_ray_modifier").ok().unwrap()
+            FnPtr::new("empty").ok().unwrap()
         }
     }
 

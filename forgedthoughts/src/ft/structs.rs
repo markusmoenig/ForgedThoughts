@@ -3,7 +3,7 @@ use crate::prelude::*;
 use rhai::{Engine};
 
 /// HitRecord
-#[derive(PartialEq, Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct HitRecord {
     pub distance        : F,
     pub hit_point       : F3,
@@ -15,7 +15,7 @@ pub struct HitRecord {
 
 impl HitRecord {
     pub fn get_material(&mut self) -> Material {
-        self.material
+        self.material.clone()
     }
 
     pub fn set_material(&mut self, new_val: Material) {
