@@ -21,6 +21,7 @@ pub mod prelude {
     pub use crate::ft::lights::Light;
     pub use crate::ft::camera::Camera;
     pub use crate::ft::scene::Scene;
+    pub use crate::ft::procedural::*;
 
     pub use crate::ft::renderer::RendererType;
     pub use crate::ft::renderer::Renderer;

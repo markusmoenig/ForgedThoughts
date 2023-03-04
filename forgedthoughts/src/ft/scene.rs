@@ -79,9 +79,6 @@ impl Scene {
     /// Raymarch the scene and return the
     pub fn raymarch(&self, ray: &Ray, ctx: &FTContext) -> Option<HitRecord> {
 
-        let mut t = 0.0001;
-        let t_max = ctx.settings.max_distance;
-
         let mut hit_point = F3::zeros();
         let mut d = std::f64::MAX;
         let mut normal = F3::zeros();
@@ -93,7 +90,6 @@ impl Scene {
 
         // Analytical
         for a in &self.analytical {
-
             if let Some(rc) = a.distance(ctx, &ray) {
                 if rc.0 < d {
                     hit = true;
@@ -105,43 +101,55 @@ impl Scene {
             }
         }
 
+        let mut t = 0.001;
+        let t_max = ctx.settings.max_distance.min(d);
+
         // Raymarching loop
-        for _i in 0..ctx.settings.steps {
+        if self.sdfs.is_empty() == false {
+            for _i in 0..ctx.settings.steps {
 
-            let p = ray.at(&t);
+                let p = ray.at(&t);
 
-            let mut sdf_index = 0;
-            for (index, s) in self.sdfs.iter().enumerate() {
+                let mut sdf_d = F::MAX;
+                let mut sdf_material = Material::new();
 
-                let rc = s.distance(ctx, p, iso_value);
+                let mut sdf_index = None;
+                for (index, s) in self.sdfs.iter().enumerate() {
 
-                // If there is a material, assign it
-                if rc.1.is_some() {
-                    material = rc.1.unwrap();
+                    let rc = s.distance(ctx, p, iso_value);
+
+                    // If there is a material, assign it
+                    if rc.1.is_some() {
+                        sdf_material = rc.1.unwrap();
+                    }
+
+                    if rc.0 < sdf_d {
+                        sdf_index = Some(index);
+                        sdf_d = rc.0;
+                    }
                 }
 
-                if rc.0 < d {
-                    sdf_index = index;
-                    d = rc.0;
+                if sdf_d.abs() < iso_value {
+                    hit = true;
+                    d = t;
+                    hit_point = ray.at(&d);
+                    material = sdf_material;
+                    if let Some(sdf_index) = sdf_index {
+                        normal = self.sdfs[sdf_index].normal(ctx, hit_point);
+                    }
+                    break;
+                } else
+                if t > t_max {
+                    break;
                 }
+                t += sdf_d * ctx.settings.step_size;
             }
-
-            if d.abs() < iso_value {
-                hit = true;
-                hit_point = ray.at(&d);
-                normal = self.sdfs[sdf_index].normal(ctx, hit_point);
-                break;
-            } else
-            if t > t_max {
-                break;
-            }
-            t += d * ctx.settings.step_size;
         }
 
         if hit
         {
             let mut hit_record = HitRecord {
-                distance            : t,
+                distance            : d,
                 hit_point,
                 normal,
                 ray                 : *ray,
@@ -155,7 +163,12 @@ impl Scene {
                     procedural_ptr.call(&ctx.engine, &ctx.ast, (hit_record.clone(),))
                 };
 
-                if let Some(m) = f(hit_record.clone()).ok() {
+                let rc = f(hit_record.clone());
+
+                if rc.is_err() {
+                    println!("{}", rc.err().unwrap().to_string());
+                } else
+                if let Some(m) = rc.ok() {
                     hit_record.material = m;
                 }
             }
@@ -171,39 +184,54 @@ impl Scene {
     pub fn shadow_march(&self, ray: &Ray, ctx: &FTContext) -> bool{
 
         let mut t = 0.0001;
-        let t_max = ctx.settings.max_distance;
+        let mut t_max = ctx.settings.max_distance;
 
         let mut d = std::f64::MAX;
 
-        let mut hit : Option<usize> = None;
-        let mut closest : Option<usize> = None;
+        let mut hit = false;
 
         let iso_value = 0.0001;
 
-        // Raymarching loop
-        for _i in 0..ctx.settings.steps {
-
-            let p = ray.at(&t);
-
-            for (index, s) in self.sdfs.iter().enumerate() {
-
-                let new_d = s.distance(ctx, p, iso_value).0;
-                if new_d < d {
-                    closest = Some(index);
-                    d = new_d;
+        // Analytical
+        for a in &self.analytical {
+            if let Some(rc) = a.distance(ctx, &ray) {
+                if rc.0 < d {
+                    hit = true;
+                    d = rc.0;
                 }
             }
-
-            if d.abs() < iso_value{
-                hit = closest;
-                break;
-            } else
-            if t > t_max {
-                break;
-            }
-            t += d * ctx.settings.step_size;
         }
-        hit.is_some()
+
+        if d < t_max {
+            t_max = d;
+        }
+
+        // Raymarching loop
+        if self.sdfs.is_empty() == false {
+            for _i in 0..ctx.settings.steps {
+
+                let p = ray.at(&t);
+
+                for (_index, s) in self.sdfs.iter().enumerate() {
+
+                    let rc = s.distance(ctx, p, iso_value);
+
+                    if rc.0 < d {
+                        d = rc.0;
+                    }
+                }
+
+                if d.abs() < iso_value {
+                    hit = true;
+                    break;
+                } else
+                if t > t_max {
+                    break;
+                }
+                t += d * ctx.settings.step_size;
+            }
+        }
+        hit
     }
 
     /// Returns the distance for the given position. Used for polygonization

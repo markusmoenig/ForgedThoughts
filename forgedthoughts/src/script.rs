@@ -28,6 +28,9 @@ pub fn create_engine() -> Engine {
     F3::register(&mut engine);
     B3::register(&mut engine);
 
+    // Procedurals
+    register_procedurals(&mut engine);
+
     // -- Renderer
     Renderer::register(&mut engine);
 
@@ -63,7 +66,7 @@ pub fn create_engine() -> Engine {
     // -- Math functions
     crate::ft::math::register_math(&mut engine);
 
-    engine.on_print(|x| println!("{}", x));
+    //engine.on_print(|x| println!("{}", x));
 
     engine
 }

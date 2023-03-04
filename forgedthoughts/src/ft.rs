@@ -13,6 +13,7 @@ pub mod math;
 pub mod ray_modifier;
 pub mod operators;
 pub mod analytical;
+pub mod procedural;
 
 use rayon::{slice::ParallelSliceMut, iter::{IndexedParallelIterator, ParallelIterator}};
 use std::path::PathBuf;
@@ -84,9 +85,16 @@ impl FT {
                         }
                     }
 
-                    if let Some(_bc) = engine.call_fn::<F3>(&mut scope, &ast, "background", ( ( F2::new(0.0, 0.0 ) ), ) ).ok() {
-                        settings.background_fn = true;
-                    }
+                    //if let Some(_bg) = scope.get("background") {
+                        let rc = engine.call_fn::<F3>(&mut scope, &ast, "background", ( ( Ray::new(F3::zeros(), F3::zeros()) ), ) );
+
+                        if rc.is_err() {
+                            println!("{:?}", rc.err().unwrap().to_string());
+                        } else
+                        if let Some(_bc) = rc.ok() {
+                            settings.background_fn = true;
+                        }
+                    //}
 
                     let mut scene = crate::ft::scene::Scene::new();
                     scene.build(&scope);
@@ -197,7 +205,7 @@ impl FT {
 
                                     let mut s = Scope::new();
 
-                                    if let Some(bc) = ctx.engine.call_fn::<F3>(&mut s, &ctx.ast, "background", ( ( F2::new(xx, yy ) ), ) ).ok() {
+                                    if let Some(bc) = ctx.engine.call_fn::<F3>(&mut s, &ctx.ast, "background", ( ( /*F2::new(xx, yy )*/ray ), ) ).ok() {
                                         color[0] = bc.x;
                                         color[1] = bc.y;
                                         color[2] = bc.z;

@@ -8,8 +8,9 @@ pub enum Boolean {
     Addition(SDF),
     AdditionSmooth(SDF, F),
     AdditionGroove(SDF, F, F),
-    Subtract(SDF),
-    SubtractSmooth(SDF, F),
+    Subtraction(SDF),
+    SubtractionSmooth(SDF, F),
+    SubtractionGroove(SDF, F, F),
     Intersection(SDF),
     IntersectionSmooth(SDF, F),
     SMin(SDF, F),
@@ -29,10 +30,13 @@ impl Boolean {
             AdditionGroove(other, _ra, _rb) => {
                 other.id
             },
-            Subtract(other) => {
+            Subtraction(other) => {
                 other.id
             },
-            SubtractSmooth(other, _smoothing) => {
+            SubtractionSmooth(other, _smoothing) => {
+                other.id
+            },
+            SubtractionGroove(other, _ra, _rb) => {
                 other.id
             },
             Intersection(other) => {
@@ -758,12 +762,12 @@ impl SDF {
                     }
                     dist = d;
                 },
-                Boolean::Subtract(other) => {
+                Boolean::Subtraction(other) => {
                     let other_hit = other.distance(ctx, p, iso_value);
 
                     dist = dist.max(-other_hit.0);
                 },
-                Boolean::SubtractSmooth(other, smoothing) => {
+                Boolean::SubtractionSmooth(other, smoothing) => {
 
                     #[inline(always)]
                     fn op_smooth_subtraction(d1: F, d2: F, k: F) -> (F, F) {
@@ -779,6 +783,22 @@ impl SDF {
                     if dist < iso_value {
                         material = Some(self.material.mix(&other.material, dh.1));
                     }
+                },
+                Boolean::SubtractionGroove(other, ra, rb) => {
+                    let other_hit = other.distance(ctx, p, iso_value);
+
+                    let a = dist;
+                    let b = other_hit.0;
+
+	                //return max(a, min(a + ra, rb - abs(b)));
+
+                    let d = a.max((a + ra).min(rb - b.abs()));
+                    if d < iso_value {
+                        if d != a {
+                            material = Some(other.material.clone());
+                        }
+                    }
+                    dist = d;
                 },
                 Boolean::Intersection(other) => {
                     let other_hit = other.distance(ctx, p, iso_value);
@@ -799,7 +819,7 @@ impl SDF {
 
                     dist = dh.0;
                     if dist < iso_value {
-                        material = Some(self.material.mix(&other.material, dh.1));
+                        material = Some(self.material.mix(&other.material, 1.0-dh.1));
                     }
                 },
                 Boolean::SMin(other, k) => {
@@ -850,13 +870,14 @@ impl SDF {
     pub fn normal(&self, ctx: &FTContext, p: F3) -> F3 {
         let scale = 0.5773 * 0.0005;
         let e = F2::new(1.0 * scale,-1.0 * scale);
+        let iso_value = 0.0;
 
         // IQs normal function
 
-        let mut n = e.xyy().mult_f(&self.distance(ctx, p + e.xyy(), 0.0).0);
-        n += e.yyx().mult_f(&self.distance(ctx, p + e.yyx(), 0.0).0);
-        n += e.yxy().mult_f(&self.distance(ctx, p + e.yxy(), 0.0).0);
-        n += e.xxx().mult_f(&self.distance(ctx, p + e.xxx(), 0.0).0);
+        let mut n = e.xyy().mult_f(&self.distance(ctx, p + e.xyy(), iso_value).0);
+        n += e.yyx().mult_f(&self.distance(ctx, p + e.yyx(), iso_value).0);
+        n += e.yxy().mult_f(&self.distance(ctx, p + e.yxy(), iso_value).0);
+        n += e.xxx().mult_f(&self.distance(ctx, p + e.xxx(), iso_value).0);
         n.normalize()
     }
 
@@ -1124,13 +1145,21 @@ impl SDF {
         });
 
         engine.register_fn("-", |a: &mut SDF, b: SDF| -> SDF {
-            a.booleans.push(Boolean::Subtract(b.clone()));
+            a.booleans.push(Boolean::Subtraction(b.clone()));
             a.clone()
         });
 
         engine.register_fn("-", |a: &mut SDF, b: Smooth| -> SDF {
-            a.booleans.push(Boolean::SubtractSmooth(b.sdf.clone(), b.smoothing));
+            a.booleans.push(Boolean::SubtractionSmooth(b.sdf.clone(), b.smoothing));
             a.clone()
+        });
+
+        engine.register_fn("-", |a: &mut SDF, b: Groove| -> SDF {
+            a.booleans.push(SubtractionGroove(b.sdf.clone(), b.ra, b.rb));
+            let mut c = a.clone();
+            c.id = Uuid::new_v4();
+            a.visible = false;
+            c
         });
 
         engine.register_fn("&", |a: &mut SDF, b: SDF| -> SDF {

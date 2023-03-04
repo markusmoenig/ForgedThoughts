@@ -1,6 +1,6 @@
 [package]
 name = "forgedthoughts"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "A 3D modeling and rendering programming language utilizing SDFs."
 license = "MIT"

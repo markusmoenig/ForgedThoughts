@@ -3,7 +3,7 @@ Forged Thoughts is a modeling and rendering programming language. It is open sou
 
 For documentation and examples see the [Website](https://forgedthoughts.com).
 
-![image](main.png)
+![Helmet](examples/helmet.png)
 
 
 Forged Thoughts strives to create high-quality distance field models for rendering and poligonization. It utilizes multi-threaded CPU based rendering in 64-bit to prevent the limitations of SDFs on the GPU. The focus is on quality, rather than speed.
@@ -30,6 +30,40 @@ The overall project goals are:
 * Model and work with 2D SDFs and Text as an overlay to the 3D layer (TODO)
 * Terrain (TODO)
 * Physics (TODO)
+
+## Current 3D SDF Primitives
+
+<table>
+  <tr>
+    <td> <img src="examples/primitives/sphere.png"  alt="Sphere" width = 400px height = 300px ></td>
+    <td> <img src="examples/primitives/box.png"  alt="Box" width = 400px height = 300px ></td>
+   </tr>
+   <tr>
+    <td> <img src="examples/primitives/cone.png"  alt="Cone" width = 400px height = 300px ></td>
+    <td> <img src="examples/primitives/ellipsoid.png"  alt="Ellipsoid" width = 400px height = 300px ></td>
+  </tr>
+</table>
+
+## Current Booleans
+
+<table>
+  <tr>
+    <td> <img src="examples/booleans/addition.png"  alt="Sphere" width = 400px height = 300px ></td>
+    <td> <img src="examples/booleans/addition_smooth.png"  alt="Box" width = 400px height = 300px ></td>
+   </tr>
+   <tr>
+    <td> <img src="examples/booleans/addition_groove.png"  alt="Box" width = 400px height = 300px ></td>
+    <td> <img src="examples/booleans/subtraction.png"  alt="Ellipsoid" width = 400px height = 300px ></td>
+  </tr>
+    <td> <img src="examples/booleans/subtraction_smooth.png"  alt="Cone" width = 400px height = 300px ></td>
+    <td> <img src="examples/booleans/subtraction_groove.png"  alt="Box" width = 400px height = 300px ></td>
+   </tr>
+  </tr>
+    <td> <img src="examples/booleans/intersection.png"  alt="Cone" width = 400px height = 300px ></td>
+    <td> <img src="examples/booleans/intersection_smooth.png"  alt="Box" width = 400px height = 300px ></td>
+   </tr>
+
+</table>
 
 ## Example
 

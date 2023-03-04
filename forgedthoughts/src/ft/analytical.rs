@@ -26,7 +26,7 @@ pub struct Analytical {
     pub radius              : F,
     pub normal              : F3,
 
-    pub offset              : F,
+    pub offset              : F3,
 
     pub material            : Material,
     pub shade               : Option<FnPtr>,
@@ -50,7 +50,7 @@ impl Analytical {
             radius          : 1.0,
             normal          : F3::zeros(),
 
-            offset          : 0.0,
+            offset          : F3::zeros(),
 
             material        : Material::new(),
             shade           : None,
@@ -72,7 +72,7 @@ impl Analytical {
             size            : F3::new(1.0, 1.0, 1.0),
             radius          : radius,
             normal          : F3::zeros(),
-            offset          : 0.0,
+            offset          : F3::zeros(),
 
             material        : Material::new(),
             shade           : None,
@@ -95,7 +95,7 @@ impl Analytical {
             radius          : 1.0,
             normal          : F3::new(0.0, 1.0, 0.0),
 
-            offset          : 0.0,
+            offset          : F3::zeros(),
 
             material        : Material::new(),
             shade           : None,
@@ -117,7 +117,7 @@ impl Analytical {
             size            : F3::new(1.0, 1.0, 1.0),
             radius          : 1.0,
             normal,
-            offset          : 0.0,
+            offset          : F3::zeros(),
 
             material        : Material::new(),
             shade           : None,
@@ -165,21 +165,20 @@ impl Analytical {
                     hit = true;
                     d = dist;
                     let hp = ray.at(&d);
-                    normal = -normalize(&(self.position - hp));
+                    normal = normalize(&(hp - self.position));
                 }
             },
             Plane => {
                 let denom = dot(&self.normal, &ray.direction);
 
                 if denom.abs() > 0.0001 {
-                    let t = dot(&(F3::new(0.0, -1.0, 0.0) - ray.origin), &normal) / denom;
+                    let t = dot(&(self.offset - ray.origin), &self.normal) / denom;
                     if t >= 0.0 {
                         hit = true;
                         d = t;
                         normal = self.normal;
                     }
                 }
-                //10.0//p.dot(&self.normal) + self.offset
             }
         };
 
@@ -188,7 +187,6 @@ impl Analytical {
         } else {
             None
         }
-
     }
 
     // --------- Getter / Setter
@@ -255,11 +253,11 @@ impl Analytical {
         self.size = new_val;
     }
 
-    pub fn get_offset(&mut self) -> F {
+    pub fn get_offset(&mut self) -> F3 {
         self.offset
     }
 
-    pub fn set_offset(&mut self, new_val: F) {
+    pub fn set_offset(&mut self, new_val: F3) {
         self.offset = new_val;
     }
 
@@ -276,8 +274,8 @@ impl Analytical {
         engine.register_type_with_name::<Analytical>("Analytical")
             .register_fn("AnalyticalSphere", Analytical::new_sphere)
             .register_fn("AnalyticalSphere", Analytical::new_sphere_radius)
-            .register_fn("Plane", Analytical::new_plane)
-            .register_fn("Plane", Analytical::new_plane_normal)
+            .register_fn("AnalyticalPlane", Analytical::new_plane)
+            .register_fn("AnalyticalPlane", Analytical::new_plane_normal)
 
             .register_fn("copy", Analytical::copy)
 

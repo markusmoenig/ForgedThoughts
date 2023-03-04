@@ -10,7 +10,7 @@ fn cli() -> Command {
     Command::new("ftc")
         .about("Forged Thoughts compiler. Compiles and renders or polygonizes '.ft' language files.")
         .author("Markus Moenig")
-        .version("0.11")
+        .version("0.1.3")
         .subcommand_required(false)
         .arg_required_else_help(false)
         .allow_external_subcommands(true)

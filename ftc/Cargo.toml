@@ -1,6 +1,6 @@
 [package]
 name = "ftc"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "A modeling and rendering programming language utilizing SDFs."
 license = "MIT"
@@ -9,6 +9,6 @@ repository = "https://github.com/markusmoenig/ForgedThoughts.git"
 
 [dependencies]
 
-forgedthoughts = { version = "0.1.2", path = "../forgedthoughts" }
+forgedthoughts = { version = "0.1.3", path = "../forgedthoughts" }
 png = "0.17.5"
 clap = "4.1.5"
