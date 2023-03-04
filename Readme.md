@@ -3,9 +3,6 @@ Forged Thoughts is a modeling and rendering programming language. It is open sou
 
 For documentation and examples see the [Website](https://forgedthoughts.com).
 
-![Helmet](examples/helmet.png)
-
-
 Forged Thoughts strives to create high-quality distance field models for rendering and poligonization. It utilizes multi-threaded CPU based rendering in 64-bit to prevent the limitations of SDFs on the GPU. The focus is on quality, rather than speed.
 
 ## Features
@@ -62,10 +59,28 @@ The overall project goals are:
     <td> <img src="examples/booleans/intersection.png"  alt="Cone" width = 400px height = 300px ></td>
     <td> <img src="examples/booleans/intersection_smooth.png"  alt="Box" width = 400px height = 300px ></td>
    </tr>
+</table>
 
+## Current Merging Functions
+
+<table>
+  <tr>
+    <td> <img src="examples/merging/smin.png"  alt="Smin" width = 400px height = 300px ></td>
+   </tr>
+</table>
+
+## Current Modifier
+
+<table>
+  <tr>
+    <td> <img src="examples/modifier/twist.png"  alt="Sphere" width = 400px height = 300px ></td>
+    <td> <img src="examples/modifier/mirror.png"  alt="Box" width = 400px height = 300px ></td>
+   </tr>
 </table>
 
 ## Example
+
+![Helmet](examples/helmet.png)
 
 The above helmet was created with the following code:
 

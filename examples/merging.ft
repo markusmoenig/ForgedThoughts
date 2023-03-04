@@ -1,0 +1,46 @@
+fn background(ray) {
+    let t = 0.5 * (ray.direction.y + 1.0);
+    to_linear( ( (1.0 - t) * F3(1.0) + t * F3(0.5, 0.7, 1.0)) * 0.6)
+}
+
+camera.origin = F3(0.0, 0.0, 3.0);
+camera.fov = 80.0;
+
+let bsdf = BSDF();
+bsdf.iterations = 100;
+
+settings.width = 800;
+settings.height = 600;
+settings.renderer = bsdf;
+settings.max_distance = 5.0;
+
+let light = PointLight();
+light.position = F3(3.0, 2.0, 2.0);
+light.intensity = 15.0;
+
+let plane = AnalyticalPlane();
+plane.offset.y = -1.0;
+
+plane.material.procedural = |hit| {
+    let c = checker(hit.hit_point.xz, 0.4, 0.5);
+    if c < 1.0 {
+        c = 0.1;
+    } else {
+        c = 0.25;
+    }
+    hit.material.rgb = F3(c);
+    hit.material.roughness = 1.0;
+    hit.material
+};
+
+let sphere = Sphere();
+sphere.material.rgb = F3(0.2, 0.4, 0.6);
+sphere.material.roughness = 1.0;
+sphere.material.subsurface = 1.0;
+
+let cone = Cone();
+cone.material = sphere.material;
+
+let result = smin(sphere, cone, 0.5);
+
+
