@@ -76,6 +76,9 @@ The overall project goals are:
     <td> <img src="examples/modifier/twist.png"  alt="Sphere" width = 400px height = 300px ></td>
     <td> <img src="examples/modifier/mirror.png"  alt="Box" width = 400px height = 300px ></td>
    </tr>
+    <td> <img src="examples/modifier/max.png"  alt="Max" width = 400px height = 300px ></td>
+    <td> <img src="examples/modifier/onion.png"  alt="Onion" width = 400px height = 300px ></td>
+   </tr>
 </table>
 
 ## Example

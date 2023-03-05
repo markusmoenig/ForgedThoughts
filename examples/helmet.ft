@@ -5,12 +5,8 @@ camera.origin.z = 0.75;
 settings.width = 600;
 settings.height = 600;
 
-settings.background = F3("444");
-settings.antialias = 1;
-//settings.opacity = 0.0;
-
-settings.steps = 400;
-settings.max_distance = 3.0;
+settings.background = F3("222");
+settings.max_distance = 4.0;
 
 // For polygonization
 settings.grid_size = 0.5;
@@ -20,30 +16,38 @@ settings.iso_value = 0.0001;
 let bsdf = BSDF();
 
 bsdf.iterations = 300;
-bsdf.depth = 2;
+bsdf.depth = 4;
 
 settings.renderer = bsdf;
 
 let light = PointLight();
-light.position = F3(4.0, 3.0, 5.0);
-light.intensity = 1.0;
+light.position = F3(5.0, 2.0, 5.0);
+light.intensity = 20.0;
+light.radius = 2.0;
 
 let light2 = PointLight();
-light2.position = F3(-5.0, 0.0, 5.0);
-light2.intensity = 1.0;
+light2.position = F3(-5.0, -2.0, 5.0);
+light2.intensity = 20.0;
+light2.radius = 2.0;
+
+let light3 = PointLight();
+light3.position = F3(0.0, 8.0, 5.0);
+light3.intensity = 10.0;
+light3.radius = 1.0;
+
+let gold = Material();
+gold.rgb = F3(1.0, 0.71, 0.29);//F3("9F6F4A");
+gold.metallic = 1.0;
+gold.roughness = 0.0;
 
 // Main shape - We make a smooth blend between a sphere and a cone
 
 let sphere = Sphere(0.24);
+sphere.material = gold;
 let cone = Cone(0.3, 0.25, 0.0);
+cone.material = gold;
 
 let helmet = smin(sphere, cone, 0.5);
-
-// Assign the material
-
-helmet.material.rgb = F3("9F6F4A");
-helmet.material.metallic = 0.7;
-helmet.material.roughness = 0.3;
 
 // Make it hollow by creating a copy, subtract it and move it down a bit
 // to open the bottom
@@ -78,7 +82,10 @@ helmet -= cut;
 // the helmet and a box.
 
 let stripe = Box(F3(0.011, 0.17, 0.2));
+stripe.material.rgb = F3(0.56, 0.57, 0.58);//F3(0.95, 0.93, 0.88);
+stripe.material.metallic = 1.0;
+stripe.material.roughness = 0.2;
+
 stripe.position.y = 0.16;
 stripe.position.z = 0.2;
 helmet += Groove(stripe, 0.01, 0.02);
-

@@ -101,6 +101,8 @@ pub struct SDF {
     pub max                 : F3,
     pub min                 : F3,
 
+    pub noise               : F,
+
     pub visible             : bool,
 }
 
@@ -142,6 +144,8 @@ impl SDF {
             max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
             min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
 
+            noise           : 0.0,
+
             visible         : true,
         }
     }
@@ -181,6 +185,8 @@ impl SDF {
 
             max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
             min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
+            noise           : 0.0,
 
             visible         : true,
         }
@@ -222,6 +228,8 @@ impl SDF {
             max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
             min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
 
+            noise           : 0.0,
+
             visible         : true,
         }
     }
@@ -261,6 +269,8 @@ impl SDF {
 
             max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
             min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
+            noise           : 0.0,
 
             visible         : true,
         }
@@ -302,6 +312,8 @@ impl SDF {
             max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
             min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
 
+            noise           : 0.0,
+
             visible         : true,
         }
     }
@@ -341,6 +353,8 @@ impl SDF {
 
             max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
             min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
+            noise           : 0.0,
 
             visible         : true,
         }
@@ -384,6 +398,8 @@ impl SDF {
             max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
             min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
 
+            noise           : 0.0,
+
             visible         : true,
         }
     }
@@ -423,6 +439,8 @@ impl SDF {
 
             max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
             min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
+            noise           : 0.0,
 
             visible         : true,
         }
@@ -464,6 +482,8 @@ impl SDF {
             max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
             min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
 
+            noise           : 0.0,
+
             visible         : true,
         }
     }
@@ -503,6 +523,8 @@ impl SDF {
 
             max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
             min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
+            noise           : 0.0,
 
             visible         : true,
         }
@@ -696,9 +718,6 @@ impl SDF {
                 let k0 = (p / self.size).length();
                 let k1 = (p / (self.size * self.size)).length();
                 k0 * (k0 - 1.0) / k1
-                // float k0 = length(p/r);
-                // float k1 = length(p/(r*r));
-                // return k0*(k0-1.0)/k1;
             }
         };
 
@@ -709,6 +728,84 @@ impl SDF {
                 dist = dist.abs() - self.onion;
             }
         }
+
+        // Noise
+        /*
+        if self.noise != 0.0 {
+
+            fn smin(a: F, b: F, k: F) -> F {
+                let h = (k-(a-b).abs()).max(0.0);
+                a.min(b) - h * h * 0.25 / k
+            }
+
+            fn smax(a: F, b: F, k: F) -> F {
+                let h = (k-(a-b).abs()).max(0.0);
+                a.max(b) + h * h * 0.25 / k
+            }
+
+            fn rad(p: [F; 3]) -> F {
+                let q = [17.0 * (p[0] * 0.3183099 + 0.11).fract(),
+                        17.0 * (p[1] * 0.3183099 + 0.17).fract(),
+                        17.0 * (p[2] * 0.3183099 + 0.13).fract()];
+                let r = (q[0] * q[1] * q[2] * (q[0] + q[1] + q[2])).fract();
+                0.7 * r * r
+            }
+
+            fn noise_sdf(p: [F; 3], level: F) -> F {
+                let i = [p[0].floor(), p[1].floor(), p[2].floor()];
+                let f = [p[0].fract(), p[1].fract(), p[2].fract()];
+                let sph = |i: [F; 3], f: [F; 3], c: [F; 3]| {
+                    let l = ((f[0] - c[0]).powi(2) + (f[1] - c[1]).powi(2) + (f[2] - c[2]).powi(2)).sqrt();
+                    l - rad([i[0] + c[0], i[1] + c[1], i[2] + c[2]]) * level
+                };
+                let s1 = sph(i, f, [0.0, 0.0, 0.0]);
+                let s2 = sph(i, f, [0.0, 0.0, 1.0]);
+                let s3 = sph(i, f, [0.0, 1.0, 0.0]);
+                let s4 = sph(i, f, [0.0, 1.0, 1.0]);
+                let s5 = sph(i, f, [1.0, 0.0, 0.0]);
+                let s6 = sph(i, f, [1.0, 0.0, 1.0]);
+                let s7 = sph(i, f, [1.0, 1.0, 0.0]);
+                let s8 = sph(i, f, [1.0, 1.0, 1.0]);
+                s1.min(s2).min(s3).min(s4).min(s5).min(s6).min(s7).min(s8)
+            }
+
+            const M: [[F; 3]; 3] = [[0.0, 1.6, 1.2],
+                                    [-1.6, 0.72, -0.96],
+                                    [-1.2, -0.96, 1.28]];
+
+            let mut q = [p.x, p.y, p.z];
+            let level = self.noise;
+            let mut t = 0.0;
+            let mut s = 1.0;
+            let ioct = 11;
+            for _i in 0..ioct {
+
+                let mut n = noise_sdf(q, 1.0) * s;// * level;
+                let dist1 = dist - 0.1 * s * level;
+                let dist2 = 0.3 * s * level;
+                n = smax(n, dist1, dist2);
+                n = smin(n, dist, dist2);
+                dist = n;
+
+                t += dist;
+                let [x, y, z] = q;
+                q[0] = x * M[0][0] + y * M[0][1] + z * M[0][2];
+                q[1] = x * M[1][0] + y * M[1][1] + z * M[1][2];
+                q[2] = x * M[2][0] + y * M[2][1] + z * M[2][2];
+                q[2] += -1.8 * t * s * level;
+                s *= 0.415;
+            }
+        }*/
+
+        // Max
+        dist = dist.max(orig_p.x - self.max.x);
+        dist = dist.max(orig_p.y - self.max.y);
+        dist = dist.max(orig_p.z - self.max.z);
+
+        // Min
+        // dist = dist.min(orig_p.x - self.min.x);
+        // dist = dist.min(orig_p.y - self.min.y);
+        // dist = dist.min(orig_p.z - self.min.z);
 
         // If the distance is smaller than the is_value we automatically mix the materials
 
@@ -852,16 +949,6 @@ impl SDF {
                 },
             }
         }
-
-        // Max
-        dist = dist.max(orig_p.x - self.max.x);
-        dist = dist.max(orig_p.y - self.max.y);
-        dist = dist.max(orig_p.z - self.max.z);
-
-        // Min
-        // dist = dist.min(orig_p.x - self.min.x);
-        // dist = dist.min(orig_p.y - self.min.y);
-        // dist = dist.min(orig_p.z - self.min.z);
 
         (dist * self.scale, material)
     }
@@ -1069,6 +1156,14 @@ impl SDF {
         self.modifier = Some(new_val);
     }
 
+    pub fn get_noise(&mut self) -> F {
+        self.noise
+    }
+
+    pub fn set_noise(&mut self, new_val: F) {
+        self.noise = new_val;
+    }
+
     pub fn get_visible(&mut self) -> bool {
         self.visible
     }
@@ -1123,6 +1218,8 @@ impl SDF {
             .register_get_set("ray_modifier", SDF::get_ray_modifier, SDF::set_ray_modifier)
             .register_get_set("shade", SDF::get_shade, SDF::set_shade)
             .register_get_set("modifier", SDF::get_modifier, SDF::set_modifier)
+
+            .register_get_set("noise", SDF::get_noise, SDF::set_noise)
 
             .register_get_set("visible", SDF::get_visible, SDF::set_visible);
 

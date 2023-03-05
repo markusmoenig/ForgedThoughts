@@ -58,7 +58,7 @@ impl rust_pathtracer::scene::Scene for BSDFScene<'_> {
     }
 
     /// The closest hit, includes light sources.
-    fn closest_hit(&self, ray: &Ray, state: &mut State, _light: &mut LightSampleRec) -> bool {
+    fn closest_hit(&self, ray: &Ray, state: &mut State, light_sample: &mut LightSampleRec) -> bool {
 
         let mut hit = false;
 
@@ -69,6 +69,10 @@ impl rust_pathtracer::scene::Scene for BSDFScene<'_> {
             state.normal = hit_record.normal;
 
             state.material = hit_record.material;
+        }
+
+        if self.sample_lights(ray, state, light_sample, &self.lights) {
+            hit = true;
         }
 
         hit

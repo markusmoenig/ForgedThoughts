@@ -35,7 +35,7 @@ plane.material.procedural = |hit| {
 
 //let prim = Box(F3(0.3, 1.0, 0.3));
 let prim = Sphere();
-prim.position.x += 0.6;
+//prim.position.x += 0.6;
 
 prim.material.rgb = F3(1.0, 0.186, 0.0);
 prim.material.roughness = 0.3;
@@ -44,4 +44,10 @@ prim.material.roughness = 0.3;
 //prim.twist.y = 2.0;
 //settings.step_size = 0.5;
 
-prim.mirror.x = true;
+//prim.mirror.x = true;
+
+//prim.onion = 0.05;
+//prim.position.y = 0.05;
+//prim.max.z = 0.0;
+
+prim.max.x = 0.0;
