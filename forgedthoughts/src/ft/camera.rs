@@ -61,7 +61,6 @@ impl Camera {
         rd += vertical.mult_f(&(pixel_size.y * cam_offset.y + uv.y));
 
         Ray::new(origin, rd.normalize())
-
     }
 
 

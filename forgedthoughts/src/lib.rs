@@ -26,7 +26,7 @@ pub mod prelude {
     pub use crate::ft::renderer::RendererType;
     pub use crate::ft::renderer::Renderer;
 
-    pub use crate::ft::structs::HitRecord;
+    pub use crate::ft::structs::*;
     pub use crate::ft::ray_modifier::RayModifier;
 
     pub use crate::ft::operators::Smooth;

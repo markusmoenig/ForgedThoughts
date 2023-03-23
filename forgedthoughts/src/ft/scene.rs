@@ -76,7 +76,7 @@ impl Scene {
     }
 
     #[inline(always)]
-    /// Raymarch the scene and return the
+    /// Raymarch the scene and optionally return the HitRecord.
     pub fn raymarch(&self, ray: &Ray, ctx: &FTContext) -> Option<HitRecord> {
 
         let mut hit_point = F3::zeros();
@@ -86,7 +86,7 @@ impl Scene {
         let mut hit = false;
 
         let mut material = Material::new();
-        let iso_value = 0.0001;
+        let iso_value = 0.000000000000001;
 
         // Analytical
         for a in &self.analytical {
@@ -101,11 +101,20 @@ impl Scene {
             }
         }
 
-        let mut t = 0.00001;
+        let mut t = iso_value;
         let t_max = ctx.settings.max_distance.min(d);
 
         // Raymarching loop
         if self.sdfs.is_empty() == false {
+
+            /*
+            // Create AABB tests
+            let mut hit_tests = vec![];
+            for s in &self.sdfs {
+                let aabb = s.create_aabb();
+                hit_tests.push(self.ray_aabb(ray, &aabb));
+            }*/
+
             for _i in 0..ctx.settings.steps {
 
                 let p = ray.at(&t);
@@ -115,6 +124,10 @@ impl Scene {
 
                 let mut sdf_index = None;
                 for (index, s) in self.sdfs.iter().enumerate() {
+
+                    // if hit_tests[index] == false {
+                    //     continue;
+                    // }
 
                     let rc = s.distance(ctx, p, iso_value);
 
@@ -249,5 +262,44 @@ impl Scene {
         }
 
         d
+    }
+
+    /// Ray AABB intersection. Taken from https://github.com/svenstaro/bvh/blob/master/src/ray.rs
+    pub fn ray_aabb(&self, ray: &Ray, aabb: &AABB) -> bool {
+
+        #[inline(always)]
+        fn min(x: F, y: F) -> F {
+            if x < y {
+                x
+            } else {
+                y
+            }
+        }
+
+        #[inline(always)]
+        fn max(x: F, y: F) -> F {
+            if x > y {
+                x
+            } else {
+                y
+            }
+        }
+
+        let mut ray_min = (aabb[ray.sign_x].x - ray.origin.x) * ray.inv_direction.x;
+        let mut ray_max = (aabb[1 - ray.sign_x].x - ray.origin.x) * ray.inv_direction.x;
+
+        let y_min = (aabb[ray.sign_y].y - ray.origin.y) * ray.inv_direction.y;
+        let y_max = (aabb[1 - ray.sign_y].y - ray.origin.y) * ray.inv_direction.y;
+
+        ray_min = max(ray_min, y_min);
+        ray_max = min(ray_max, y_max);
+
+        let z_min = (aabb[ray.sign_z].z - ray.origin.z) * ray.inv_direction.z;
+        let z_max = (aabb[1 - ray.sign_z].z - ray.origin.z) * ray.inv_direction.z;
+
+        ray_min = max(ray_min, z_min);
+        ray_max = min(ray_max, z_max);
+
+        max(ray_min, 0.0) <= ray_max
     }
 }

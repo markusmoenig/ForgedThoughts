@@ -968,6 +968,17 @@ impl SDF {
         n.normalize()
     }
 
+    /// Create an AABB for the SDF.
+    pub fn create_aabb(&self) -> AABB {
+
+        let size = F3::new_x(0.7);
+
+        AABB {
+            min : F3::new(self.position.x - size.x, self.position.y - size.y, self.position.z - size.z),
+            max : F3::new(self.position.x + size.x, self.position.y + size.y, self.position.z + size.z),
+        }
+    }
+
     // --------- Getter / Setter
 
     pub fn copy(&mut self) -> SDF {

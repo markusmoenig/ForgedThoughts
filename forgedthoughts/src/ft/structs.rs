@@ -38,3 +38,23 @@ impl HitRecord {
     }
 }
 
+/// AABB
+#[derive(Debug, Clone)]
+pub struct AABB {
+    pub min             : F3,
+    pub max             : F3,
+}
+
+use std::ops::Index;
+
+impl Index<usize> for AABB {
+    type Output = F3;
+
+    fn index(&self, index: usize) -> &F3 {
+        if index == 0 {
+            &self.min
+        } else {
+            &self.max
+        }
+    }
+}

@@ -1,0 +1,63 @@
+camera.origin = F3(0.0, 0.2, 2.5);
+camera.fov = 70.0;
+
+let bsdf = BSDF();
+bsdf.iterations = 1000;
+bsdf.depth = 10;
+
+settings.background = F3(0.05, 0.05, 0.05);
+settings.width = 800;
+settings.height = 600;
+settings.renderer = bsdf;
+settings.max_distance = 4.0;
+
+let light = PointLight();
+light.position = F3(3.0, 2.0, 2.0);
+light.intensity = 10.0;
+
+let plane = AnalyticalPlane();
+plane.offset.y = -0.6;
+plane.material.rgb = F3(0.8, 0.8, 0.8);
+plane.material.roughness = 0.2;
+plane.material.metallic = 1.0;
+
+// Glass
+
+let glass = Cone(0.6, 0.7, 0.6);
+glass.rounding = 0.2;
+
+glass.material.rgb = F3(1.0, 1.0, 1.0);
+glass.material.roughness = 0.0;
+glass.material.transmission = 1.0;
+glass.material.ior = 1.50;
+
+let interior = glass.copy();
+interior.scale = 0.96;
+
+// Fluid
+
+let fluid = interior.copy();
+fluid.material.rgb = F3("722F37").to_linear();
+fluid.material.transmission = 1.0;
+fluid.material.roughness = 0.5;
+fluid.material.ior = 1.3443705; // Red Wine
+fluid.material.clearcoat_gloss = 1.0;
+fluid.material.sheen = 1.0;
+fluid.material.sheen_tint = 1.0;
+fluid.max.y = 0.0;
+
+glass -= interior;
+
+// Top: Smooth Cut Off & Gold Rim
+
+let box = Box();
+box.material.rgb = F3("d4af37");
+box.material.metallic = 1.0;
+box.material.roughness = 0.2;
+box.position.y = 1.5;
+
+// Smoothly subtract the box from the glass
+glass -= Smooth(box, 0.01);
+
+// Create a groove with the gold material of the box
+glass += Groove(box, 0.001, 0.07);
