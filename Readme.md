@@ -28,60 +28,58 @@ The overall project goals are:
 * Terrain (TODO)
 * Physics (TODO)
 
-## Current 3D SDF Primitives
-
-<table>
-  <tr>
-    <td> <img src="examples/primitives/sphere.png"  alt="Sphere" width = 400px height = 300px ></td>
-    <td> <img src="examples/primitives/box.png"  alt="Box" width = 400px height = 300px ></td>
-   </tr>
-   <tr>
-    <td> <img src="examples/primitives/cone.png"  alt="Cone" width = 400px height = 300px ></td>
-    <td> <img src="examples/primitives/ellipsoid.png"  alt="Ellipsoid" width = 400px height = 300px ></td>
-  </tr>
-</table>
-
-## Current Booleans
-
-<table>
-  <tr>
-    <td> <img src="examples/booleans/addition.png"  alt="Sphere" width = 400px height = 300px ></td>
-    <td> <img src="examples/booleans/addition_smooth.png"  alt="Box" width = 400px height = 300px ></td>
-   </tr>
-   <tr>
-    <td> <img src="examples/booleans/addition_groove.png"  alt="Box" width = 400px height = 300px ></td>
-    <td> <img src="examples/booleans/subtraction.png"  alt="Ellipsoid" width = 400px height = 300px ></td>
-  </tr>
-    <td> <img src="examples/booleans/subtraction_smooth.png"  alt="Cone" width = 400px height = 300px ></td>
-    <td> <img src="examples/booleans/subtraction_groove.png"  alt="Box" width = 400px height = 300px ></td>
-   </tr>
-  </tr>
-    <td> <img src="examples/booleans/intersection.png"  alt="Cone" width = 400px height = 300px ></td>
-    <td> <img src="examples/booleans/intersection_smooth.png"  alt="Box" width = 400px height = 300px ></td>
-   </tr>
-</table>
-
-## Current Merging Functions
-
-<table>
-  <tr>
-    <td> <img src="examples/merging/smin.png"  alt="Smin" width = 400px height = 300px ></td>
-   </tr>
-</table>
-
-## Current Modifier
-
-<table>
-  <tr>
-    <td> <img src="examples/modifier/twist.png"  alt="Sphere" width = 400px height = 300px ></td>
-    <td> <img src="examples/modifier/mirror.png"  alt="Box" width = 400px height = 300px ></td>
-   </tr>
-    <td> <img src="examples/modifier/max.png"  alt="Max" width = 400px height = 300px ></td>
-    <td> <img src="examples/modifier/onion.png"  alt="Onion" width = 400px height = 300px ></td>
-   </tr>
-</table>
-
 ## Example
+
+#### Wine Glass
+
+![Wine Glass](examples/wine_glass.png)
+
+The modeling of the glass, except the materials, is just 9 lines.
+
+```rust
+// Glass
+
+let glass = Cone(0.6, 0.7, 0.6);
+glass.rounding = 0.2;
+
+glass.material.rgb = F3(1.0, 1.0, 1.0);
+glass.material.roughness = 0.0;
+glass.material.transmission = 1.0;
+glass.material.ior = 1.50;
+
+let interior = glass.copy();
+interior.scale = 0.96;
+
+// Fluid
+
+let fluid = interior.copy();
+fluid.material.rgb = F3("722F37").to_linear();
+fluid.material.transmission = 1.0;
+fluid.material.roughness = 0.5;
+fluid.material.ior = 1.3443705; // Red Wine
+fluid.material.clearcoat_gloss = 1.0;
+fluid.material.sheen = 1.0;
+fluid.material.sheen_tint = 1.0;
+fluid.max.y = 0.0;
+
+glass -= interior;
+
+// Top: Smooth Cut Off & Gold Rim
+
+let box = Box();
+box.material.rgb = F3("d4af37");
+box.material.metallic = 1.0;
+box.material.roughness = 0.2;
+box.position.y = 1.5;
+
+// Smoothly subtract the box from the glass
+glass -= Smooth(box, 0.01);
+
+// Create a groove with the gold material of the box
+glass += Groove(box, 0.001, 0.07);
+```
+
+#### Helmet
 
 ![Helmet](examples/helmet.png)
 
@@ -138,6 +136,59 @@ stripe.position.y = 0.16;
 stripe.position.z = 0.2;
 helmet += Groove(stripe, 0.01, 0.02);
 ```
+
+## Current 3D SDF Primitives
+
+<table>
+  <tr>
+    <td> <img src="examples/primitives/sphere.png"  alt="Sphere" width = 400px height = 300px ></td>
+    <td> <img src="examples/primitives/box.png"  alt="Box" width = 400px height = 300px ></td>
+   </tr>
+   <tr>
+    <td> <img src="examples/primitives/cone.png"  alt="Cone" width = 400px height = 300px ></td>
+    <td> <img src="examples/primitives/ellipsoid.png"  alt="Ellipsoid" width = 400px height = 300px ></td>
+  </tr>
+</table>
+
+## Current Booleans
+
+<table>
+  <tr>
+    <td> <img src="examples/booleans/addition.png"  alt="Sphere" width = 400px height = 300px ></td>
+    <td> <img src="examples/booleans/addition_smooth.png"  alt="Box" width = 400px height = 300px ></td>
+   </tr>
+   <tr>
+    <td> <img src="examples/booleans/addition_groove.png"  alt="Box" width = 400px height = 300px ></td>
+    <td> <img src="examples/booleans/subtraction.png"  alt="Ellipsoid" width = 400px height = 300px ></td>
+  </tr>
+    <td> <img src="examples/booleans/subtraction_smooth.png"  alt="Cone" width = 400px height = 300px ></td>
+    <td> <img src="examples/booleans/subtraction_groove.png"  alt="Box" width = 400px height = 300px ></td>
+   </tr>
+  </tr>
+    <td> <img src="examples/booleans/intersection.png"  alt="Cone" width = 400px height = 300px ></td>
+    <td> <img src="examples/booleans/intersection_smooth.png"  alt="Box" width = 400px height = 300px ></td>
+   </tr>
+</table>
+
+## Current Merging Functions
+
+<table>
+  <tr>
+    <td> <img src="examples/merging/smin.png"  alt="Smin" width = 400px height = 300px ></td>
+   </tr>
+</table>
+
+## Current Modifier
+
+<table>
+  <tr>
+    <td> <img src="examples/modifier/twist.png"  alt="Sphere" width = 400px height = 300px ></td>
+    <td> <img src="examples/modifier/mirror.png"  alt="Box" width = 400px height = 300px ></td>
+   </tr>
+    <td> <img src="examples/modifier/max.png"  alt="Max" width = 400px height = 300px ></td>
+    <td> <img src="examples/modifier/onion.png"  alt="Onion" width = 400px height = 300px ></td>
+   </tr>
+</table>
 
 ## Supporting Forged Thoughts
 
