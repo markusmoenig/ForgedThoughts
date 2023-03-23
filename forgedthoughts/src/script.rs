@@ -1,7 +1,9 @@
 
 use crate::prelude::*;
 
+use rhai::packages::Package;
 pub use rhai::{Engine, AST, Scope};
+use rhai_rand::RandomPackage;
 use rust_pathtracer::tracer::Tracer;
 
 /// FTContext
@@ -22,6 +24,9 @@ pub fn create_engine() -> Engine {
     let mut engine = Engine::new();
 
     engine.set_fast_operators(false);
+
+    let random = RandomPackage::new();
+    random.register_into_engine(&mut engine);
 
     // Vectors
     F2::register(&mut engine);
