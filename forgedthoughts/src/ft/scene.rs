@@ -101,7 +101,7 @@ impl Scene {
             }
         }
 
-        let mut t = 0.001;
+        let mut t = 0.00001;
         let t_max = ctx.settings.max_distance.min(d);
 
         // Raymarching loop
@@ -123,17 +123,20 @@ impl Scene {
                         sdf_material = rc.1.unwrap();
                     }
 
-                    if rc.0 < sdf_d {
+                    if rc.0.abs() < sdf_d.abs() {
                         sdf_index = Some(index);
-                        sdf_d = rc.0;
+                        sdf_d = rc.0.abs();
                     }
                 }
 
-                if sdf_d.abs() < iso_value {
+                t += sdf_d * ctx.settings.step_size;
+
+                if sdf_d < iso_value {
                     hit = true;
                     d = t;
                     hit_point = ray.at(&d);
                     material = sdf_material;
+
                     if let Some(sdf_index) = sdf_index {
                         normal = self.sdfs[sdf_index].normal(ctx, hit_point);
                     }
@@ -142,7 +145,6 @@ impl Scene {
                 if t > t_max {
                     break;
                 }
-                t += sdf_d * ctx.settings.step_size;
             }
         }
 
@@ -216,19 +218,20 @@ impl Scene {
 
                     let rc = s.distance(ctx, p, iso_value);
 
-                    if rc.0 < d {
-                        d = rc.0;
+                    if rc.0.abs() < d.abs() {
+                        d = rc.0.abs();
                     }
                 }
 
-                if d.abs() < iso_value {
+                t += d * ctx.settings.step_size;
+
+                if d < iso_value {
                     hit = true;
                     break;
                 } else
                 if t > t_max {
                     break;
                 }
-                t += d * ctx.settings.step_size;
             }
         }
         hit
