@@ -2,10 +2,10 @@ camera.origin = F3(0.0, 0.2, 2.5);
 camera.fov = 70.0;
 
 let bsdf = BSDF();
-bsdf.iterations = 1000;
-bsdf.depth = 10;
+bsdf.iterations = 2000;
+bsdf.depth = 6;
 
-settings.background = F3(0.05, 0.05, 0.05);
+settings.background = F3(0.3, 0.3, 0.3);
 settings.width = 800;
 settings.height = 600;
 settings.renderer = bsdf;
@@ -20,6 +20,10 @@ plane.offset.y = -0.6;
 plane.material.rgb = F3(0.8, 0.8, 0.8);
 plane.material.roughness = 0.2;
 plane.material.metallic = 1.0;
+
+let plane1 = AnalyticalPlane(F3(0.0, 0.0, 1.0));
+plane1.offset.z = -8.0;
+plane1.material = plane.material;
 
 // Glass
 
@@ -61,3 +65,4 @@ glass -= Smooth(box, 0.01);
 
 // Create a groove with the gold material of the box
 glass += Groove(box, 0.001, 0.07);
+
