@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "forgedthoughts"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "colors-transform",
  "rayon",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "ftc"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "clap",
  "forgedthoughts",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "rust-pathtracer"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "colors-transform",
  "rand",

@@ -1,6 +1,6 @@
 [package]
 name = "forgedthoughts"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "A 3D modeling and rendering programming language utilizing SDFs."
 license = "MIT"
@@ -11,7 +11,7 @@ repository = "https://github.com/markusmoenig/ForgedThoughts.git"
 rhai = { version = "1.12.0", default-features = true, features = ["sync", "internals"] }
 rayon = "1.5.3"
 colors-transform = "0.2.11"
-rust-pathtracer = { version = "0.2.2", path = "../../rust-pathtracer/rust-pathtracer" }
+rust-pathtracer = { version = "0.2.3", path = "../../rust-pathtracer/rust-pathtracer" }
 rhai-rand = "0.1.5"
 
 [dependencies.uuid]
