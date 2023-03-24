@@ -60,19 +60,13 @@ pub enum SDFType {
     Box,
     CappedCone,
     Ellipsoid,
+    Torus,
+    Cylinder,
 }
 
-use SDFType::*;
-
-/// SDF
+/// SDFOptions
 #[derive(Debug, Clone)]
-pub struct SDF {
-    pub id                  : Uuid,
-
-    pub booleans            : Vec<Boolean>,
-
-    pub sdf_type            : SDFType,
-
+pub struct SDFOptions {
     pub mirror              : B3,
 
     pub bbox                : F3,
@@ -81,15 +75,26 @@ pub struct SDF {
     pub rotation            : F3,
     pub scale               : F,
 
+    // General
+
     pub size                : F3,
     pub radius              : F,
+    pub height              : F,
+
+
+    // Plane
     pub normal              : F3,
     pub offset              : F,
 
+    // Cone
+    pub upper_radius        : F,
+    pub lower_radius        : F,
+
+    // Torus
+    pub ring_radius         : F,
+
     pub rounding            : F,
 
-    pub material            : Material,
-    pub shade               : Option<FnPtr>,
     pub ray_modifier        : Option<FnPtr>,
 
     pub modifier            : Option<RayModifier>,
@@ -108,6 +113,71 @@ pub struct SDF {
     pub visible             : bool,
 }
 
+impl SDFOptions {
+
+    pub fn new() -> Self {
+        Self {
+            mirror          : B3::falsed(),
+
+            bbox            : F3::new_x(-1.0),
+
+            position        : F3::zeros(),
+            rotation        : F3::zeros(),
+            scale           : 1.0,
+
+            size            : F3::new(1.0, 1.0, 1.0),
+            radius          : 1.0,
+            height          : 1.0,
+
+            // Plane
+            normal          : F3::zeros(),
+            offset          : 0.0,
+
+            // Cone
+            upper_radius    : 0.0,
+            lower_radius    : 1.0,
+
+            // Torus
+            ring_radius     : 0.3,
+
+            rounding        : 0.0,
+
+            ray_modifier    : None,
+
+            modifier        : None,
+
+            twist           : F3::zeros(),
+            bend            : F3::zeros(),
+
+            onion           : 0.0,
+            onion_depth     : 1,
+
+            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
+            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+
+            noise           : 0.0,
+
+            visible         : true,
+        }
+    }
+}
+
+use SDFType::*;
+
+/// SDF
+#[derive(Debug, Clone)]
+pub struct SDF {
+    pub id                  : Uuid,
+
+    pub booleans            : Vec<Boolean>,
+
+    pub sdf_type            : SDFType,
+
+    pub material            : Material,
+
+    pub options             : SDFOptions,
+}
+
 impl SDF {
 
     pub fn new_sphere() -> Self {
@@ -115,440 +185,199 @@ impl SDF {
             id              : Uuid::new_v4(),
 
             booleans        : vec![],
-
             sdf_type        : SDFType::Sphere,
-
-            mirror          : B3::falsed(),
-
-            bbox            : F3::new_x(-1.0),
-
-            position        : F3::zeros(),
-            rotation        : F3::zeros(),
-            scale           : 1.0,
-
-            size            : F3::new(1.0, 1.0, 1.0),
-            radius          : 1.0,
-            normal          : F3::zeros(),
-            offset          : 0.0,
-
-            rounding        : 0.0,
-
             material        : Material::new(),
-            shade           : None,
-            ray_modifier    : None,
-
-            modifier        : None,
-
-            twist           : F3::zeros(),
-            bend            : F3::zeros(),
-
-            onion           : 0.0,
-            onion_depth     : 1,
-
-            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
-            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
-
-            noise           : 0.0,
-
-            visible         : true,
+            options         : SDFOptions::new(),
         }
     }
 
     pub fn new_sphere_radius(radius: F) -> Self {
+        let mut options = SDFOptions::new();
+        options.radius = radius;
+
         Self {
             id              : Uuid::new_v4(),
 
             booleans        : vec![],
-
             sdf_type        : SDFType::Sphere,
-
-            mirror          : B3::falsed(),
-
-            bbox            : F3::new_x(-1.0),
-
-            position        : F3::zeros(),
-            rotation        : F3::zeros(),
-            scale           : 1.0,
-
-            size            : F3::new(1.0, 1.0, 1.0),
-            radius,
-            normal          : F3::zeros(),
-            offset          : 0.0,
-
-            rounding        : 0.0,
-
             material        : Material::new(),
-            shade           : None,
-            ray_modifier    : None,
-
-            modifier        : None,
-
-            twist           : F3::zeros(),
-            bend            : F3::zeros(),
-
-            onion           : 0.0,
-            onion_depth     : 1,
-
-            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
-            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
-
-            noise           : 0.0,
-
-            visible         : true,
+            options
         }
     }
 
     pub fn new_plane() -> Self {
+        let mut options = SDFOptions::new();
+        options.normal = F3::new(0.0, 1.0, 0.0);
+
         Self {
             id              : Uuid::new_v4(),
 
             booleans        : vec![],
-
             sdf_type        : SDFType::Plane,
-
-            mirror          : B3::falsed(),
-
-            bbox            : F3::new_x(-1.0),
-
-            position        : F3::zeros(),
-            rotation        : F3::zeros(),
-            scale           : 1.0,
-
-            size            : F3::new(1.0, 1.0, 1.0),
-            radius          : 1.0,
-            normal          : F3::new(0.0, 1.0, 0.0),
-            offset          : 0.0,
-
-            rounding        : 0.0,
-
             material        : Material::new(),
-            shade           : None,
-            ray_modifier    : None,
-
-            modifier        : None,
-
-            twist           : F3::zeros(),
-            bend            : F3::zeros(),
-
-            onion           : 0.0,
-            onion_depth     : 1,
-
-            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
-            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
-
-            noise           : 0.0,
-
-            visible         : true,
+            options
         }
     }
 
     pub fn new_plane_normal(normal: F3, offset: F) -> Self {
+        let mut options = SDFOptions::new();
+        options.normal = normal;
+        options.offset = offset;
+
         Self {
             id              : Uuid::new_v4(),
 
             booleans        : vec![],
-
             sdf_type        : SDFType::Plane,
-
-            mirror          : B3::falsed(),
-
-            bbox            : F3::new_x(-1.0),
-
-            position        : F3::zeros(),
-            rotation        : F3::zeros(),
-            scale           : 1.0,
-
-            size            : F3::new(1.0, 1.0, 1.0),
-            radius          : 1.0,
-            normal,
-            offset,
-
-            rounding        : 0.0,
-
             material        : Material::new(),
-            shade           : None,
-            ray_modifier    : None,
-
-            modifier        : None,
-
-            twist           : F3::zeros(),
-            bend            : F3::zeros(),
-
-            onion           : 0.0,
-            onion_depth     : 1,
-
-            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
-            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
-
-            noise           : 0.0,
-
-            visible         : true,
+            options
         }
     }
 
     pub fn new_box() -> Self {
+        let options = SDFOptions::new();
+
         Self {
             id              : Uuid::new_v4(),
 
             booleans        : vec![],
-
             sdf_type        : SDFType::Box,
-
-            mirror          : B3::falsed(),
-
-            bbox            : F3::new_x(-1.0),
-
-            position        : F3::zeros(),
-            rotation        : F3::zeros(),
-            scale           : 1.0,
-
-            size            : F3::new(1.0, 1.0, 1.0),
-            radius          : 1.0,
-            normal          : F3::new(0.0, 1.0, 0.0),
-            offset          : 0.0,
-
-            rounding        : 0.0,
-
             material        : Material::new(),
-            shade           : None,
-            ray_modifier    : None,
-
-            modifier        : None,
-
-            twist           : F3::zeros(),
-            bend            : F3::zeros(),
-
-            onion           : 0.0,
-            onion_depth     : 1,
-
-            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
-            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
-
-            noise           : 0.0,
-
-            visible         : true,
+            options
         }
     }
 
     pub fn new_box_size(size: F3) -> Self {
+        let mut options = SDFOptions::new();
+        options.size = size;
+
         Self {
             id              : Uuid::new_v4(),
 
             booleans        : vec![],
-
             sdf_type        : SDFType::Box,
-
-            mirror          : B3::falsed(),
-
-            bbox            : F3::new_x(-1.0),
-
-            position        : F3::zeros(),
-            rotation        : F3::zeros(),
-            scale           : 1.0,
-
-            size,
-            radius          : 1.0,
-            normal          : F3::new(0.0, 1.0, 0.0),
-            offset          : 0.0,
-
-            rounding        : 0.0,
-
             material        : Material::new(),
-            shade           : None,
-            ray_modifier    : None,
-
-            modifier        : None,
-
-            twist           : F3::zeros(),
-            bend            : F3::zeros(),
-
-            onion           : 0.0,
-            onion_depth     : 1,
-
-            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
-            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
-
-            noise           : 0.0,
-
-            visible         : true,
+            options
         }
     }
 
-    // h = offset
-    // r1, r2 = normal.xy
     pub fn new_capped_cone() -> Self {
+        let mut options = SDFOptions::new();
+        options.upper_radius = 0.0;
+        options.lower_radius = 1.0;
+        options.height = 1.0;
+
         Self {
             id              : Uuid::new_v4(),
 
             booleans        : vec![],
-
             sdf_type        : SDFType::CappedCone,
-
-            mirror          : B3::falsed(),
-
-            bbox            : F3::new_x(-1.0),
-
-            position        : F3::zeros(),
-            rotation        : F3::zeros(),
-            scale           : 1.0,
-
-            size            : F3::new(1.0, 1.0, 1.0),
-            radius          : 1.0,
-            normal          : F3::new(1.0, 0.0, 0.0),
-            offset          : 1.0,
-
-            rounding        : 0.0,
-
             material        : Material::new(),
-            shade           : None,
-            ray_modifier    : None,
-
-            modifier        : None,
-
-            twist           : F3::zeros(),
-            bend            : F3::zeros(),
-
-            onion           : 0.0,
-            onion_depth     : 1,
-
-            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
-            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
-
-            noise           : 0.0,
-
-            visible         : true,
+            options
         }
     }
 
     pub fn new_capped_cone_h_r1_r2(h: F, r1: F, r2: F) -> Self {
+        let mut options = SDFOptions::new();
+        options.upper_radius = r1;
+        options.lower_radius = r2;
+        options.height = h;
+
         Self {
             id              : Uuid::new_v4(),
 
             booleans        : vec![],
-
             sdf_type        : SDFType::CappedCone,
-
-            mirror          : B3::falsed(),
-
-            bbox            : F3::new_x(-1.0),
-
-            position        : F3::zeros(),
-            rotation        : F3::zeros(),
-            scale           : 1.0,
-
-            size            : F3::new(1.0, 1.0, 1.0),
-            radius          : 1.0,
-            normal          : F3::new(r1, r2, 0.0),
-            offset          : h,
-
-            rounding        : 0.0,
-
             material        : Material::new(),
-            shade           : None,
-            ray_modifier    : None,
-
-            modifier        : None,
-
-            twist           : F3::zeros(),
-            bend            : F3::zeros(),
-
-            onion           : 0.0,
-            onion_depth     : 1,
-
-            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
-            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
-
-            noise           : 0.0,
-
-            visible         : true,
+            options
         }
     }
 
     pub fn new_ellipsoid() -> Self {
+        let mut options = SDFOptions::new();
+        options.size = F3::new(1.0, 0.5, 0.5);
+
         Self {
             id              : Uuid::new_v4(),
 
             booleans        : vec![],
-
             sdf_type        : SDFType::Ellipsoid,
-
-            mirror          : B3::falsed(),
-
-            bbox            : F3::new_x(-1.0),
-
-            position        : F3::zeros(),
-            rotation        : F3::zeros(),
-            scale           : 1.0,
-
-            size            : F3::new(1.0, 0.5, 0.5),
-            radius          : 1.0,
-            normal          : F3::new(0.0, 1.0, 0.0),
-            offset          : 0.0,
-
-            rounding        : 0.0,
-
             material        : Material::new(),
-            shade           : None,
-            ray_modifier    : None,
-
-            modifier        : None,
-
-            twist           : F3::zeros(),
-            bend            : F3::zeros(),
-
-            onion           : 0.0,
-            onion_depth     : 1,
-
-            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
-            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
-
-            noise           : 0.0,
-
-            visible         : true,
+            options
         }
     }
 
     pub fn new_ellipsoid_size(size: F3) -> Self {
+        let mut options = SDFOptions::new();
+        options.size = size;
+
         Self {
             id              : Uuid::new_v4(),
 
             booleans        : vec![],
-
             sdf_type        : SDFType::Ellipsoid,
-
-            mirror          : B3::falsed(),
-
-            bbox            : F3::new_x(-1.0),
-
-            position        : F3::zeros(),
-            rotation        : F3::zeros(),
-            scale           : 1.0,
-
-            size,
-            radius          : 1.0,
-            normal          : F3::new(0.0, 1.0, 0.0),
-            offset          : 0.0,
-
-            rounding        : 0.0,
-
             material        : Material::new(),
-            shade           : None,
-            ray_modifier    : None,
+            options
+        }
+    }
 
-            modifier        : None,
+    pub fn new_torus() -> Self {
+        let mut options = SDFOptions::new();
+        options.radius = 0.7;
+        options.ring_radius = 0.3;
 
-            twist           : F3::zeros(),
-            bend            : F3::zeros(),
+        Self {
+            id              : Uuid::new_v4(),
 
-            onion           : 0.0,
-            onion_depth     : 1,
+            booleans        : vec![],
+            sdf_type        : SDFType::Torus,
+            material        : Material::new(),
+            options
+        }
+    }
 
-            max             : F3::new(f64::MAX, f64::MAX, f64::MAX),
-            min             : F3::new(f64::MIN, f64::MIN, f64::MIN),
+    pub fn new_torus_r1r2(r1: F, r2: F) -> Self {
+        let mut options = SDFOptions::new();
+        options.radius = r1;
+        options.ring_radius = r2;
 
-            noise           : 0.0,
+        Self {
+            id              : Uuid::new_v4(),
 
-            visible         : true,
+            booleans        : vec![],
+            sdf_type        : SDFType::Torus,
+            material        : Material::new(),
+            options
+        }
+    }
+
+    pub fn new_cylinder() -> Self {
+        let mut options = SDFOptions::new();
+        options.height = 1.0;
+        options.radius = 0.5;
+
+        Self {
+            id              : Uuid::new_v4(),
+
+            booleans        : vec![],
+            sdf_type        : SDFType::Cylinder,
+            material        : Material::new(),
+            options
+        }
+    }
+
+    pub fn new_cylinder_p1p2r(h: F, r: F) -> Self {
+        let mut options = SDFOptions::new();
+        options.height = h;
+        options.radius = r;
+
+        Self {
+            id              : Uuid::new_v4(),
+
+            booleans        : vec![],
+            sdf_type        : SDFType::Cylinder,
+            material        : Material::new(),
+            options
         }
     }
 
@@ -559,7 +388,7 @@ impl SDF {
 
         // Twist
 
-        if self.twist.x != 0.0 {
+        if self.options.twist.x != 0.0 {
             #[inline(always)]
             fn op_twist_x(p: F3, k: F) -> F3 {
                 let cx = f64::cos(k * p.x);
@@ -578,10 +407,10 @@ impl SDF {
                 let qz = m31 * p.x + m32 * p.y + m33 * p.z;
                 F3::new(qx, qy, qz)
             }
-            p = op_twist_x(p, self.twist.x);
+            p = op_twist_x(p, self.options.twist.x);
         }
 
-        if self.twist.y != 0.0 {
+        if self.options.twist.y != 0.0 {
             #[inline(always)]
             fn op_twist(p: F3, k: F) -> F3 {
                 let cy = f64::cos(k * p.y);
@@ -595,10 +424,10 @@ impl SDF {
                 let qy = p.y;
                 F3::new(qx, qy, qz)
             }
-            p = op_twist(p, self.twist.y);
+            p = op_twist(p, self.options.twist.y);
         }
 
-        if self.twist.z != 0.0 {
+        if self.options.twist.z != 0.0 {
             #[inline(always)]
             fn op_twist_z(p: F3, k: F) -> F3 {
                 let cz = f64::cos(k * p.z);
@@ -617,12 +446,12 @@ impl SDF {
                 let qz = m31 * p.x + m32 * p.y + m33 * p.z;
                 F3::new(qx, qy, qz)
             }
-            p = op_twist_z(p, self.twist.z);
+            p = op_twist_z(p, self.options.twist.z);
         }
 
         // Bend
 
-        if self.bend.x != 0.0 {
+        if self.options.bend.x != 0.0 {
             #[inline(always)]
             fn op_bend_x(p: F3, k: F) -> F3 {
                 let cx = f64::cos(k * p.x);
@@ -636,10 +465,10 @@ impl SDF {
                 let qz = p.z;
                 F3::new(qx, qy, qz)
             }
-            p = op_bend_x(p, self.bend.x);
+            p = op_bend_x(p, self.options.bend.x);
         }
 
-        if self.bend.y != 0.0 {
+        if self.options.bend.y != 0.0 {
             #[inline(always)]
             fn op_bend_y(p: F3, k: F) -> F3 {
                 let cx = f64::cos(k * p.x);
@@ -658,10 +487,10 @@ impl SDF {
                 let qz = m31 * p.x + m32 * p.y + m33 * p.z;
                 F3::new(qx, qy, qz)
             }
-            p = op_bend_y(p, self.bend.y);
+            p = op_bend_y(p, self.options.bend.y);
         }
 
-        if self.bend.z != 0.0 {
+        if self.options.bend.z != 0.0 {
             #[inline(always)]
             fn op_bend_z(p: F3, k: F) -> F3 {
                 let cx = f64::cos(k * p.x);
@@ -675,29 +504,29 @@ impl SDF {
                 let qz = p.z;
                 F3::new(qx, qy, qz)
             }
-            p = op_bend_z(p, self.bend.z);
+            p = op_bend_z(p, self.options.bend.z);
         }
 
         // Mirror
 
-        if self.mirror.x {
+        if self.options.mirror.x {
             p.x = p.x.abs();
         }
-        if self.mirror.y {
+        if self.options.mirror.y {
             p.y = p.y.abs();
         }
-        if self.mirror.z {
+        if self.options.mirror.z {
             p.z = p.z.abs();
         }
 
-        p = p - self.position;
-        p = p.div_f(&self.scale);
+        p = p - self.options.position;
+        p = p.div_f(&self.options.scale);
 
-        if let Some(modifier) = self.modifier {
+        if let Some(modifier) = self.options.modifier {
             p = modifier.generate(p);
         }
 
-        if let Some(ray_modifier_ptr) = &self.ray_modifier {
+        if let Some(ray_modifier_ptr) = &self.options.ray_modifier {
 
             // Get a pointer to the shade function if available.
             let f = move |position: F3| -> Result<F3, _> {
@@ -711,20 +540,20 @@ impl SDF {
 
         let mut dist = match self.sdf_type {
             Sphere => {
-                p.length() - self.radius
+                p.length() - self.options.radius
             },
             Plane => {
-                p.dot(&self.normal) + self.offset
+                p.dot(&self.options.normal) + self.options.offset
             },
             Box => {
-                let q = p.abs() - self.size + F3::new_x(self.rounding);
-                q.max_f(&0.0).length() + q.x.max(q.y.max(q.z)).min(0.0) - self.rounding
+                let q = p.abs() - self.options.size + F3::new_x(self.options.rounding);
+                q.max_f(&0.0).length() + q.x.max(q.y.max(q.z)).min(0.0) - self.options.rounding
             },
             CappedCone => {
 
-                let h = (self.offset - self.rounding).max(0.0);
-                let r1 = (self.normal.x - self.rounding).max(0.0);
-                let r2 = (self.normal.y - self.rounding).max(0.0);
+                let h = (self.options.height - self.options.rounding).max(0.0);
+                let r1 = (self.options.lower_radius - self.options.rounding).max(0.0);
+                let r2 = (self.options.upper_radius - self.options.rounding).max(0.0);
 
                 let q = F2::new( F2::new(p.x, p.z).length(), p.y );
                 let k1 = F2::new(r2, h);
@@ -733,21 +562,29 @@ impl SDF {
                 let cb = q - k1 + k2.mult_f( &((k1 - q).dot(&k2)/k2.dot(&k2) ).clamp(0.0, 1.0) );
                 let s = if cb.x < 0.0 && ca.y < 0.0 { -1.0 } else { 1.0 };
 
-                s * ca.dot(&ca).min(cb.dot(&cb)).sqrt() - self.rounding
+                s * ca.dot(&ca).min(cb.dot(&cb)).sqrt() - self.options.rounding
             },
             Ellipsoid => {
-
-                let k0 = (p / self.size).length();
-                let k1 = (p / (self.size * self.size)).length();
+                let k0 = (p / self.options.size).length();
+                let k1 = (p / (self.options.size * self.options.size)).length();
                 k0 * (k0 - 1.0) / k1
+            },
+            Torus => {
+                let q = F2::new(F2::new(p.x, p.y).length() - self.options.radius, p.z);
+                q.length() - self.options.ring_radius
+            },
+            Cylinder => {
+                let d = F2::new(F2::new(p.x, p.z).length(), p.y).abs() - F2::new(self.options.radius - self.options.rounding, self.options.height);
+
+                (min(max(d.x, d.y), 0.0) + d.max_f(&0.0).length()) - self.options.rounding
             }
         };
 
         // Onion
 
-        if self.onion != 0.0 {
-            for _i in 0..self.onion_depth {
-                dist = dist.abs() - self.onion;
+        if self.options.onion != 0.0 {
+            for _i in 0..self.options.onion_depth {
+                dist = dist.abs() - self.options.onion;
             }
         }
 
@@ -820,9 +657,9 @@ impl SDF {
         }*/
 
         // Max
-        dist = dist.max(orig_p.x - self.max.x);
-        dist = dist.max(orig_p.y - self.max.y);
-        dist = dist.max(orig_p.z - self.max.z);
+        dist = dist.max(orig_p.x - self.options.max.x);
+        dist = dist.max(orig_p.y - self.options.max.y);
+        dist = dist.max(orig_p.z - self.options.max.z);
 
         // Min
         // dist = dist.min(orig_p.x - self.min.x);
@@ -972,7 +809,7 @@ impl SDF {
             }
         }
 
-        (dist * self.scale, material)
+        (dist * self.options.scale, material)
     }
 
     #[inline(always)]
@@ -993,14 +830,14 @@ impl SDF {
     /// Create an AABB for the SDF.
     pub fn create_aabb(&self) -> Option<AABB> {
 
-        let size = self.bbox;
+        let size = self.options.bbox;
 
         if size.x < 0.0 {
             None
         } else {
             Some(AABB {
-                min : F3::new(self.position.x - size.x, self.position.y - size.y, self.position.z - size.z),
-                max : F3::new(self.position.x + size.x, self.position.y + size.y, self.position.z + size.z),
+                min : F3::new(self.options.position.x - size.x, self.options.position.y - size.y, self.options.position.z - size.z),
+                max : F3::new(self.options.position.x + size.x, self.options.position.y + size.y, self.options.position.z + size.z),
             })
         }
     }
@@ -1022,163 +859,167 @@ impl SDF {
     }
 
     pub fn get_bbox(&mut self) -> F3 {
-        self.bbox
+        self.options.bbox
     }
 
     pub fn set_bbox(&mut self, new_val: F3) {
-        self.bbox = new_val;
+        self.options.bbox = new_val;
     }
 
     pub fn get_position(&mut self) -> F3 {
-        self.position
+        self.options.position
     }
 
     pub fn set_position(&mut self, new_val: F3) {
-        self.position = new_val;
+        self.options.position = new_val;
     }
 
     pub fn get_rotation(&mut self) -> F3 {
-        self.rotation
+        self.options.rotation
     }
 
     pub fn set_rotation(&mut self, new_val: F3) {
-        self.rotation = new_val;
+        self.options.rotation = new_val;
     }
 
     pub fn get_scale(&mut self) -> F {
-        self.scale
+        self.options.scale
     }
 
     pub fn set_scale(&mut self, new_val: F) {
-        self.scale = new_val;
+        self.options.scale = new_val;
     }
 
     pub fn get_normal(&mut self) -> F3 {
-        self.normal
+        self.options.normal
     }
 
     pub fn set_normal(&mut self, new_val: F3) {
-        self.normal = new_val;
+        self.options.normal = new_val;
     }
 
     pub fn get_mirror(&mut self) -> B3 {
-        self.mirror
+        self.options.mirror
     }
 
     pub fn set_mirror(&mut self, new_val: B3) {
-        self.mirror = new_val;
+        self.options.mirror = new_val;
     }
 
     pub fn get_twist(&mut self) -> F3 {
-        self.twist
+        self.options.twist
     }
 
     pub fn set_twist(&mut self, new_val: F3) {
-        self.twist = new_val;
+        self.options.twist = new_val;
     }
 
     pub fn get_bend(&mut self) -> F3 {
-        self.bend
+        self.options.bend
     }
 
     pub fn set_bend(&mut self, new_val: F3) {
-        self.bend = new_val;
+        self.options.bend = new_val;
     }
 
     pub fn get_onion(&mut self) -> F {
-        self.onion
+        self.options.onion
     }
 
     pub fn set_onion(&mut self, new_val: F) {
-        self.onion = new_val;
+        self.options.onion = new_val;
     }
 
     pub fn get_onion_layers(&mut self) -> I {
-        self.onion_depth
+        self.options.onion_depth
     }
 
     pub fn set_onion_layers(&mut self, new_val: I) {
-        self.onion_depth = new_val;
+        self.options.onion_depth = new_val;
     }
 
     pub fn get_max(&mut self) -> F3 {
-        self.max
+        self.options.max
     }
 
     pub fn set_max(&mut self, new_val: F3) {
-        self.max = new_val;
+        self.options.max = new_val;
     }
 
     pub fn get_min(&mut self) -> F3 {
-        self.min
+        self.options.min
     }
 
     pub fn set_min(&mut self, new_val: F3) {
-        self.min = new_val;
+        self.options.min = new_val;
     }
 
     pub fn get_size(&mut self) -> F3 {
-        self.size
+        self.options.size
     }
 
     pub fn set_size(&mut self, new_val: F3) {
-        self.size = new_val;
+        self.options.size = new_val;
+    }
+
+    pub fn get_height(&mut self) -> F {
+        self.options.height
+    }
+
+    pub fn set_height(&mut self, new_val: F) {
+        self.options.height = new_val;
     }
 
     pub fn get_offset(&mut self) -> F {
-        self.offset
+        self.options.offset
     }
 
     pub fn set_offset(&mut self, new_val: F) {
-        self.offset = new_val;
+        self.options.offset = new_val;
     }
 
-    pub fn get_r1(&mut self) -> F {
-        self.normal.x
+    pub fn get_upper_radius(&mut self) -> F {
+        self.options.upper_radius
     }
 
-    pub fn set_r1(&mut self, new_val: F) {
-        self.normal.x = new_val;
+    pub fn set_upper_radius(&mut self, new_val: F) {
+        self.options.upper_radius = new_val;
     }
 
-    pub fn get_r2(&mut self) -> F {
-        self.normal.y
+    pub fn get_lower_radius(&mut self) -> F {
+        self.options.lower_radius
     }
 
-    pub fn set_r2(&mut self, new_val: F) {
-        self.normal.y = new_val;
+    pub fn set_lower_radius(&mut self, new_val: F) {
+        self.options.lower_radius = new_val;
+    }
+
+    pub fn get_ring_radius(&mut self) -> F {
+        self.options.ring_radius
+    }
+
+    pub fn set_ring_radius(&mut self, new_val: F) {
+        self.options.ring_radius = new_val;
     }
 
     pub fn get_radius(&mut self) -> F {
-        self.radius
+        self.options.radius
     }
 
     pub fn set_radius(&mut self, new_val: F) {
-        self.radius = new_val;
+        self.options.radius = new_val;
     }
 
     pub fn get_rounding(&mut self) -> F {
-        self.rounding
+        self.options.rounding
     }
 
     pub fn set_rounding(&mut self, new_val: F) {
-        self.rounding = new_val;
-    }
-
-    pub fn get_shade(&mut self) -> FnPtr {
-        if let Some(shade) = &self.shade {
-            shade.clone()
-        } else {
-            FnPtr::new("empty").ok().unwrap()
-        }
-    }
-
-    pub fn set_shade(&mut self, new_val: FnPtr) {
-        self.shade = Some(new_val)
+        self.options.rounding = new_val;
     }
 
     pub fn get_ray_modifier(&mut self) -> FnPtr {
-        if let Some(ray_modifier) = &self.ray_modifier {
+        if let Some(ray_modifier) = &self.options.ray_modifier {
             ray_modifier.clone()
         } else {
             FnPtr::new("empty").ok().unwrap()
@@ -1186,11 +1027,11 @@ impl SDF {
     }
 
     pub fn set_ray_modifier(&mut self, new_val: FnPtr) {
-        self.ray_modifier = Some(new_val)
+        self.options.ray_modifier = Some(new_val)
     }
 
     pub fn get_modifier(&mut self) -> RayModifier {
-        if let Some(m) = self.modifier {
+        if let Some(m) = self.options.modifier {
             m
         } else {
             RayModifier::new("x".into(), "*".into(), "sin".into(), "y".into())
@@ -1198,23 +1039,23 @@ impl SDF {
     }
 
     pub fn set_modifier(&mut self, new_val: RayModifier) {
-        self.modifier = Some(new_val);
+        self.options.modifier = Some(new_val);
     }
 
     pub fn get_noise(&mut self) -> F {
-        self.noise
+        self.options.noise
     }
 
     pub fn set_noise(&mut self, new_val: F) {
-        self.noise = new_val;
+        self.options.noise = new_val;
     }
 
     pub fn get_visible(&mut self) -> bool {
-        self.visible
+        self.options.visible
     }
 
     pub fn set_visible(&mut self, new_val: bool) {
-        self.visible = new_val;
+        self.options.visible = new_val;
     }
 
     /// Register to the engine
@@ -1232,7 +1073,10 @@ impl SDF {
             .register_fn("CappedCone", SDF::new_capped_cone_h_r1_r2)
             .register_fn("Ellipsoid", SDF::new_ellipsoid)
             .register_fn("Ellipsoid", SDF::new_ellipsoid_size)
-
+            .register_fn("Torus", SDF::new_torus)
+            .register_fn("Torus", SDF::new_torus_r1r2)
+            .register_fn("Cylinder", SDF::new_cylinder)
+            .register_fn("Cylinder", SDF::new_cylinder_p1p2r)
             .register_fn("copy", SDF::copy)
 
             .register_get_set("material", SDF::get_material, SDF::set_material)
@@ -1257,13 +1101,13 @@ impl SDF {
 
             .register_get_set("size", SDF::get_size, SDF::set_size)
             .register_get_set("radius", SDF::get_radius, SDF::set_radius)
+            .register_get_set("ring_radius", SDF::get_ring_radius, SDF::set_ring_radius)
             .register_get_set("offset", SDF::get_offset, SDF::set_offset)
-            .register_get_set("height", SDF::get_offset, SDF::set_offset)
-            .register_get_set("r1", SDF::get_r1, SDF::set_r1)
-            .register_get_set("r2", SDF::get_r2, SDF::set_r2)
+            .register_get_set("height", SDF::get_height, SDF::set_height)
+            .register_get_set("upper_radius", SDF::get_upper_radius, SDF::set_upper_radius)
+            .register_get_set("lower_radius", SDF::get_lower_radius, SDF::set_lower_radius)
             .register_get_set("rounding", SDF::get_rounding, SDF::set_rounding)
             .register_get_set("ray_modifier", SDF::get_ray_modifier, SDF::set_ray_modifier)
-            .register_get_set("shade", SDF::get_shade, SDF::set_shade)
             .register_get_set("modifier", SDF::get_modifier, SDF::set_modifier)
 
             .register_get_set("noise", SDF::get_noise, SDF::set_noise)
@@ -1284,7 +1128,7 @@ impl SDF {
             a.booleans.push(AdditionGroove(b.sdf.clone(), b.ra, b.rb));
             let mut c = a.clone();
             c.id = Uuid::new_v4();
-            a.visible = false;
+            a.options.visible = false;
             c
         });
 
@@ -1302,7 +1146,7 @@ impl SDF {
             a.booleans.push(SubtractionGroove(b.sdf.clone(), b.ra, b.rb));
             let mut c = a.clone();
             c.id = Uuid::new_v4();
-            a.visible = false;
+            a.options.visible = false;
             c
         });
 
@@ -1320,7 +1164,7 @@ impl SDF {
             a.booleans.push(SMin(b, k));
             let mut c = a.clone();
             c.id = Uuid::new_v4();
-            a.visible = false;
+            a.options.visible = false;
             c
         });
 

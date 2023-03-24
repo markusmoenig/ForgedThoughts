@@ -36,7 +36,9 @@ plane.material.procedural = |hit| {
 //let prim = Sphere();
 //let prim = Box();
 //let prim = Cone();
-let prim = Ellipsoid();
+//let prim = Ellipsoid();
+//let prim = Torus();
+let prim = Cylinder();
 
 prim.material.rgb = F3(1.0, 0.186, 0.0);
 prim.material.roughness = 0.3;

@@ -37,7 +37,7 @@ impl Scene {
                     for s in sdf.booleans {
                         used_up.push(s.other_id());
                     }
-                    if sdf.visible == false {
+                    if sdf.options.visible == false {
                         used_up.push(sdf.id);
                     }
                 }

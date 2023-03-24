@@ -42,6 +42,7 @@ interior.scale = 0.96;
 
 let fluid = interior.copy();
 fluid.scale -= 0.0002;
+fluid.bbox = F3(0.6);
 fluid.material.rgb = F3("722F37").to_linear();
 fluid.material.transmission = 1.0;
 fluid.material.roughness = 0.5;

@@ -148,6 +148,10 @@ helmet += Groove(stripe, 0.01, 0.02);
     <td> <img src="examples/primitives/cone.png"  alt="Cone" width = 400px height = 300px ></td>
     <td> <img src="examples/primitives/ellipsoid.png"  alt="Ellipsoid" width = 400px height = 300px ></td>
   </tr>
+   <tr>
+    <td> <img src="examples/primitives/torus.png"  alt="Torus" width = 400px height = 300px ></td>
+    <td> <img src="examples/primitives/cylinder.png"  alt="Cylinder" width = 400px height = 300px ></td>
+  </tr>
 </table>
 
 ## Current Booleans
