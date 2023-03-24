@@ -75,11 +75,15 @@ fn main() {
 
                 for i in 0..ctx.settings.renderer.iterations {
 
-                    if is_path_tracer {
-                        println!("Rendering iteration {}", i + 1);
-                    }
+                    let start = get_time();
 
                     ft.render(&mut ctx, &mut buffer);
+
+                    let t = get_time() - start;
+
+                    if is_path_tracer {
+                        println!("Rendered iteration {} in {}ms", i + 1, t);
+                    }
 
                     let out = buffer.to_u8_vec();
 
@@ -110,4 +114,11 @@ fn main() {
     if let Some(err) = rc.err() {
         println!("{}", err);
     }
+}
+
+fn get_time() -> u128 {
+    let stop = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("Time went backwards");
+        stop.as_millis()
 }

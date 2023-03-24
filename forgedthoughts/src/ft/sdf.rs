@@ -75,6 +75,8 @@ pub struct SDF {
 
     pub mirror              : B3,
 
+    pub bbox                : F3,
+
     pub position            : F3,
     pub rotation            : F3,
     pub scale               : F,
@@ -118,6 +120,8 @@ impl SDF {
 
             mirror          : B3::falsed(),
 
+            bbox            : F3::new_x(-1.0),
+
             position        : F3::zeros(),
             rotation        : F3::zeros(),
             scale           : 1.0,
@@ -159,6 +163,8 @@ impl SDF {
             sdf_type        : SDFType::Sphere,
 
             mirror          : B3::falsed(),
+
+            bbox            : F3::new_x(-1.0),
 
             position        : F3::zeros(),
             rotation        : F3::zeros(),
@@ -202,6 +208,8 @@ impl SDF {
 
             mirror          : B3::falsed(),
 
+            bbox            : F3::new_x(-1.0),
+
             position        : F3::zeros(),
             rotation        : F3::zeros(),
             scale           : 1.0,
@@ -243,6 +251,8 @@ impl SDF {
             sdf_type        : SDFType::Plane,
 
             mirror          : B3::falsed(),
+
+            bbox            : F3::new_x(-1.0),
 
             position        : F3::zeros(),
             rotation        : F3::zeros(),
@@ -286,6 +296,8 @@ impl SDF {
 
             mirror          : B3::falsed(),
 
+            bbox            : F3::new_x(-1.0),
+
             position        : F3::zeros(),
             rotation        : F3::zeros(),
             scale           : 1.0,
@@ -327,6 +339,8 @@ impl SDF {
             sdf_type        : SDFType::Box,
 
             mirror          : B3::falsed(),
+
+            bbox            : F3::new_x(-1.0),
 
             position        : F3::zeros(),
             rotation        : F3::zeros(),
@@ -372,6 +386,8 @@ impl SDF {
 
             mirror          : B3::falsed(),
 
+            bbox            : F3::new_x(-1.0),
+
             position        : F3::zeros(),
             rotation        : F3::zeros(),
             scale           : 1.0,
@@ -413,6 +429,8 @@ impl SDF {
             sdf_type        : SDFType::CappedCone,
 
             mirror          : B3::falsed(),
+
+            bbox            : F3::new_x(-1.0),
 
             position        : F3::zeros(),
             rotation        : F3::zeros(),
@@ -456,6 +474,8 @@ impl SDF {
 
             mirror          : B3::falsed(),
 
+            bbox            : F3::new_x(-1.0),
+
             position        : F3::zeros(),
             rotation        : F3::zeros(),
             scale           : 1.0,
@@ -497,6 +517,8 @@ impl SDF {
             sdf_type        : SDFType::Ellipsoid,
 
             mirror          : B3::falsed(),
+
+            bbox            : F3::new_x(-1.0),
 
             position        : F3::zeros(),
             rotation        : F3::zeros(),
@@ -969,13 +991,17 @@ impl SDF {
     }
 
     /// Create an AABB for the SDF.
-    pub fn create_aabb(&self) -> AABB {
+    pub fn create_aabb(&self) -> Option<AABB> {
 
-        let size = F3::new_x(0.7);
+        let size = self.bbox;
 
-        AABB {
-            min : F3::new(self.position.x - size.x, self.position.y - size.y, self.position.z - size.z),
-            max : F3::new(self.position.x + size.x, self.position.y + size.y, self.position.z + size.z),
+        if size.x < 0.0 {
+            None
+        } else {
+            Some(AABB {
+                min : F3::new(self.position.x - size.x, self.position.y - size.y, self.position.z - size.z),
+                max : F3::new(self.position.x + size.x, self.position.y + size.y, self.position.z + size.z),
+            })
         }
     }
 
@@ -993,6 +1019,14 @@ impl SDF {
 
     pub fn set_material(&mut self, new_val: Material) {
         self.material = new_val;
+    }
+
+    pub fn get_bbox(&mut self) -> F3 {
+        self.bbox
+    }
+
+    pub fn set_bbox(&mut self, new_val: F3) {
+        self.bbox = new_val;
     }
 
     pub fn get_position(&mut self) -> F3 {
@@ -1202,6 +1236,8 @@ impl SDF {
             .register_fn("copy", SDF::copy)
 
             .register_get_set("material", SDF::get_material, SDF::set_material)
+
+            .register_get_set("bbox", SDF::get_bbox, SDF::set_bbox)
 
             .register_get_set("position", SDF::get_position, SDF::set_position)
             .register_get_set("rotation", SDF::get_rotation, SDF::set_rotation)

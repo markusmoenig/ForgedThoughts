@@ -249,7 +249,6 @@ impl FT {
             stop.as_millis()
     }
 
-
     // Polygonize into an OBJ String
     pub fn polygonize(&self, ctx: &FTContext) -> String {
 

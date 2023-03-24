@@ -86,7 +86,7 @@ impl Scene {
         let mut hit = false;
 
         let mut material = Material::new();
-        let iso_value = 0.000000000000001;
+        let iso_value = 0.0001;
 
         // Analytical
         for a in &self.analytical {
@@ -107,13 +107,15 @@ impl Scene {
         // Raymarching loop
         if self.sdfs.is_empty() == false {
 
-            /*
             // Create AABB tests
             let mut hit_tests = vec![];
             for s in &self.sdfs {
-                let aabb = s.create_aabb();
-                hit_tests.push(self.ray_aabb(ray, &aabb));
-            }*/
+                if let Some(aabb) = s.create_aabb() {
+                    hit_tests.push(self.ray_aabb(ray, &aabb));
+                } else {
+                    hit_tests.push(true);
+                }
+            }
 
             for _i in 0..ctx.settings.steps {
 
@@ -125,9 +127,9 @@ impl Scene {
                 let mut sdf_index = None;
                 for (index, s) in self.sdfs.iter().enumerate() {
 
-                    // if hit_tests[index] == false {
-                    //     continue;
-                    // }
+                    if hit_tests[index] == false {
+                        continue;
+                    }
 
                     let rc = s.distance(ctx, p, iso_value);
 
