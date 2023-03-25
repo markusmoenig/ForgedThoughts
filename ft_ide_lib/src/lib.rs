@@ -13,8 +13,10 @@ pub mod prelude {
 
     pub use crate::ui::draw2d::*;
     pub use crate::ui::context::*;
-
     pub use crate::ui::rect::Rect;
+
+    pub use crate::ui::widgets::Widget;
+    pub use crate::ui::widgets::code_toolbar::CodeToolbar;
 
     pub use code_editor::WidgetKey;
 

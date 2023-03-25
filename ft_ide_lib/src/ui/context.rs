@@ -1,20 +1,20 @@
 use crate::prelude::*;
+use forgedthoughts::prelude::*;
+
 use fontdue::Font;
-use std::path::PathBuf;
+//use std::path::PathBuf;
 use rustc_hash::FxHashMap;
 
-#[derive(PartialEq, Clone, Debug)]
-pub enum Mode {
-    Select,
-    InsertShape,
-    ApplyMaterials,
-}
+use std::sync::mpsc::{Sender, Receiver};
+use std::sync::mpsc;
 
 #[derive(PartialEq, Clone, Debug)]
-pub enum Perspective {
-    Top,
-    Iso,
+pub enum RenderProgress {
+    Frame(u32, Vec<u8>, usize, usize),
+    Finished(),
 }
+
+use RenderProgress::*;
 
 #[derive(PartialEq, Clone, Debug)]
 pub enum Command {
@@ -33,9 +33,12 @@ pub struct Context {
     pub color_text          : [u8;4],
     pub color_text_disabled : [u8;4],
 
-    pub curr_mode           : Mode,
-    pub curr_perspective    : Perspective,
-    pub curr_shape          : usize,
+    // Current Frame
+
+    pub u8_buffer           : Vec<u8>,
+    pub u8_width            : usize,
+    pub u8_height           : usize,
+    pub u8_receiver         : Option<Receiver<RenderProgress>>,
 
     // Fonts
     pub fonts               : FxHashMap<String, Font>,
@@ -100,15 +103,15 @@ impl Context {
             width           : 0,
             height          : 0,
 
-            color_widget    : [83, 83, 83, 255],
+            color_widget    : [30, 30, 32, 255],
             color_selected  : [135, 135, 135, 255],
             color_text      : [244, 244, 244, 255],
             color_text_disabled : [100, 100, 100, 255],
 
-            curr_mode       : Mode::InsertShape,
-            curr_shape      : 0,
-
-            curr_perspective: Perspective::Iso,
+            u8_buffer               : vec![],
+            u8_width                : 0,
+            u8_height               : 0,
+            u8_receiver             : None,
 
             fonts,
             code_editor_font,
@@ -117,6 +120,56 @@ impl Context {
             icons,
 
             cmd             : None
+        }
+    }
+
+    // Start Render
+
+    pub fn start_render(&mut self, code: String) {
+        let (tx, rx): (Sender<RenderProgress>, Receiver<RenderProgress>) = mpsc::channel();
+
+        let _handle = std::thread::spawn( move || {
+
+            let ft = FT::new();
+            let rc = ft.compile_code(code, "main.ft".into());
+
+            if rc.is_ok() {
+                if let Some(mut ctx) = rc.ok() {
+
+                    let mut buffer = ColorBuffer::new(ctx.settings.width as usize, ctx.settings.width as usize);
+
+                    for i in 0..ctx.settings.renderer.iterations {
+                        ft.render(&mut ctx, &mut buffer);
+                        let b = buffer.to_u8_vec();
+                        tx.send(Frame(i as u32, b, ctx.settings.width as usize, ctx.settings.height as usize)).unwrap();
+                    }
+                    tx.send(Finished()).unwrap();
+                }
+            } else {
+                println!("{:?}", rc.err());
+            }
+        });
+
+        self.u8_receiver = Some(rx);
+    }
+
+    // Check if a renderer is finished
+    pub fn check_render_progress(&mut self) {
+        if let Some(receiver) = &self.u8_receiver {
+            let rc = receiver.try_recv();
+            if let Some(result) = rc.ok() {
+
+                match result {
+                    Frame(_frame_nr, buffer, width, height) => {
+                        self.u8_buffer = buffer;
+                        self.u8_width = width;
+                        self.u8_height = height;
+                    },
+                    Finished() => {
+                        self.u8_receiver = None;
+                    }
+                }
+            }
         }
     }
 }
