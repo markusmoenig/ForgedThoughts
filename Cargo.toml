@@ -3,4 +3,8 @@
 members = [
     "forgedthoughts",
     "ftc",
+    "ft_ide_lib",
+    "ft_ide"
 ]
+
+resolver = "2"
