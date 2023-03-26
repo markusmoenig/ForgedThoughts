@@ -101,7 +101,10 @@ fn main() -> Result<(), Error> {
     let mut pixels = {
         let window_size = window.inner_size();
         let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
-        Pixels::new(width as u32, height as u32, surface_texture)?
+        let scale = window.scale_factor() as u32;
+        width = (window_size.width / scale) as usize;
+        height = (window_size.height / scale) as usize;
+        Pixels::new(window_size.width, window_size.height, surface_texture)?
     };
 
     // Init the code editor
