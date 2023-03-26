@@ -30,16 +30,6 @@ fn main() -> Result<(), Error> {
 
     let mut clipboard = Clipboard::new();
 
-    let mut first_menu = Menu::new();
-    first_menu.add_native_item(MenuItem::About(
-        "Forged Thoughts".into(),
-        AboutMetadata {
-            version: Some("0.1.0".into()),
-            ..Default::default()
-        },
-    ));
-    first_menu.add_native_item(MenuItem::Quit);
-
     let mut file_menu = Menu::new();
     let open_menu_item = file_menu.add_item(
         MenuItemAttributes::new("Open")
@@ -58,6 +48,8 @@ fn main() -> Result<(), Error> {
         MenuItemAttributes::new("Save Image As...")
         .with_accelerators(&Accelerator::new(SysMods::Cmd, KeyCode::KeyI)),
     );
+    file_menu.add_native_item(MenuItem::Separator);
+    file_menu.add_native_item(MenuItem::Quit);
 
     let mut edit_menu = Menu::new();
     // edit_menu.add_native_item(MenuItem::Undo);
@@ -80,7 +72,6 @@ fn main() -> Result<(), Error> {
     );
 
     let mut menu_bar = Menu::new();
-    menu_bar.add_submenu("&App", true, first_menu);
     menu_bar.add_submenu("&File", true, file_menu);
     menu_bar.add_submenu("&Edit", true, edit_menu);
 
@@ -92,8 +83,8 @@ fn main() -> Result<(), Error> {
         WindowBuilder::new()
             .with_title("Forged Thoughts")
             .with_menu(menu_bar)
-            .with_inner_size(size)
-            .with_min_inner_size(size)
+            //.with_inner_size(size)
+            //.with_min_inner_size(size)
             .build(&event_loop)
             .unwrap()
     };
