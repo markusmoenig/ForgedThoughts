@@ -701,7 +701,7 @@
             <objects>
                 <viewController id="XfG-lQ-9wD" customClass="GameViewController" customModule="Forged_Thoughts" customModuleProvider="target" sceneMemberID="viewController">
                     <view key="view" id="m2S-Jp-Qdl" customClass="RMTKView" customModule="Forged_Thoughts" customModuleProvider="target">
-                        <rect key="frame" x="0.0" y="0.0" width="1248" height="700"/>
+                        <rect key="frame" x="0.0" y="0.0" width="1068" height="700"/>
                         <autoresizingMask key="autoresizingMask"/>
                     </view>
                 </viewController>

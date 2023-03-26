@@ -38,6 +38,8 @@ impl Widget for CodeToolbar {
         if self.buffer.len() != self.rect.width * self.rect.height * 4 {
             self.buffer = vec![0;self.rect.width * self.rect.height * 4];
         }
+
+        self.dirty = true;
     }
 
     fn draw(&mut self, pixels: &mut [u8], context: &mut Context) {

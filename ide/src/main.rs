@@ -104,7 +104,7 @@ fn main() -> Result<(), Error> {
         let scale = window.scale_factor() as u32;
         width = (window_size.width / scale) as usize;
         height = (window_size.height / scale) as usize;
-        Pixels::new(window_size.width, window_size.height, surface_texture)?
+        Pixels::new(window_size.width / scale, window_size.height / scale, surface_texture)?
     };
 
     // Init the code editor
