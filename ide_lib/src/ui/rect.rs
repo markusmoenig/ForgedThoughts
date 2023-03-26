@@ -47,4 +47,12 @@ impl Rect {
     pub fn to_tuple(&self) -> (usize, usize, usize, usize) {
         (self.x as usize, self.y as usize, self.width as usize, self.height as usize)
     }
+
+    pub fn to_sized_tuple(&self) -> (usize, usize, usize, usize) {
+        (0, 0, self.width as usize, self.height as usize)
+    }
+
+    pub fn shrink(&self, by: usize) -> Rect {
+        Rect::new(self.x + by, self.y + by, self.width - 2 * by, self.height - 2 * by)
+    }
 }

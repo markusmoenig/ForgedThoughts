@@ -1,5 +1,5 @@
 [package]
-name = "ft_ide"
+name = "ide"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,4 +8,4 @@ env_logger = "0.10"
 log = "0.4"
 pixels = "0.12.0"
 tao = "0.18.3"
-ft_ide_lib = { path = "../ft_ide_lib" }
+ide_lib = { path = "../ide_lib" }

@@ -1,6 +1,14 @@
 use crate::prelude::*;
 
 pub mod code_toolbar;
+pub mod text_button;
+
+#[derive(PartialEq, Clone, Debug)]
+pub enum WidgetCmd {
+    BuildStarted,
+    BuildFinished,
+    BuildStatus(String),
+}
 
 #[allow(unused)]
 pub trait Widget : Sync + Send {
@@ -26,5 +34,8 @@ pub trait Widget : Sync + Send {
 
     fn touch_up(&mut self, _x: f32, _y: f32, context: &mut Context) -> bool {
         false
+    }
+
+    fn process_cmd(&mut self, cmd: WidgetCmd, context: &mut Context) {
     }
 }

@@ -1,5 +1,5 @@
 [package]
-name = "ft_ide_lib"
+name = "ide_lib"
 version = "0.1.0"
 edition = "2021"
 
@@ -12,3 +12,5 @@ fontdue = "0.7.2"
 rustc-hash = "1.1.0"
 png = "0.17.5"
 forgedthoughts = { version = "0.1.5", path = "../forgedthoughts" }
+rfd = "0.11.3"
+futures = "0.3"

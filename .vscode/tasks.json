@@ -23,7 +23,7 @@
             "run",
             "--release",
             "--bin",
-            "ft_ide",
+            "ide",
         ],
         "group": {
             "kind": "build",

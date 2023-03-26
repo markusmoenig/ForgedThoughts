@@ -15,8 +15,9 @@ pub mod prelude {
     pub use crate::ui::context::*;
     pub use crate::ui::rect::Rect;
 
-    pub use crate::ui::widgets::Widget;
+    pub use crate::ui::widgets::{WidgetCmd, Widget};
     pub use crate::ui::widgets::code_toolbar::CodeToolbar;
+    pub use crate::ui::widgets::text_button::TextButton;
 
     pub use code_editor::WidgetKey;
 
@@ -35,7 +36,7 @@ use crate::editor::Editor;
 use prelude::*;
 
 use std::os::raw::c_char;
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 
 use lazy_static::lazy_static;
 use std::sync::Mutex;
@@ -139,5 +140,45 @@ pub extern "C" fn rust_dropped_file(p: *const c_char) {
     let path_str = unsafe { CStr::from_ptr(p) };
     if let Some(path) = path_str.to_str().ok() {
         EDITOR.lock().unwrap().dropped_file(path.to_string());
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_open() {
+    EDITOR.lock().unwrap().open();
+}
+
+#[no_mangle]
+pub extern "C" fn rust_save() {
+    EDITOR.lock().unwrap().save();
+}
+
+#[no_mangle]
+pub extern "C" fn rust_save_as() {
+    EDITOR.lock().unwrap().save_as();
+}
+
+#[no_mangle]
+pub extern "C" fn rust_save_image_as() {
+    EDITOR.lock().unwrap().save_image_as();
+}
+
+#[no_mangle]
+pub extern "C" fn rust_cut() -> *mut c_char{
+    let text = EDITOR.lock().unwrap().cut();
+    CString::new(text).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn rust_copy() -> *mut c_char{
+    let text = EDITOR.lock().unwrap().copy();
+    CString::new(text).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub extern "C" fn rust_paste(p: *const c_char) {
+    let text_str = unsafe { CStr::from_ptr(p) };
+    if let Some(text) = text_str.to_str().ok() {
+        EDITOR.lock().unwrap().paste(text.to_string());
     }
 }
