@@ -14,3 +14,9 @@ png = "0.17.5"
 forgedthoughts = { version = "0.1.5", path = "../forgedthoughts" }
 rfd = "0.11.3"
 futures = "0.3"
+
+# Build for Xcode
+
+# [lib]
+# name = "rustapi"
+# crate-type = ["staticlib"]
