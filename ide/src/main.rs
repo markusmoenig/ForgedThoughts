@@ -25,6 +25,7 @@ fn main() -> Result<(), Error> {
     let mut height    : usize = 700;
 
     env_logger::init();
+    let event_loop = EventLoop::new();
 
     // Menus
 
@@ -77,7 +78,6 @@ fn main() -> Result<(), Error> {
 
     // Window
 
-    let event_loop = EventLoop::new();
     let window = {
         let size = LogicalSize::new(width as f64, height as f64);
         WindowBuilder::new()
