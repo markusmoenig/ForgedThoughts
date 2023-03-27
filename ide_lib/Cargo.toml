@@ -6,8 +6,8 @@ edition = "2021"
 [dependencies]
 lazy_static = "1.4.0"
 rust-embed = { version = "6.4.0", default-features = true, features = ["include-exclude"] }
-# code_editor = "0.3.4"
-code_editor = { path = "../../code_editor/code_editor" }
+code_editor = "0.3.5"
+#code_editor = { path = "../../code_editor/code_editor" }
 fontdue = "0.7.2"
 rustc-hash = "1.1.0"
 png = "0.17.5"

@@ -10,7 +10,7 @@ use tao::{
     dpi::LogicalSize,
     event::{Event, DeviceEvent, ElementState, KeyEvent, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
-    menu::{AboutMetadata, MenuBar as Menu, MenuItem, MenuItemAttributes, MenuType},
+    menu::{MenuBar as Menu, MenuItem, MenuItemAttributes, MenuType},
     clipboard::Clipboard,
     window::WindowBuilder,
     keyboard::Key,
@@ -21,8 +21,8 @@ use std::ffi::{CStr, CString};
 
 fn main() -> Result<(), Error> {
 
-    let mut width     : usize = 1068;
-    let mut height    : usize = 700;
+    let mut width     : usize = 900;
+    let mut height    : usize = 600;
 
     env_logger::init();
     let event_loop = EventLoop::new();
@@ -53,12 +53,16 @@ fn main() -> Result<(), Error> {
     file_menu.add_native_item(MenuItem::Quit);
 
     let mut edit_menu = Menu::new();
-    // edit_menu.add_native_item(MenuItem::Undo);
-    // edit_menu.add_native_item(MenuItem::Redo);
-    // edit_menu.add_native_item(MenuItem::Separator);
-    // edit_menu.add_native_item(MenuItem::Cut);
-    // edit_menu.add_native_item(MenuItem::Copy);
-    // edit_menu.add_native_item(MenuItem::Paste);
+
+    let undo_menu_item = edit_menu.add_item(
+        MenuItemAttributes::new("Undo")
+        .with_accelerators(&Accelerator::new(SysMods::Cmd, KeyCode::KeyZ)),
+    );
+    let redo_menu_item = edit_menu.add_item(
+        MenuItemAttributes::new("Redo")
+        .with_accelerators(&Accelerator::new(SysMods::CmdShift, KeyCode::KeyZ)),
+    );
+    edit_menu.add_native_item(MenuItem::Separator);
     let cut_menu_item = edit_menu.add_item(
         MenuItemAttributes::new("Cut")
         .with_accelerators(&Accelerator::new(SysMods::Cmd, KeyCode::KeyX)),
@@ -83,8 +87,8 @@ fn main() -> Result<(), Error> {
         WindowBuilder::new()
             .with_title("Forged Thoughts")
             .with_menu(menu_bar)
-            //.with_inner_size(size)
-            //.with_min_inner_size(size)
+            .with_inner_size(size)
+            .with_min_inner_size(size)
             .build(&event_loop)
             .unwrap()
     };
@@ -245,6 +249,24 @@ fn main() -> Result<(), Error> {
                 ..
             } if menu_id == save_image_as_menu_item.clone().id() => {
                 ide_lib::rust_save_image_as();
+            }
+
+            // Undo Menu Event
+            Event::MenuEvent {
+                menu_id,
+                origin: MenuType::MenuBar,
+                ..
+            } if menu_id == undo_menu_item.clone().id() => {
+                ide_lib::rust_undo();
+            }
+
+            // Redo Menu Event
+            Event::MenuEvent {
+                menu_id,
+                origin: MenuType::MenuBar,
+                ..
+            } if menu_id == redo_menu_item.clone().id() => {
+                ide_lib::rust_redo();
             }
 
             // Cut Menu Event

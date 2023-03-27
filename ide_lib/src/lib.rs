@@ -182,3 +182,13 @@ pub extern "C" fn rust_paste(p: *const c_char) {
         EDITOR.lock().unwrap().paste(text.to_string());
     }
 }
+
+#[no_mangle]
+pub extern "C" fn rust_undo() {
+    let text = EDITOR.lock().unwrap().undo();
+}
+
+#[no_mangle]
+pub extern "C" fn rust_redo() {
+    let text = EDITOR.lock().unwrap().redo();
+}

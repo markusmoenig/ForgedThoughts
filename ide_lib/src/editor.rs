@@ -298,6 +298,16 @@ let s = Sphere();".to_string());
         self.code_editor.paste(text);
     }
 
+    // Undo / Redo
+
+    pub fn undo(&mut self) {
+        self.code_editor.undo();
+    }
+
+    pub fn redo(&mut self) {
+        self.code_editor.redo();
+    }
+
     fn _get_time(&self) -> u128 {
         let stop = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
