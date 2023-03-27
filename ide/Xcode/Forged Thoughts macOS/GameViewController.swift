@@ -58,6 +58,14 @@ class GameViewController: NSViewController {
         mtkView.delegate = renderer        
     }
     
+    @IBAction func undo_menu(_ sender: NSMenuItem) {
+        rust_undo()
+    }
+    
+    @IBAction func redo_menu(_ sender: NSMenuItem) {
+        rust_redo()
+    }
+    
     @IBAction func cut_menu(_ sender: NSMenuItem) {
         if let text = rust_cut() {
             let str = String(cString: text)

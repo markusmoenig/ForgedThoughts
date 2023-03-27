@@ -48,6 +48,9 @@ bool rust_special_key_down(uint32_t key);
 
 void rust_open();
 
+void rust_undo();
+void rust_redo();
+
 const char * rust_cut();
 const char * rust_copy();
 const char * rust_paste(const char *);
