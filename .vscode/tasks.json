@@ -8,6 +8,8 @@
         "args": [
             "run",
             "--release",
+            "--bin",
+            "ftc",
         ],
         "group": {
             "kind": "build",

@@ -65,11 +65,14 @@ pub fn create_engine() -> Engine {
     Smooth::register(&mut engine);
     Groove::register(&mut engine);
 
-    // --Modifer
+    // -- Modifer
     RayModifier::register(&mut engine);
 
     // -- Math functions
     crate::ft::math::register_math(&mut engine);
+
+    // -- Texture relatex
+    crate::ft::Texture::register(&mut engine);
 
     //engine.on_print(|x| println!("{}", x));
 

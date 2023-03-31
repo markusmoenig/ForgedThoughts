@@ -234,6 +234,12 @@ impl FT {
                     total[2] /= aa_aa;
                     total[3] /= aa_aa;
 
+                    if let Some(texture) = &ctx.settings.texture {
+
+                        let uv = F2::new(xx - 0.5, (yy - 0.5) * h / w);
+                        total = texture.pixel(uv, &total);
+                    }
+
                     pixel.copy_from_slice(&total);
                 }
             });

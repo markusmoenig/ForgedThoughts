@@ -2,6 +2,7 @@ pub mod ft;
 pub mod script;
 pub mod renderer;
 pub mod marching_cubes;
+pub mod texture;
 
 pub type Color = [f64; 4];
 pub type F = f64;
@@ -39,6 +40,8 @@ pub mod prelude {
     pub use crate::renderer::bsdf::FTScene;
 
     pub use crate::script::FTContext;
+
+    pub use crate::texture::Texture;
 
     pub use crate::marching_cubes::MarchingCubes;
 
