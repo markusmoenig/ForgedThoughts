@@ -72,7 +72,7 @@ pub fn create_engine() -> Engine {
     crate::ft::math::register_math(&mut engine);
 
     // -- Texture relatex
-    crate::ft::Texture::register(&mut engine);
+    crate::ft::Shapes::register(&mut engine);
 
     //engine.on_print(|x| println!("{}", x));
 

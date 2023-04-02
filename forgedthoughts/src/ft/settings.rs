@@ -23,7 +23,7 @@ pub struct Settings {
     pub iso_value           : F,
 
     // Texture
-    pub texture             : Option<Texture>,
+    pub shapes              : Shapes,
 
     // Renderer
     pub renderer            : Renderer,
@@ -48,7 +48,7 @@ impl Settings {
             grid_step_size  : 0.01,
             iso_value       : 0.006,
 
-            texture         : None,
+            shapes          : Shapes::new(),
 
             renderer        : Renderer::new_phong()
         }
@@ -144,8 +144,8 @@ impl Settings {
         self.iso_value = new_val;
     }
 
-    pub fn set_texture(&mut self, new_val: Texture) {
-        self.texture = Some(new_val);
+    pub fn get_shapes(&mut self) -> Shapes {
+        self.shapes.clone()
     }
 
     pub fn get_renderer(&mut self) -> Renderer {
@@ -173,7 +173,7 @@ impl Settings {
             .register_get_set("grid_step_size", Settings::get_grid_step_size, Settings::set_grid_step_size)
             .register_get_set("iso_value", Settings::get_iso_value, Settings::set_iso_value)
 
-            .register_set("texture", Settings::set_texture)
+            .register_get("shapes", Settings::get_shapes)
 
             .register_get_set("max_distance", Settings::get_max_distance, Settings::set_max_distance)
             .register_get_set("renderer", Settings::get_renderer, Settings::set_renderer);

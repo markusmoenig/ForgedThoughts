@@ -174,6 +174,7 @@ pub struct SDF {
     pub sdf_type            : SDFType,
 
     pub material            : Material,
+    pub shapes              : Shapes,
 
     pub options             : SDFOptions,
 }
@@ -187,6 +188,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Sphere,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options         : SDFOptions::new(),
         }
     }
@@ -201,6 +203,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Sphere,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -215,6 +218,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Plane,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -230,6 +234,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Plane,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -243,6 +248,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Box,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -257,6 +263,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Box,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -273,6 +280,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::CappedCone,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -289,6 +297,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::CappedCone,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -303,6 +312,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Ellipsoid,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -317,6 +327,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Ellipsoid,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -332,6 +343,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Torus,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -347,6 +359,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Torus,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -362,6 +375,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Cylinder,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }
@@ -377,6 +391,7 @@ impl SDF {
             booleans        : vec![],
             sdf_type        : SDFType::Cylinder,
             material        : Material::new(),
+            shapes          : Shapes::new(),
             options
         }
     }

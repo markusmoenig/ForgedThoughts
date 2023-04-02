@@ -175,8 +175,8 @@ impl FT {
                     let x = (i % width) as F;
                     let y = (i / width) as F;
 
-                    let xx = x as F / w;
-                    let yy = y as F / h;
+                    let xx = x / w;
+                    let yy = y / h;
 
                     let coord = F2::new(xx, yy);
 
@@ -234,11 +234,19 @@ impl FT {
                     total[2] /= aa_aa;
                     total[3] /= aa_aa;
 
-                    if let Some(texture) = &ctx.settings.texture {
+                    // if let Some(texture) = &ctx.settings.texture {
+                    //     if let Some(buffer) = &texture.buffer {
+                    //         pub fn mix_color(a: &[F], b: &[F], v: F) -> [F; 4] {
+                    //             [   (1.0 - v) * a[0] + b[0] * v,
+                    //                 (1.0 - v) * a[1] + b[1] * v,
+                    //                 (1.0 - v) * a[2] + b[2] * v,
+                    //                 (1.0 - v) * a[3] + b[3] * v]
+                    //         }
 
-                        let uv = F2::new(xx - 0.5, (yy - 0.5) * h / w);
-                        total = texture.pixel(uv, &total);
-                    }
+                    //         let c = buffer.at(x as usize, y as usize);
+                    //         total = mix_color(&total, &c, c[3]);
+                    //     }
+                    // }
 
                     pixel.copy_from_slice(&total);
                 }
