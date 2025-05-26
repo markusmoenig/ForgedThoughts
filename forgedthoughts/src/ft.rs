@@ -1,3 +1,31 @@
+use crate::Embedded;
+pub struct FT {}
+
+impl Default for FT {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FT {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    pub fn compile_nodes(&self) {
+        for file in Embedded::iter() {
+            let name = file.as_ref().to_string();
+            if let Some(file) = Embedded::get(&name) {
+                if let Ok(str_slice) = std::str::from_utf8(&file.data) {
+                    let source = str_slice.to_string();
+                    println!("source {}", source);
+                }
+            }
+        }
+    }
+}
+
+/*
 pub use crate::prelude::*;
 use crate::script::create_engine;
 
@@ -320,3 +348,4 @@ impl FT {
     }
 
 }
+*/

@@ -1,3 +1,9 @@
+A complete rewrite of the old ForgedThoughts is currently in process with a radical new design.
+
+The website and current readme's are out of date and will be updated soon.
+
+---
+
 For documentation and examples please visit the [Website](https://forgedthoughts.com).
 
 You can render a Forged Thoughts script in your application like this:

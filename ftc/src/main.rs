@@ -8,7 +8,9 @@ use clap::{arg, Command};
 
 fn cli() -> Command {
     Command::new("ftc")
-        .about("Forged Thoughts compiler. Compiles and renders or polygonizes '.ft' language files.")
+        .about(
+            "Forged Thoughts compiler. Compiles and renders or polygonizes '.ft' language files.",
+        )
         .author("Markus Moenig")
         .version("0.1.3")
         .subcommand_required(false)
@@ -21,24 +23,22 @@ fn cli() -> Command {
                 .arg_required_else_help(true),
         )
         .subcommand(
-            Command::new("render")
-                .about("Renders the input to an PNG image. Used by default.")
-                //.arg(arg!(<FILE> "The input file."))
-                //.arg_required_else_help(false),
+            Command::new("render").about("Renders the input to an PNG image. Used by default."), //.arg(arg!(<FILE> "The input file."))
+                                                                                                 //.arg_required_else_help(false),
         )
         .subcommand(
-            Command::new("polygonize")
-                .about("Polygonize the input to an OBJ file.")
-                // .arg(arg!(<VALUE> "The remote to clone"))
-                // .arg_required_else_help(false),
+            Command::new("polygonize").about("Polygonize the input to an OBJ file."), // .arg(arg!(<VALUE> "The remote to clone"))
+                                                                                      // .arg_required_else_help(false),
         )
 }
 
 fn main() {
-    let matches = cli().get_matches();
+    // let matches = cli().get_matches();
 
-    let ft = FT::new();
+    let mut ft = FT::new();
+    ft.compile_nodes();
 
+    /*
     let mut file_name = "main.ft";
     let mut polygonize = false;
 
@@ -114,11 +114,12 @@ fn main() {
     if let Some(err) = rc.err() {
         println!("{}", err);
     }
+    */
 }
 
 fn get_time() -> u128 {
     let stop = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("Time went backwards");
-        stop.as_millis()
+    stop.as_millis()
 }

@@ -8,11 +8,12 @@ keywords = ["modeling", "rendering", "programming", "language", "3d"]
 repository = "https://github.com/markusmoenig/ForgedThoughts.git"
 
 [dependencies]
-rhai = { version = "1.12.0", default-features = true, features = ["sync", "internals"] }
-rayon = "1.5.3"
-colors-transform = "0.2.11"
-rust-pathtracer = { version = "0.2.3", path = "../../rust-pathtracer/rust-pathtracer" }
-rhai-rand = "0.1.5"
+vek = { version = "0.17.1", default-features = true }
+rayon = "1.10"
+rust-embed = { version = "8.5", default-features = true, features = [
+    "include-exclude",
+] }
+rustc-hash = "2.1.1"
 
 [dependencies.uuid]
 version = "1.1.2"
