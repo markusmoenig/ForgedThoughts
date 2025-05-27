@@ -1,8 +1,6 @@
-use std::fs::File;
-use std::io::BufWriter;
-use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use forgedthoughts::prelude::*;
+use forgedthoughts::{modelbuffer::Vec3, prelude::*};
 
 use clap::{arg, Command};
 
@@ -36,7 +34,49 @@ fn main() {
     // let matches = cli().get_matches();
 
     let mut ft = FT::new();
-    ft.compile_nodes();
+    match ft.compile_nodes() {
+        Ok(_) => {
+            println!("Nodes compiled successfully.");
+        }
+        Err(err) => {
+            println!("Error compiling '{}': ", err);
+            return;
+        }
+    }
+
+    let ft = Arc::new(ft);
+
+    let width = 600;
+    let height = 600;
+
+    let mut buffer = Arc::new(Mutex::new(ft.create_render_buffer(width, height)));
+    let rpu = rpu::RPU::new();
+
+    let wat = ft.nodes.get("Test").unwrap().wat.clone();
+    let mut path = std::path::PathBuf::new();
+    path.push("out.png");
+
+    let mut model_buffer = ModelBuffer::new([2.1, 2.1, 2.1], 64);
+    println!(
+        "Model buffer allocated, using {}.",
+        model_buffer.memory_usage()
+    );
+    model_buffer.add_sphere(Vec3::zero(), 1.0, 0);
+
+    // let rc = ft.render_2d(Arc::clone(&ft), &rpu, &wat, "main", &mut buffer, (60, 60));
+
+    let rc = ft.render_3d(
+        Arc::clone(&ft),
+        &rpu,
+        &wat,
+        "main",
+        &mut buffer,
+        (60, 60),
+        Arc::new(model_buffer),
+    );
+    println!("{:?}", rc);
+
+    buffer.lock().unwrap().save(path);
 
     /*
     let mut file_name = "main.ft";
@@ -115,11 +155,4 @@ fn main() {
         println!("{}", err);
     }
     */
-}
-
-fn get_time() -> u128 {
-    let stop = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("Time went backwards");
-    stop.as_millis()
 }

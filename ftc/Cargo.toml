@@ -11,3 +11,4 @@ repository = "https://github.com/markusmoenig/ForgedThoughts.git"
 forgedthoughts = { version = "0.1.5", path = "../forgedthoughts" }
 png = "0.17.5"
 clap = "4.1.5"
+rpu = { version = "0.3.0", path = "../../rpu/rpu" }

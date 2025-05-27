@@ -1,4 +1,12 @@
 
+# Rewrite in Progress
+
+A complete rewrite of the old ForgedThoughts is currently in process with a radical new design.
+
+The website and current readme's are out of date and will be updated soon.
+
+---
+
 Forged Thoughts is a modeling and rendering programming language. It is open source under the MIT license and currently in early development. The language utilizes 3D and 2D SDFs and is written in Rust and can be easily installed as a Rust subcommand.
 
 For documentation and examples see the [Website](https://forgedthoughts.com).
