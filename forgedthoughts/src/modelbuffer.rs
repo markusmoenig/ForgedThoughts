@@ -1,5 +1,6 @@
 pub use crate::prelude::*;
 use rayon::prelude::*;
+use std::sync::Arc;
 pub use vek::{Aabb, Vec3};
 
 pub struct ModelBuffer {
@@ -121,7 +122,6 @@ impl ModelBuffer {
         let size_z = self.size[2];
 
         let bounds = self.bounds;
-        let size = self.size;
         let data = &mut self.data;
 
         // Create mutable z-slices: each (size_x * size_y)
@@ -153,6 +153,54 @@ impl ModelBuffer {
                 }
             }
         });
+    }
+
+    pub fn model(&mut self, ft: Arc<FT>) {
+        let _start = ft.get_time();
+
+        let size_x = self.size[0];
+        let size_y = self.size[1];
+        let size_z = self.size[2];
+
+        let bounds = self.bounds;
+        let data = &mut self.data;
+
+        // Create mutable z-slices: each (size_x * size_y)
+        let z_slices: Vec<_> = data.chunks_mut(size_x * size_y).collect();
+
+        z_slices.into_par_iter().enumerate().for_each(|(z, slice)| {
+            let mut node_execution_ctx = ft.build_node_execution_ctx();
+
+            for y in 0..size_y {
+                for x in 0..size_x {
+                    let i = y * size_x + x;
+
+                    let world = {
+                        let size_f = Vec3::new(size_x as F, size_y as F, size_z as F);
+                        let voxel_size = Vec3::new(
+                            bounds[0] / size_f.x,
+                            bounds[1] / size_f.y,
+                            bounds[2] / size_f.z,
+                        );
+                        let offset = Vec3::new(x as F, y as F, z as F);
+                        offset * voxel_size
+                            - Vec3::new(bounds[0], bounds[1], bounds[2]) / F::from(2.0)
+                    };
+
+                    let d = ft
+                        .graph
+                        .get_model_distance(world, &ft.nodes, &mut node_execution_ctx);
+
+                    if d < slice[i].distance {
+                        slice[i].distance = d;
+                        slice[i].material = 0;
+                    }
+                }
+            }
+        });
+
+        let _stop = ft.get_time();
+        println!("Model execution time: {:?} ms.", _stop - _start);
     }
 
     /// Computes the normal at the given world position.

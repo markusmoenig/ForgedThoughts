@@ -1,0 +1,7 @@
+[pointA: Point3D]
+    position = vec3(0.0, 0.0, 0.0)
+
+[sphere: Sphere]
+    center = vec3(0.0, 0.0, 0.0)
+    #center = pointA.position
+    radius = 1.0

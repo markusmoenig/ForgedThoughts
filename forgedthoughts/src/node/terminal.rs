@@ -11,6 +11,7 @@ pub enum NodeTerminalRole {
 }
 
 impl NodeTerminalRole {
+    /// Returns the RPU / GLSL type name for the role.
     pub fn type_name(&self) -> &'static str {
         match self {
             NodeTerminalRole::Vec1(_) => "float",
@@ -20,6 +21,29 @@ impl NodeTerminalRole {
         }
     }
 
+    /// Converts this role into another, using swizzle rules and zero-padding.
+    pub fn coerce_to(&self, target_len: usize) -> NodeTerminalRole {
+        let v = self.to_vec4(); // Convert to full Vec4
+        match target_len {
+            1 => NodeTerminalRole::Vec1(v.x),
+            2 => NodeTerminalRole::Vec2(Vec2::new(v.x, v.y)),
+            3 => NodeTerminalRole::Vec3(Vec3::new(v.x, v.y, v.z)),
+            4 => NodeTerminalRole::Vec4(v),
+            _ => NodeTerminalRole::Vec1(0.0), // fallback
+        }
+    }
+
+    /// Converts any role into Vec4 (with 0-padding if necessary).
+    pub fn to_vec4(&self) -> Vec4<F> {
+        match self {
+            NodeTerminalRole::Vec1(x) => Vec4::new(*x, 0.0, 0.0, 0.0),
+            NodeTerminalRole::Vec2(v) => Vec4::new(v.x, v.y, 0.0, 0.0),
+            NodeTerminalRole::Vec3(v) => Vec4::new(v.x, v.y, v.z, 0.0),
+            NodeTerminalRole::Vec4(v) => *v,
+        }
+    }
+
+    /// Returns the expected number of components.
     pub fn len(&self) -> usize {
         match self {
             NodeTerminalRole::Vec1(_) => 1,

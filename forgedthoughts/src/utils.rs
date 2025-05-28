@@ -108,6 +108,16 @@ pub fn build_uv_args(pos: Vec2<F>, size: Vec2<F>) -> Vec<Value> {
     ];
 }
 
+#[cfg(feature = "double")]
+pub fn build_shape_args(pos: Vec3<f64>) -> Vec<Value> {
+    vec![Value::F64(pos.x), Value::F64(pos.y), Value::F64(pos.z)]
+}
+
+#[cfg(not(feature = "double"))]
+pub fn build_shape_args(pos: Vec3<f32>) -> Vec<Value> {
+    vec![Value::F32(pos.x), Value::F32(pos.y), Value::F32(pos.z)]
+}
+
 pub fn push_terminal_value(args: &mut Vec<Value>, input: &NodeTerminalRole) {
     match input {
         NodeTerminalRole::Vec1(v) => {

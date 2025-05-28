@@ -73,18 +73,33 @@ fn main() {
     let mut buffer = Arc::new(Mutex::new(ft.create_render_buffer(width, height)));
     let rpu = rpu::RPU::new();
 
-    // let wat = ft.nodes.get("Test").unwrap().wat.clone();
     let mut path = std::path::PathBuf::new();
     path.push("out.png");
 
-    let mut model_buffer = ModelBuffer::new([2.1, 2.1, 2.1], 64);
-    println!(
-        "Model buffer allocated, using {}.",
-        model_buffer.memory_usage()
-    );
-    model_buffer.add_sphere(Vec3::zero(), 1.0, 0);
+    let modeling = true;
 
-    let rc = ft.render_2d(Arc::clone(&ft), &rpu, &mut buffer, (60, 60));
+    if modeling {
+        let mut model_buffer = ModelBuffer::new([2.1, 2.1, 2.1], 64);
+        println!(
+            "Model buffer allocated, using {}.",
+            model_buffer.memory_usage()
+        );
+        // model_buffer.add_sphere(Vec3::zero(), 1.0, 0);
+
+        model_buffer.model(Arc::clone(&ft));
+
+        let rc = ft.render_3d(
+            Arc::clone(&ft),
+            &rpu,
+            &mut buffer,
+            (60, 60),
+            Arc::new(model_buffer),
+        );
+    } else {
+        let rc = ft.render_2d(Arc::clone(&ft), &rpu, &mut buffer, (60, 60));
+    }
+
+    buffer.lock().unwrap().save(path);
 
     // let rc = ft.render_3d(
     //     Arc::clone(&ft),
@@ -96,8 +111,6 @@ fn main() {
     //     Arc::new(model_buffer),
     // );
     // println!("{:?}", rc);
-
-    buffer.lock().unwrap().save(path);
 
     /*
     let mut file_name = "main.ft";

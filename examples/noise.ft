@@ -2,9 +2,9 @@
     scale = vec2(1.0, 1.0)
     octaves = 3.0
 
-[m: MulScalar]
-    input = noise.noise
-    value = 0.3
+#[m: MulScalar]
+#    input = noise.noise
+#    value = 0.3
 
 [output: Output]
-    input = m.output
+    input = noise.noise

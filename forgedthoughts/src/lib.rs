@@ -39,6 +39,7 @@ pub use crate::{
     modelbuffer::ModelBuffer,
     node::{
         graph::Graph, terminal::NodeTerminal, terminal::NodeTerminalRole, Node, NodeExecutionCtx,
+        NodeRole,
     },
     ray::{Hit, Ray},
     renderbuffer::RenderBuffer,
@@ -48,7 +49,7 @@ pub use crate::{
 pub mod prelude {
     pub use crate::FT;
     pub use crate::{Color, Voxel, F};
-    pub use crate::{Graph, Node, NodeExecutionCtx, NodeTerminal, NodeTerminalRole};
+    pub use crate::{Graph, Node, NodeExecutionCtx, NodeRole, NodeTerminal, NodeTerminalRole};
     pub use crate::{Hit, Ray};
     pub use crate::{ModelBuffer, RenderBuffer};
 }

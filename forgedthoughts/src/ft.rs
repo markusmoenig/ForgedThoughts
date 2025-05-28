@@ -46,7 +46,6 @@ impl FT {
         let main_path = path.join(file_name.clone());
 
         if let Ok(code) = std::fs::read_to_string(main_path) {
-            println!("code {}", code);
             self.graph.compile(code, &self.nodes)?;
             Ok(())
         } else {
@@ -176,8 +175,6 @@ impl FT {
         &self,
         ft: Arc<FT>,
         rpu: &RPU,
-        wat: &str,
-        func_name: &str,
         buffer: &mut Arc<Mutex<RenderBuffer>>,
         tile_size: (usize, usize),
         model: Arc<ModelBuffer>,
@@ -206,131 +203,54 @@ impl FT {
 
             let tiles_mutex = Arc::clone(&tiles_mutex);
             let buffer_mutex = Arc::clone(buffer);
-            let fname = func_name.to_string().clone();
-            let wat = wat.to_string().clone();
 
             let handle = thread::spawn(move || {
-                let mut store = Store::default();
-                let module_rc = Module::new(&store, wat);
-                match module_rc {
-                    Ok(module) => {
-                        let import_object = RPU::create_imports(&mut store, high_precision);
-                        if let Ok(instance) = Instance::new(&mut store, &module, &import_object) {
-                            if let Ok(func) = instance.exports.get_function(&fname) {
-                                let mut tile_buffer = RenderBuffer::new(tile_size.0, tile_size.1);
-                                loop {
-                                    // Lock mutex to access tiles
-                                    let mut tiles = tiles_mutex.lock().unwrap();
+                // let mut node_execution_ctx = ft.build_node_execution_ctx();
 
-                                    // Check if there are remaining tiles
-                                    if let Some(tile) = tiles.pop() {
-                                        // Release mutex before processing tile
-                                        drop(tiles);
-                                        // Process tile
-                                        for h in 0..tile.height {
-                                            for w in 0..tile.width {
-                                                let x = tile.x + w;
-                                                let y = tile.y + h;
+                let mut tile_buffer = RenderBuffer::new(tile_size.0, tile_size.1);
+                loop {
+                    // Lock mutex to access tiles
+                    let mut tiles = tiles_mutex.lock().unwrap();
 
-                                                if x >= width || y >= height {
-                                                    continue;
-                                                }
+                    // Check if there are remaining tiles
+                    if let Some(tile) = tiles.pop() {
+                        // Release mutex before processing tile
+                        drop(tiles);
+                        // Process tile
+                        for h in 0..tile.height {
+                            for w in 0..tile.width {
+                                let x = tile.x + w;
+                                let y = tile.y + h;
 
-                                                let p = ft.pixel_at_3d(
-                                                    x,
-                                                    height - y,
-                                                    Vec2::new(width as F, height as F),
-                                                    Arc::clone(&model),
-                                                );
-                                                tile_buffer.set(w, h, p);
-
-                                                /*
-                                                let args = if high_precision {
-                                                    vec![
-                                                        Value::F64(x as f64 / width as f64),
-                                                        Value::F64(
-                                                            (height as f64 - y as f64)
-                                                                / height as f64,
-                                                        ),
-                                                        Value::F64(width as f64),
-                                                        Value::F64(height as f64),
-                                                    ]
-                                                } else {
-                                                    vec![
-                                                        Value::F32(x as f32 / width as f32),
-                                                        Value::F32(
-                                                            (height as f32 - y as f32)
-                                                                / height as f32,
-                                                        ),
-                                                        Value::F32(width as f32),
-                                                        Value::F32(height as f32),
-                                                    ]
-                                                };
-
-                                                let mut fc: Color = [0.0, 0.0, 0.0, 0.0];
-                                                for i in 0..iterations {
-                                                    if let Ok(gl) =
-                                                        instance.exports.get_global("mem_ptr")
-                                                    {
-                                                        _ = gl.set(&mut store, Value::I32(32));
-                                                    }
-                                                    match func.call(&mut store, &args) {
-                                                        Ok(values) => {
-                                                            let rgba = if high_precision {
-                                                                [
-                                                                    values[0].f64().unwrap(),
-                                                                    values[1].f64().unwrap(),
-                                                                    values[2].f64().unwrap(),
-                                                                    values[3].f64().unwrap(),
-                                                                ]
-                                                            } else {
-                                                                [
-                                                                    values[0].f32().unwrap() as f64,
-                                                                    values[1].f32().unwrap() as f64,
-                                                                    values[2].f32().unwrap() as f64,
-                                                                    values[3].f32().unwrap() as f64,
-                                                                ]
-                                                            };
-                                                            let f = 1.0 / (i as F + 1.0);
-                                                            fc[0] = fc[0] * (1.0 - f)
-                                                                + rgba[0] as F * f;
-                                                            fc[1] = fc[1] * (1.0 - f)
-                                                                + rgba[1] as F * f;
-                                                            fc[2] = fc[2] * (1.0 - f)
-                                                                + rgba[2] as F * f;
-                                                            fc[3] = fc[3] * (1.0 - f)
-                                                                + rgba[3] as F * f;
-                                                        }
-                                                        Err(err) => println!("{}", err),
-                                                    }
-
-                                                    // Set the final color into the local buffer
-                                                    tile_buffer.set(w, h, fc);
-                                                }*/
-                                            }
-                                        }
-                                        // Save the tile buffer to the main buffer
-                                        buffer_mutex.lock().unwrap().copy_from(
-                                            tile.x,
-                                            tile.y,
-                                            &tile_buffer,
-                                        );
-
-                                        // Save thebuffer optionally to disk after each completed block.
-                                        if let Ok(buffer) = buffer_mutex.lock() {
-                                            if let Some(path) = &buffer.file_path {
-                                                buffer.save(path.clone());
-                                            }
-                                        }
-                                    } else {
-                                        // No remaining tiles, exit loop
-                                        break;
-                                    }
+                                if x >= width || y >= height {
+                                    continue;
                                 }
+
+                                let p = ft.pixel_at_3d(
+                                    x,
+                                    height - y,
+                                    Vec2::new(width as F, height as F),
+                                    Arc::clone(&model),
+                                );
+                                tile_buffer.set(w, h, p);
                             }
                         }
+                        // Save the tile buffer to the main buffer
+                        buffer_mutex
+                            .lock()
+                            .unwrap()
+                            .copy_from(tile.x, tile.y, &tile_buffer);
+
+                        // Save thebuffer optionally to disk after each completed block.
+                        if let Ok(buffer) = buffer_mutex.lock() {
+                            if let Some(path) = &buffer.file_path {
+                                buffer.save(path.clone());
+                            }
+                        }
+                    } else {
+                        // No remaining tiles, exit loop
+                        break;
                     }
-                    Err(err) => println!("{}", err),
                 }
             });
             handles.push(handle);
@@ -374,6 +294,10 @@ impl FT {
         let mut result = FxHashMap::default();
 
         for (name, node) in &self.nodes {
+            if node.wat.is_empty() {
+                continue;
+            }
+
             let module = Module::new(&store, &node.wat)
                 .unwrap_or_else(|e| panic!("Failed to compile '{}': {}", name, e));
 

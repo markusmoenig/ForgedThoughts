@@ -1,12 +1,15 @@
-use crate::{Color, Node, NodeExecutionCtx, NodeTerminalRole, F};
+use crate::{Color, Node, NodeExecutionCtx, NodeTerminal, NodeTerminalRole, Voxel, F};
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
-use vek::{Vec2, Vec4};
+use vek::{Vec2, Vec3, Vec4};
 use wasmer::Value;
+
+use super::NodeRole;
 
 #[derive(Debug, Clone)]
 pub struct ParsedNode {
     pub name: String,
+    pub role: NodeRole,
     pub node_type: String,
     pub params: FxHashMap<String, TerminalInput>,
     pub line_number: usize,
@@ -18,7 +21,7 @@ pub enum TerminalInput {
     Value(NodeTerminalRole),
     Reference {
         node_index: usize,
-        output_name: String,
+        terminal: NodeTerminal,
     },
 }
 
@@ -48,9 +51,152 @@ impl Graph {
     ) -> Result<(), String> {
         self.parsed_nodes = self.parse_node_graph(&source, nodes)?;
         self.sorted_nodes = self.sort_nodes()?;
-        println!("{:?}", self.parsed_nodes);
 
         Ok(())
+    }
+
+    /// Executes the graph.
+    pub fn get_model_distance(
+        &self,
+        pos: Vec3<f32>,
+        nodes: &FxHashMap<String, Node>,
+        node_execution_ctx: &mut NodeExecutionCtx,
+    ) -> F {
+        let mut node_outputs: Vec<Vec4<F>> = vec![Vec4::zero(); self.sorted_nodes.len()];
+
+        let mut min_dist = f32::MAX;
+        let mut hit_shape: Option<&ParsedNode> = None;
+
+        for (idx, parsed_node) in self.sorted_nodes.iter().enumerate() {
+            if parsed_node.role != NodeRole::Shape {
+                continue;
+            }
+
+            /*
+            let Some(node_def) = nodes.get(&parsed_node.node_type) else {
+                continue;
+            };
+
+            let mut args = crate::utils::build_shape_args(pos);
+
+            for input_def in &node_def.inputs {
+                let input = parsed_node.params.get(&input_def.name);
+
+                let value = match input {
+                    Some(TerminalInput::Value(v)) => v.clone(),
+                    Some(TerminalInput::Reference {
+                        node_index,
+                        terminal,
+                    }) => {
+                        let out = node_outputs.get(*node_index).copied().unwrap_or_default();
+                        let extracted = input_def.role.extract_from_vec4(out, &terminal.swizzle);
+                        extracted.coerce_to(input_def.role.len())
+                    }
+                    None => input_def.role.clone(),
+                };
+
+                crate::utils::push_terminal_value(&mut args, &value);
+            }
+
+            if let Some((_, instance)) = node_execution_ctx
+                .modules_instances
+                .get_mut(&parsed_node.node_type)
+            {
+                if let Ok(func) = instance.exports.get_function("main") {
+                    if let Ok(results) = func.call(&mut node_execution_ctx.store, &args) {
+                        let v4 = crate::utils::values_to_vec4(&results);
+                        if v4.x < min_dist {
+                            min_dist = v4.x;
+                            hit_shape = Some(parsed_node);
+                        }
+                    }
+                }
+            }
+            */
+
+            self.execute_node_rec(idx, &mut node_outputs, nodes, node_execution_ctx, pos);
+
+            let v4 = node_outputs[idx];
+            if v4.x < min_dist {
+                min_dist = v4.x;
+                hit_shape = Some(parsed_node);
+            }
+        }
+
+        min_dist
+    }
+
+    /// Recursively execute the node at the given index.
+    fn execute_node_rec(
+        &self,
+        idx: usize,
+        node_outputs: &mut [Vec4<F>],
+        nodes: &FxHashMap<String, Node>,
+        node_execution_ctx: &mut NodeExecutionCtx,
+        context: Vec3<F>, // could be UV or position depending on 2D vs 3D
+    ) {
+        // if node_outputs[idx].x.is_finite() && node_outputs[idx].y.is_finite() {
+        //     return; // already computed
+        // }
+
+        let parsed_node = &self.sorted_nodes[idx];
+        let Some(node_def) = nodes.get(&parsed_node.node_type) else {
+            return;
+        };
+
+        let mut args = if parsed_node.role == NodeRole::Shape {
+            crate::utils::build_shape_args(context)
+        } else {
+            crate::utils::build_uv_args(context.xy(), context.xy())
+        };
+
+        for input_def in &node_def.inputs {
+            let input = parsed_node.params.get(&input_def.name);
+
+            let value = match input {
+                Some(TerminalInput::Value(v)) => v.clone(),
+                Some(TerminalInput::Reference {
+                    node_index,
+                    terminal,
+                }) => {
+                    self.execute_node_rec(
+                        *node_index,
+                        node_outputs,
+                        nodes,
+                        node_execution_ctx,
+                        context,
+                    );
+                    let out = node_outputs[*node_index];
+                    let extracted = terminal.role.extract_from_vec4(out, &terminal.swizzle);
+                    extracted.coerce_to(input_def.role.len())
+                }
+                None => input_def.role.clone(),
+            };
+
+            crate::utils::push_terminal_value(&mut args, &value);
+        }
+
+        if let Some((_, instance)) = node_execution_ctx
+            .modules_instances
+            .get_mut(&parsed_node.node_type)
+        {
+            if let Ok(func) = instance.exports.get_function("main") {
+                if let Ok(results) = func.call(&mut node_execution_ctx.store, &args) {
+                    node_outputs[idx] = crate::utils::values_to_vec4(&results);
+                }
+            }
+        } else {
+            // If the node has no RPU code, take it from the default value.
+            for input_def in &node_def.inputs {
+                let input = parsed_node.params.get(&input_def.name);
+
+                let value = match input {
+                    Some(TerminalInput::Value(v)) => v.clone(),
+                    _ => input_def.role.clone(),
+                };
+                node_outputs[idx] = value.to_vec4();
+            }
+        }
     }
 
     /// Executes the graph.
@@ -83,24 +229,16 @@ impl Graph {
                 let value = match input {
                     Some(TerminalInput::Value(v)) => v.clone(),
                     Some(TerminalInput::Reference {
-                        node_index,
-                        output_name,
+                        node_index, // The source node index of the PARSED nodes
+                        terminal,   // The cloned output terminal of the source node
                     }) => {
-                        // let out_vec4 = node_outputs.get(*node_index).copied().unwrap_or_default();
-
-                        // // Get the actual output terminal from the referenced node
-                        // if let Some(output_terminal) =
-                        //     node_def.outputs.iter().find(|t| t.name == *output_name)
-                        // {
-                        //     // Extract the correct value from the vec4 using the referenced terminal's swizzle
-                        //     output_terminal
-                        //         .role
-                        //         .extract_from_vec4(out_vec4, &output_terminal.swizzle)
-                        // } else {
-                        //     NodeTerminalRole::Vec1(0.0) // fallback if output not found
-                        // }
                         let out = node_outputs.get(*node_index).copied().unwrap_or_default();
-                        input_def.role.extract_from_vec4(out, &input_def.swizzle)
+
+                        // println!("input {:?} output {:?}", input_def.role, terminal);
+
+                        let output_role = input_def.role.extract_from_vec4(out, &terminal.swizzle);
+                        // println!("=> {:?}", output_role.coerce_to(input_def.role.len()));
+                        output_role.coerce_to(input_def.role.len())
                     }
                     None => input_def.role.clone(),
                 };
@@ -122,44 +260,7 @@ impl Graph {
             }
         }
 
-        // node_outputs[last_executed].w = 1.0;
-        // println!("{:?}", node_outputs[last_executed]);
-        // return [uv.x, uv.y, 0.0, 1.0];
-        return node_outputs[last_executed].into_array();
-
-        let mut result: Color = [0.0, 0.0, 0.0, 0.0];
-
-        if let Some((_module, instance)) =
-            node_execution_ctx.modules_instances.get_mut("ValueNoise2D")
-        {
-            if let Ok(func) = instance.exports.get_function("main") {
-                #[cfg(feature = "double")]
-                let mut args = vec![
-                    Value::F64(x as f64 / screen_size.x as f64),
-                    Value::F64((screen_size.y as f64 - y as f64) / screen_size.y as f64),
-                    Value::F64(screen_size.x as f64),
-                    Value::F64(screen_size.y as f64),
-                ];
-
-                #[cfg(not(feature = "double"))]
-                let mut args = vec![
-                    Value::F32(x as f32 / screen_size.x),
-                    Value::F32((screen_size.y - y as f32) / screen_size.y),
-                    Value::F32(screen_size.x),
-                    Value::F32(screen_size.x),
-                ];
-
-                if let Some(node) = nodes.get("ValueNoise2D") {
-                    node.add_parameters(&mut args, FxHashMap::default());
-                }
-
-                if let Ok(values) = func.call(&mut node_execution_ctx.store, &args) {
-                    result = crate::utils::values_to_array4(&values);
-                }
-            }
-        }
-
-        result
+        node_outputs[last_executed].into_array()
     }
 
     /// Sort the parsed nodes based on dependencies.
@@ -185,10 +286,10 @@ impl Graph {
             .map(|(i, _)| i)
             .collect();
 
-        let mut sorted = Vec::with_capacity(self.parsed_nodes.len());
+        let mut sorted_indices = Vec::with_capacity(self.parsed_nodes.len());
 
         while let Some(i) = queue.pop_front() {
-            sorted.push(self.parsed_nodes[i].clone());
+            sorted_indices.push(i);
             for &dependent in &graph[i] {
                 in_degrees[dependent] -= 1;
                 if in_degrees[dependent] == 0 {
@@ -197,11 +298,36 @@ impl Graph {
             }
         }
 
-        if sorted.len() != self.parsed_nodes.len() {
+        if sorted_indices.len() != self.parsed_nodes.len() {
             return Err("Cycle detected in node graph".to_string());
         }
 
-        Ok(sorted)
+        // Create mapping from original index to sorted index
+        let mut index_map = FxHashMap::default();
+        for (sorted_idx, original_idx) in sorted_indices.iter().enumerate() {
+            index_map.insert(*original_idx, sorted_idx);
+        }
+
+        // Clone and remap references
+        let mut sorted_nodes = Vec::with_capacity(sorted_indices.len());
+        for &original_idx in &sorted_indices {
+            let mut node = self.parsed_nodes[original_idx].clone();
+            for input in node.params.values_mut() {
+                if let TerminalInput::Reference { node_index, .. } = input {
+                    if let Some(new_index) = index_map.get(node_index) {
+                        *node_index = *new_index;
+                    } else {
+                        return Err(format!(
+                            "Invalid reference to unknown node index {}",
+                            node_index
+                        ));
+                    }
+                }
+            }
+            sorted_nodes.push(node);
+        }
+
+        Ok(sorted_nodes)
     }
 
     /// Parses the graph and verifies node connections.
@@ -236,13 +362,16 @@ impl Graph {
                         ));
                     }
 
-                    current_node = Some(ParsedNode {
-                        name: name.trim().to_string(),
-                        node_type: node_type.to_string(),
-                        params: FxHashMap::default(),
-                        line_number: line_number + 1,
-                        is_output: node_type == "Output",
-                    });
+                    if let Some(node) = known_nodes.get(node_type) {
+                        current_node = Some(ParsedNode {
+                            name: name.trim().to_string(),
+                            role: node.role,
+                            node_type: node_type.to_string(),
+                            params: FxHashMap::default(),
+                            line_number: line_number + 1,
+                            is_output: node_type == "Output",
+                        });
+                    }
                 } else {
                     return Err(format!(
                         "Malformed node header at line {}: '{}'",
@@ -294,7 +423,15 @@ impl Graph {
 
                                     TerminalInput::Reference {
                                         node_index: index,
-                                        output_name: output_name.to_string(),
+                                        terminal: def_node
+                                            .outputs
+                                            .iter()
+                                            .find(|t| t.name == output_name)
+                                            .cloned()
+                                            .ok_or_else(|| format!(
+                                                "Internal error: output '{}' not found in node type '{}' after validation",
+                                                output_name, node.node_type
+                                            ))?,
                                     }
                                 } else {
                                     return Err(format!(

@@ -1,0 +1,17 @@
+Shape<Sphere>
+
+    Inputs:
+        center: vec3 = vec3(0.0, 0.0, 0.0)
+        radius: float = 1.0
+
+    Outputs:
+        shape: shape
+
+Source<RPU>
+float sdSphere(vec3 p, vec3 center, float radius) {
+    return length(p - center) - radius;
+}
+
+export float main(vec3 p, vec3 center, float radius) {
+    return sdSphere(p, center, radius);
+}

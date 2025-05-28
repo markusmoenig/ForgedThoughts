@@ -14,8 +14,16 @@ pub struct NodeExecutionCtx {
     pub modules_instances: FxHashMap<String, (Arc<Module>, Instance)>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub enum NodeRole {
+    Node,
+    Shape,
+}
+
 pub struct Node {
     pub name: String,
+
+    pub role: NodeRole,
 
     pub inputs: Vec<NodeTerminal>,
     pub outputs: Vec<NodeTerminal>,
@@ -36,6 +44,7 @@ impl Node {
     pub fn new() -> Self {
         Self {
             name: String::new(),
+            role: NodeRole::Node,
             inputs: vec![],
             outputs: vec![],
             output: Vec4::zero(),
@@ -48,11 +57,17 @@ impl Node {
         let mut scanner = Scanner::new(source.clone());
 
         let token = scanner.scan_token(false);
-        if token.kind != TokenType::Identifier && token.lexeme != "Node" {
+        if token.kind != TokenType::Identifier
+            && (token.lexeme != "Node" || token.lexeme != "Shape")
+        {
             return Err(format!(
-                "Expected 'Node' identifier at line {}.",
+                "Expected one of 'Node' or 'Shape' at line {}.",
                 token.line
             ));
+        }
+
+        if token.lexeme == "Shape" {
+            self.role = NodeRole::Shape;
         }
 
         let token = scanner.scan_token(false);
@@ -84,7 +99,7 @@ impl Node {
         let (inputs, outputs) = self.parse_terminals(&source);
         self.inputs = inputs;
         self.outputs = outputs;
-        println!("{:?}, outputs: {:?}", self.inputs, self.outputs);
+        // println!("{:?}, outputs: {:?}", self.inputs, self.outputs);
 
         // Get RPU source
 
@@ -97,8 +112,6 @@ impl Node {
                 }
                 Err(err) => return Err(format!("RPU: {}", err)),
             }
-        } else {
-            return Err("No 'Source<RPU> tag found.".into());
         }
 
         Ok(())
