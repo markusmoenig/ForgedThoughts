@@ -2,7 +2,7 @@ use rpu::prelude::*;
 use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use vek::{Vec2, Vec3, Vec4};
+use vek::Vec2;
 use wasmer::{Instance, Module, Store, Value};
 
 use crate::camera::Camera;
@@ -11,6 +11,7 @@ use crate::Embedded;
 
 pub struct FT {
     pub nodes: FxHashMap<String, Node>,
+    pub graph: Graph,
 }
 
 impl Default for FT {
@@ -23,6 +24,7 @@ impl FT {
     pub fn new() -> Self {
         Self {
             nodes: FxHashMap::default(),
+            graph: Graph::default(),
         }
     }
 
@@ -38,6 +40,18 @@ impl FT {
 
         #[cfg(not(feature = "double"))]
         return false;
+    }
+
+    pub fn compile(&mut self, path: std::path::PathBuf, file_name: String) -> Result<(), String> {
+        let main_path = path.join(file_name.clone());
+
+        if let Ok(code) = std::fs::read_to_string(main_path) {
+            println!("code {}", code);
+            self.graph.compile(code, &self.nodes)?;
+            Ok(())
+        } else {
+            Err(format!("Error reading file `{}`", file_name))
+        }
     }
 
     pub fn compile_nodes(&mut self) -> Result<(), String> {
@@ -68,18 +82,14 @@ impl FT {
         &self,
         ft: Arc<FT>,
         rpu: &RPU,
-        wat: &str,
-        func_name: &str,
         buffer: &mut Arc<Mutex<RenderBuffer>>,
         tile_size: (usize, usize),
     ) -> Result<Vec<Value>, String> {
-        let high_precision = ft.high_precision();
-
         let width = buffer.lock().unwrap().width;
         let height = buffer.lock().unwrap().height;
 
         let tiles = rpu.create_tiles(width, height, tile_size.0, tile_size.1);
-
+        let screen_size = Vec2::new(width as F, height as F);
         let tiles_mutex = Arc::new(Mutex::new(tiles));
 
         let num_cpus = num_cpus::get();
@@ -96,8 +106,7 @@ impl FT {
             let buffer_mutex = Arc::clone(buffer);
 
             let handle = thread::spawn(move || {
-                let mut store = Store::default();
-                let mut node_modules = ft.compile_and_instantiate_nodes(&mut store);
+                let mut node_execution_ctx = ft.build_node_execution_ctx();
 
                 let mut tile_buffer = RenderBuffer::new(tile_size.0, tile_size.1);
                 loop {
@@ -119,12 +128,12 @@ impl FT {
                                     continue;
                                 }
 
-                                let p = (*ft).pixel_at_2d(
+                                let p = ft.graph.execute(
                                     x,
                                     y,
-                                    Vec2::new(width as F, height as F),
-                                    &mut node_modules,
-                                    &mut store,
+                                    screen_size,
+                                    &ft.nodes,
+                                    &mut node_execution_ctx,
                                 );
                                 tile_buffer.set(w, h, p);
                             }
@@ -159,62 +168,6 @@ impl FT {
         println!("Shader execution time: {:?} ms.", _stop - _start);
 
         Ok(vec![])
-    }
-
-    fn pixel_at_2d(
-        &self,
-        x: usize,
-        y: usize,
-        screen_size: Vec2<F>,
-        modules: &mut FxHashMap<String, (Arc<Module>, Instance)>,
-        store: &mut Store,
-    ) -> Color {
-        let mut result: Color = [0.0, 0.0, 0.0, 0.0];
-
-        if let Some((module, instance)) = modules.get_mut("Test") {
-            if let Ok(func) = instance.exports.get_function("main") {
-                #[cfg(feature = "double")]
-                let args = vec![
-                    Value::F64(x as f64 / screen_size.x as f64),
-                    Value::F64((screen_size.y as f64 - y as f64) / screen_size.y as f64),
-                    Value::F64(screen_size.x as f64),
-                    Value::F64(screen_size.y as f64),
-                ];
-
-                #[cfg(not(feature = "double"))]
-                let args = vec![
-                    Value::F32(x as f32 / screen_size.x),
-                    Value::F32((screen_size.y - y as f32) / screen_size.y),
-                    Value::F32(screen_size.x),
-                    Value::F32(screen_size.x),
-                ];
-
-                if let Ok(values) = func.call(store, &args) {
-                    #[cfg(feature = "double")]
-                    let rgba = [
-                        values[0].f64().unwrap(),
-                        values[1].f64().unwrap(),
-                        values[2].f64().unwrap(),
-                        values[3].f64().unwrap(),
-                    ];
-
-                    #[cfg(not(feature = "double"))]
-                    let rgba = [
-                        values[0].f32().unwrap() as f64,
-                        values[1].f32().unwrap() as f64,
-                        values[2].f32().unwrap() as f64,
-                        values[3].f32().unwrap() as f64,
-                    ];
-
-                    result[0] = rgba[0] as F;
-                    result[1] = rgba[1] as F;
-                    result[2] = rgba[2] as F;
-                    result[3] = rgba[3] as F;
-                }
-            }
-        }
-
-        result
     }
 
     /// Render in 3D
@@ -416,10 +369,8 @@ impl FT {
     }
 
     /// Compile and instantiate all nodes
-    pub fn compile_and_instantiate_nodes(
-        &self,
-        store: &mut Store,
-    ) -> FxHashMap<String, (Arc<Module>, Instance)> {
+    pub fn build_node_execution_ctx(&self) -> NodeExecutionCtx {
+        let mut store = Store::default();
         let mut result = FxHashMap::default();
 
         for (name, node) in &self.nodes {
@@ -428,15 +379,18 @@ impl FT {
 
             let arc_module = Arc::new(module);
 
-            let import_object = RPU::create_imports(store, self.high_precision());
+            let import_object = RPU::create_imports(&mut store, self.high_precision());
 
-            let instance = Instance::new(store, &arc_module, &import_object)
+            let instance = Instance::new(&mut store, &arc_module, &import_object)
                 .unwrap_or_else(|e| panic!("Failed to instantiate '{}': {}", name, e));
 
             result.insert(name.clone(), (arc_module, instance));
         }
 
-        result
+        NodeExecutionCtx {
+            store,
+            modules_instances: result,
+        }
     }
 
     /// Get the current time

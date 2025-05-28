@@ -1,25 +1,17 @@
-use std::sync::{Arc, Mutex};
-
-use forgedthoughts::{modelbuffer::Vec3, prelude::*};
-
 use clap::{arg, Command};
+use forgedthoughts::{modelbuffer::Vec3, prelude::*};
+use std::sync::{Arc, Mutex};
 
 fn cli() -> Command {
     Command::new("ftc")
-        .about(
-            "Forged Thoughts compiler. Compiles and renders or polygonizes '.ft' language files.",
-        )
+        .about("Forged Thoughts compiler. Compiles, renders or polygonizes '.ft' node graph files.")
         .author("Markus Moenig")
         .version("0.1.3")
         .subcommand_required(false)
-        .arg_required_else_help(false)
+        .arg_required_else_help(true)
         .allow_external_subcommands(true)
-        .subcommand(
-            Command::new("input")
-                .about("The input '.ft' file. Set to 'main.ft' by default.")
-                .arg(arg!(<FILE> "The input file."))
-                .arg_required_else_help(true),
-        )
+        .arg(arg!(<FILE> "The input '.ft' file"))
+        .arg_required_else_help(true)
         .subcommand(
             Command::new("render").about("Renders the input to an PNG image. Used by default."), //.arg(arg!(<FILE> "The input file."))
                                                                                                  //.arg_required_else_help(false),
@@ -31,7 +23,26 @@ fn cli() -> Command {
 }
 
 fn main() {
-    // let matches = cli().get_matches();
+    let matches = cli().get_matches();
+
+    // let mut file_name = "main.ft";
+    // let mut polygonize = false;
+    let file_name = matches.get_one::<String>("FILE").unwrap();
+    // println!("{:?}", matches);
+
+    // #[allow(clippy::single_match)]
+    // match matches.subcommand() {
+    //     Some(("input", sub_matches)) => {
+    //         file_name = sub_matches.get_one::<String>("FILE").expect("required");
+    //     }
+    //     // Some(("polygonize", _sub_matches)) => {
+    //     //     //file_name = sub_matches.get_one::<String>("FILE").expect("required");
+    //     //     polygonize = true;
+    //     // }
+    //     _ => {}
+    // }
+
+    println!("{}", file_name);
 
     let mut ft = FT::new();
     match ft.compile_nodes() {
@@ -44,6 +55,16 @@ fn main() {
         }
     }
 
+    let rc = ft.compile(std::path::PathBuf::new(), file_name.into());
+    match rc {
+        Ok(_) => {
+            println!("Graph compiled successfully.");
+        }
+        Err(err) => {
+            println!("{}", err);
+        }
+    }
+
     let ft = Arc::new(ft);
 
     let width = 600;
@@ -52,7 +73,7 @@ fn main() {
     let mut buffer = Arc::new(Mutex::new(ft.create_render_buffer(width, height)));
     let rpu = rpu::RPU::new();
 
-    let wat = ft.nodes.get("Test").unwrap().wat.clone();
+    // let wat = ft.nodes.get("Test").unwrap().wat.clone();
     let mut path = std::path::PathBuf::new();
     path.push("out.png");
 
@@ -63,18 +84,18 @@ fn main() {
     );
     model_buffer.add_sphere(Vec3::zero(), 1.0, 0);
 
-    // let rc = ft.render_2d(Arc::clone(&ft), &rpu, &wat, "main", &mut buffer, (60, 60));
+    let rc = ft.render_2d(Arc::clone(&ft), &rpu, &mut buffer, (60, 60));
 
-    let rc = ft.render_3d(
-        Arc::clone(&ft),
-        &rpu,
-        &wat,
-        "main",
-        &mut buffer,
-        (60, 60),
-        Arc::new(model_buffer),
-    );
-    println!("{:?}", rc);
+    // let rc = ft.render_3d(
+    //     Arc::clone(&ft),
+    //     &rpu,
+    //     &wat,
+    //     "main",
+    //     &mut buffer,
+    //     (60, 60),
+    //     Arc::new(model_buffer),
+    // );
+    // println!("{:?}", rc);
 
     buffer.lock().unwrap().save(path);
 

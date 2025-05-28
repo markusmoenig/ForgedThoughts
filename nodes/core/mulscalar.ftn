@@ -1,0 +1,13 @@
+Node<MulScalar>
+
+    Inputs:
+        input: vec4 = vec4(1.0, 1.0, 1.0, 1.0)
+        value: float = 1.0
+
+    Outputs:
+        output: vec4
+
+Source<RPU>
+export vec4 main(vec2 uv, vec2 resolution, vec4 input, float value) {
+    return input * value;
+}

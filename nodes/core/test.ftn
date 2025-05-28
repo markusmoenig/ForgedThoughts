@@ -1,7 +1,0 @@
-Node<Test>
-
-    Outputs:
-        color: vec4
-
-Source<RPU>
-    return vec4(uv.x, uv.y, 0.0, 1.0);

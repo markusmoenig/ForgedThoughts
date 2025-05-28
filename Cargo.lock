@@ -786,6 +786,7 @@ dependencies = [
  "image",
  "num_cpus",
  "rayon",
+ "regex",
  "rpu",
  "rust-embed",
  "rustc-hash 2.1.1",

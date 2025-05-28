@@ -25,6 +25,7 @@ impl ModelBuffer {
             data: vec![
                 Voxel {
                     distance: F::MAX,
+                    density: 0.0,
                     material: 0
                 };
                 total_voxels

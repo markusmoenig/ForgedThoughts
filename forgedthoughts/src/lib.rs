@@ -6,6 +6,7 @@ pub mod node;
 pub mod ray;
 pub mod renderbuffer;
 pub mod scanner;
+pub mod utils;
 
 #[cfg(feature = "double")]
 pub type F = f64;
@@ -20,6 +21,7 @@ pub type Color = [F; 4];
 #[derive(Clone, Copy, Debug)]
 pub struct Voxel {
     pub distance: F,
+    pub density: F,
     pub material: u16,
 }
 
@@ -35,16 +37,18 @@ pub use crate::{
     ft::FT,
     marching_cubes::MarchingCubes,
     modelbuffer::ModelBuffer,
-    node::Node,
+    node::{
+        graph::Graph, terminal::NodeTerminal, terminal::NodeTerminalRole, Node, NodeExecutionCtx,
+    },
     ray::{Hit, Ray},
     renderbuffer::RenderBuffer,
     scanner::{Scanner, TokenType},
 };
 
 pub mod prelude {
-    pub use crate::Node;
     pub use crate::FT;
     pub use crate::{Color, Voxel, F};
+    pub use crate::{Graph, Node, NodeExecutionCtx, NodeTerminal, NodeTerminalRole};
     pub use crate::{Hit, Ray};
     pub use crate::{ModelBuffer, RenderBuffer};
 }
