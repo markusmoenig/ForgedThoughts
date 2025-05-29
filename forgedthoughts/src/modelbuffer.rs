@@ -61,28 +61,43 @@ impl ModelBuffer {
 
     #[inline]
     pub fn index_to_world(&self, x: usize, y: usize, z: usize) -> Vec3<F> {
-        let size = Vec3::new(self.size[0] as F, self.size[1] as F, self.size[2] as F);
+        let size_f = Vec3::new(self.size[0] as F, self.size[1] as F, self.size[2] as F);
         let offset = Vec3::new(x as F, y as F, z as F);
         let voxel_size = Vec3::new(
-            self.bounds[0] / size.x,
-            self.bounds[1] / size.y,
-            self.bounds[2] / size.z,
+            self.bounds[0] / size_f.x,
+            self.bounds[1] / size_f.y,
+            self.bounds[2] / size_f.z,
         );
-        offset * voxel_size
-            - (Vec3::new(self.bounds[0], self.bounds[1], self.bounds[2]) / F::from(2.0))
+
+        let pos = offset * voxel_size;
+
+        Vec3::new(
+            pos.x - self.bounds[0] / 2.0, // center X
+            pos.y,                        // bottom-align Y
+            pos.z - self.bounds[2] / 2.0, // center Z
+        )
     }
 
     #[inline]
     pub fn world_to_index(&self, pos: Vec3<F>) -> Option<Vec3<usize>> {
-        let half = Vec3::new(self.bounds[0], self.bounds[1], self.bounds[2]) / F::from(2.0);
-        let local = pos + half;
-        let scale = Vec3::new(self.size[0] as F, self.size[1] as F, self.size[2] as F)
-            / self.bounds.map(F::from);
-        let grid_pos = local * scale;
+        // Shift XZ to positive grid coordinates, Y is already bottom-aligned
+        let shifted = Vec3::new(
+            pos.x + self.bounds[0] / 2.0,
+            pos.y,
+            pos.z + self.bounds[2] / 2.0,
+        );
 
-        let x = grid_pos.x.floor() as isize;
-        let y = grid_pos.y.floor() as isize;
-        let z = grid_pos.z.floor() as isize;
+        let scale = Vec3::new(
+            self.size[0] as F / self.bounds[0],
+            self.size[1] as F / self.bounds[1],
+            self.size[2] as F / self.bounds[2],
+        );
+
+        let grid = shifted * scale;
+
+        let x = grid.x.floor() as isize;
+        let y = grid.y.floor() as isize;
+        let z = grid.z.floor() as isize;
 
         if x >= 0
             && y >= 0
@@ -97,64 +112,7 @@ impl ModelBuffer {
         }
     }
 
-    /// Add a sphere at the given position.
-    pub fn _add_sphere(&mut self, center: Vec3<F>, radius: F, material: u16) {
-        for z in 0..self.size[2] {
-            for y in 0..self.size[1] {
-                for x in 0..self.size[0] {
-                    let i = self.index(x, y, z);
-                    let world = self.index_to_world(x, y, z);
-
-                    let d = (world - center).magnitude() - radius;
-
-                    if d < self.data[i].distance {
-                        self.data[i].distance = d;
-                        self.data[i].material = material;
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn add_sphere(&mut self, center: Vec3<F>, radius: F, material: u16) {
-        let size_x = self.size[0];
-        let size_y = self.size[1];
-        let size_z = self.size[2];
-
-        let bounds = self.bounds;
-        let data = &mut self.data;
-
-        // Create mutable z-slices: each (size_x * size_y)
-        let z_slices: Vec<_> = data.chunks_mut(size_x * size_y).collect();
-
-        z_slices.into_par_iter().enumerate().for_each(|(z, slice)| {
-            for y in 0..size_y {
-                for x in 0..size_x {
-                    let i = y * size_x + x;
-
-                    let world = {
-                        let size_f = Vec3::new(size_x as F, size_y as F, size_z as F);
-                        let voxel_size = Vec3::new(
-                            bounds[0] / size_f.x,
-                            bounds[1] / size_f.y,
-                            bounds[2] / size_f.z,
-                        );
-                        let offset = Vec3::new(x as F, y as F, z as F);
-                        offset * voxel_size
-                            - Vec3::new(bounds[0], bounds[1], bounds[2]) / F::from(2.0)
-                    };
-
-                    let d = (world - center).magnitude() - radius;
-
-                    if d < slice[i].distance {
-                        slice[i].distance = d;
-                        slice[i].material = material;
-                    }
-                }
-            }
-        });
-    }
-
+    /// Model the graph into the buffer.
     pub fn model(&mut self, ft: Arc<FT>) {
         let _start = ft.get_time();
 
@@ -165,6 +123,15 @@ impl ModelBuffer {
         let bounds = self.bounds;
         let data = &mut self.data;
 
+        // pre-compute voxel size outside the loop
+        let size_f = Vec3::new(size_x as F, size_y as F, size_z as F);
+        let voxel_size = Vec3::new(
+            bounds[0] / size_f.x,
+            bounds[1] / size_f.y,
+            bounds[2] / size_f.z,
+        );
+        let half_xz = Vec3::new(bounds[0] / 2.0, 0.0, bounds[2] / 2.0);
+
         // Create mutable z-slices: each (size_x * size_y)
         let z_slices: Vec<_> = data.chunks_mut(size_x * size_y).collect();
 
@@ -173,17 +140,12 @@ impl ModelBuffer {
                 for x in 0..size_x {
                     let i = y * size_x + x;
 
-                    let world = {
-                        let size_f = Vec3::new(size_x as F, size_y as F, size_z as F);
-                        let voxel_size = Vec3::new(
-                            bounds[0] / size_f.x,
-                            bounds[1] / size_f.y,
-                            bounds[2] / size_f.z,
-                        );
-                        let offset = Vec3::new(x as F, y as F, z as F);
-                        offset * voxel_size
-                            - Vec3::new(bounds[0], bounds[1], bounds[2]) / F::from(2.0)
-                    };
+                    // *** bottom-aligned Y, centred XZ ***
+                    let world = Vec3::new(
+                        x as F * voxel_size.x - half_xz.x,
+                        y as F * voxel_size.y, // 0 … bounds.y
+                        z as F * voxel_size.z - half_xz.z,
+                    );
 
                     let (distance, material) = ft.graph.evaluate_shapes(world);
 
@@ -232,15 +194,9 @@ impl ModelBuffer {
 
     /// Returns the bbox of the buffer centered at the origin.
     pub fn bbox(&self) -> Aabb<F> {
-        let half = Vec3::new(
-            self.bounds[0] / F::from(2.0),
-            self.bounds[1] / F::from(2.0),
-            self.bounds[2] / F::from(2.0),
-        );
-
         Aabb {
-            min: -half,
-            max: half,
+            min: Vec3::new(-self.bounds[0] / 2.0, 0.0, -self.bounds[2] / 2.0),
+            max: Vec3::new(self.bounds[0] / 2.0, self.bounds[1], self.bounds[2] / 2.0),
         }
     }
 

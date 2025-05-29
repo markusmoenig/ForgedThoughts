@@ -27,6 +27,7 @@ impl Node for Sphere {
         vec![
             NodeTerminal::new("center", NodeTerminalRole::Vec3(Vec3::broadcast(0.0)), ""),
             NodeTerminal::new("radius", NodeTerminalRole::Vec1(1.0), ""),
+            NodeTerminal::new("modifier", NodeTerminalRole::Vec1(0.0), ""),
             NodeTerminal::new("material", NodeTerminalRole::Vec1(1.0), ""),
         ]
     }
@@ -40,6 +41,6 @@ impl Node for Sphere {
     }
 
     fn evaluate_3d(&self, pos: Vec3<F>, inputs: &[Vec4<F>]) -> Vec4<F> {
-        Vec4::broadcast((pos - inputs[0]).magnitude() - inputs[1].x)
+        Vec4::broadcast((pos - inputs[0]).magnitude() - inputs[1].x) - inputs[2].x * 0.5
     }
 }

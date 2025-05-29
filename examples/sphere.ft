@@ -1,14 +1,18 @@
 [camera: Pinhole]
     origin = vec3(0.0, 1.0, 3.0)
-    center = vec3(0.0, 0.0, 0.0)
+    center = vec3(0.0, 1.0, 0.0)
     fov = 70.0
 
 [pointA: Point3D]
-    position = vec3(0.0, 0.0, 0.0)
+    position = vec3(0.0, 1.0, 0.0)
 
 [noise: ValueNoise3D]
-    scale = vec3(1.0, 1.0, 1.0)
+    scale = 0.2
     octaves = 3.0
+
+[noiseScale: Mul]
+    input = noise.output
+    value = 0.4
 
 [material: Material]
     #albedo = vec3(1.0, 0.0, 0.0)
@@ -19,4 +23,5 @@
     center = pointA.position
     radius = 1.0
 
+    modifier = noiseScale.output
     material = material.output
