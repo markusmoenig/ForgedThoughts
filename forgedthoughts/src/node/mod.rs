@@ -3,6 +3,7 @@ pub mod terminal;
 
 pub mod material;
 pub mod nodes;
+pub mod pinholenode;
 pub mod shapes;
 
 use crate::{NodeTerminal, F};
@@ -13,6 +14,7 @@ pub enum NodeRole {
     Node,
     Shape,
     Material,
+    Camera,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]

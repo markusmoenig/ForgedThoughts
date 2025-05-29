@@ -33,6 +33,7 @@ pub fn lerp(a: F, b: F, t: F) -> F {
 
 // Re-exports
 pub use crate::{
+    camera::{pinhole::Pinhole, Camera},
     ft::FT,
     marching_cubes::MarchingCubes,
     modelbuffer::ModelBuffer,
@@ -49,6 +50,7 @@ pub use crate::{
 pub mod prelude {
     pub use crate::lerp;
     pub use crate::FT;
+    pub use crate::{Camera, Pinhole};
     pub use crate::{Color, Voxel, F};
     pub use crate::{Graph, Node, NodeDomain, NodeRole, NodeTerminal, NodeTerminalRole};
     pub use crate::{Hit, Ray};

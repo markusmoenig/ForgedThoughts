@@ -19,7 +19,7 @@ pub struct RenderContext {
     pub outputs: Vec<Vec4<f32>>,
     pub pass: RenderPass,
     pub material_links: FxHashMap<usize, usize>,
-    pub material_out: Vec<Vec4<F>>,
+    pub node_args: Vec<Vec4<F>>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +50,8 @@ pub struct Graph {
     pub shapes: Vec<usize>,
 
     parsed_nodes: Vec<ParsedNode>,
+
+    pub camera: Box<dyn Camera>,
 }
 
 impl Default for Graph {
@@ -67,12 +69,19 @@ impl Graph {
             shapes: vec![],
 
             parsed_nodes: vec![],
+
+            camera: Box::new(Pinhole::new()),
         }
     }
 
     /// Install all the nodes into the sink
     pub fn install(&mut self) {
         let node = crate::node::material::Material::new();
+        self.node_map
+            .insert(node.name().into(), self.nodesink.len());
+        self.nodesink.push(Box::new(node));
+
+        let node = crate::node::pinholenode::PinholeNode::new();
         self.node_map
             .insert(node.name().into(), self.nodesink.len());
         self.nodesink.push(Box::new(node));
@@ -110,6 +119,7 @@ impl Graph {
         self.nodesink.push(Box::new(node));
     }
 
+    /// Compile the graph.
     pub fn compile(&mut self, source: String) -> Result<(), String> {
         self.parsed_nodes = self.parse_node_graph(&source)?;
 
@@ -127,6 +137,28 @@ impl Graph {
             })
             .collect();
 
+        // Extract the camera from the graph
+        for (index, parsed) in self.parsed_nodes.iter().enumerate() {
+            if parsed.role == NodeRole::Camera {
+                let mut ctx = RenderContext {
+                    uv: Vec2::zero(),
+                    screen_size: Vec2::zero(),
+                    world_pos: Vec3::zero(),
+                    outputs: vec![Vec4::zero(); self.parsed_nodes.len()],
+                    pass: RenderPass::Rendering,
+                    material_links: FxHashMap::default(),
+                    node_args: vec![],
+                };
+                self.evaluate_at(index, &mut ctx);
+                if parsed.node_type == "Pinhole" {
+                    self.camera.set_origin(ctx.node_args[0].xyz());
+                    self.camera.set_center(ctx.node_args[1].xyz());
+                    self.camera.set_fov(ctx.node_args[2].x);
+                }
+                break;
+            }
+        }
+
         Ok(())
     }
 
@@ -139,11 +171,11 @@ impl Graph {
             outputs: vec![Vec4::zero(); self.parsed_nodes.len()],
             pass: RenderPass::Rendering,
             material_links: FxHashMap::default(),
-            material_out: vec![],
+            node_args: vec![],
         };
 
         self.evaluate_at(index, &mut ctx);
-        ctx.material_out
+        ctx.node_args
     }
 
     /// Evaluates the shape distances for the given world position.
@@ -155,7 +187,7 @@ impl Graph {
             outputs: vec![Vec4::zero(); self.parsed_nodes.len()],
             pass: RenderPass::Modeling,
             material_links: FxHashMap::default(),
-            material_out: vec![],
+            node_args: vec![],
         };
 
         let mut min_dist = f32::MAX;
@@ -198,7 +230,7 @@ impl Graph {
             outputs: vec![Vec4::zero(); self.parsed_nodes.len()],
             pass: RenderPass::Rendering,
             material_links: FxHashMap::default(),
-            material_out: vec![],
+            node_args: vec![],
         };
 
         self.evaluate_at(self.parsed_nodes.len() - 1, &mut ctx)
@@ -246,7 +278,9 @@ impl Graph {
 
                 if self.parsed_nodes[index].role == NodeRole::Material {
                     ctx.outputs[index] = Vec4::broadcast(index as F);
-                    ctx.material_out = args;
+                    ctx.node_args = args;
+                } else if self.parsed_nodes[index].role == NodeRole::Camera {
+                    ctx.node_args = args;
                 } else if self.parsed_nodes[index].domain == NodeDomain::D3 {
                     ctx.outputs[index] = node.evaluate_3d(ctx.world_pos, &args);
                 } else {

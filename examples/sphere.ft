@@ -1,3 +1,8 @@
+[camera: Pinhole]
+    origin = vec3(0.0, 1.0, 3.0)
+    center = vec3(0.0, 0.0, 0.0)
+    fov = 70.0
+
 [pointA: Point3D]
     position = vec3(0.0, 0.0, 0.0)
 

@@ -2,10 +2,9 @@ use crate::prelude::*;
 use std::sync::Arc;
 use vek::{Vec2, Vec4};
 
-pub struct PBR {}
-use crate::camera::Camera;
-
 use rand::Rng;
+
+pub struct PBR {}
 
 impl Renderer for PBR {
     fn new() -> Self
@@ -28,8 +27,10 @@ impl Renderer for PBR {
         model: Arc<ModelBuffer>,
     ) -> Vec4<F> {
         let mut rng = rand::rng();
-        let camera = Camera::default();
-        let ray = camera.create_ray(uv, Vec2::new(rng.random(), rng.random()), resolution);
+        let ray = ft
+            .graph
+            .camera
+            .create_ray(uv, resolution, Vec2::new(rng.random(), rng.random()));
 
         if let Some(hit) = model.raymarch(&ray) {
             // println!("{}", hit.voxel.material);
