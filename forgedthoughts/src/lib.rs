@@ -25,12 +25,10 @@ pub struct Voxel {
     pub material: u16,
 }
 
-use rust_embed::RustEmbed;
-#[derive(RustEmbed)]
-#[folder = "../nodes/"]
-#[exclude = "*.txt"]
-#[exclude = "*.DS_Store"]
-pub struct Embedded;
+#[inline(always)]
+pub fn lerp(a: F, b: F, t: F) -> F {
+    a + t * (b - a)
+}
 
 // Re-exports
 pub use crate::{
@@ -38,7 +36,7 @@ pub use crate::{
     marching_cubes::MarchingCubes,
     modelbuffer::ModelBuffer,
     node::{
-        graph::Graph, terminal::NodeTerminal, terminal::NodeTerminalRole, Node, NodeExecutionCtx,
+        graph::Graph, terminal::NodeTerminal, terminal::NodeTerminalRole, Node, NodeDomain,
         NodeRole,
     },
     ray::{Hit, Ray},
@@ -47,9 +45,10 @@ pub use crate::{
 };
 
 pub mod prelude {
+    pub use crate::lerp;
     pub use crate::FT;
     pub use crate::{Color, Voxel, F};
-    pub use crate::{Graph, Node, NodeExecutionCtx, NodeRole, NodeTerminal, NodeTerminalRole};
+    pub use crate::{Graph, Node, NodeDomain, NodeRole, NodeTerminal, NodeTerminalRole};
     pub use crate::{Hit, Ray};
     pub use crate::{ModelBuffer, RenderBuffer};
 }

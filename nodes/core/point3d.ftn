@@ -1,7 +1,0 @@
-Node<Point3D>
-
-    Inputs:
-        position: vec3 = vec3(0.0, 0.0, 0.0)
-
-    Outputs:
-        position: vec3

@@ -1,16 +1,11 @@
-use rpu::prelude::*;
-use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use vek::Vec2;
-use wasmer::{Instance, Module, Store, Value};
 
 use crate::camera::Camera;
 use crate::prelude::*;
-use crate::Embedded;
 
 pub struct FT {
-    pub nodes: FxHashMap<String, Node>,
     pub graph: Graph,
 }
 
@@ -23,7 +18,6 @@ impl Default for FT {
 impl FT {
     pub fn new() -> Self {
         Self {
-            nodes: FxHashMap::default(),
             graph: Graph::default(),
         }
     }
@@ -33,61 +27,30 @@ impl FT {
         RenderBuffer::new(width, height)
     }
 
-    /// Returns if FT is using high precision (f64) instead of f32.
-    pub fn high_precision(&self) -> bool {
-        #[cfg(feature = "double")]
-        return true;
-
-        #[cfg(not(feature = "double"))]
-        return false;
-    }
-
+    /// Compile the graph.
     pub fn compile(&mut self, path: std::path::PathBuf, file_name: String) -> Result<(), String> {
-        let main_path = path.join(file_name.clone());
+        self.graph.install();
 
+        let main_path = path.join(file_name.clone());
         if let Ok(code) = std::fs::read_to_string(main_path) {
-            self.graph.compile(code, &self.nodes)?;
+            self.graph.compile(code)?;
             Ok(())
         } else {
             Err(format!("Error reading file `{}`", file_name))
         }
     }
 
-    pub fn compile_nodes(&mut self) -> Result<(), String> {
-        for file in Embedded::iter() {
-            let name = file.as_ref().to_string();
-            if let Some(file) = Embedded::get(&name) {
-                if let Ok(str_slice) = std::str::from_utf8(&file.data) {
-                    let source = str_slice.to_string();
-                    let mut node = Node::default();
-                    match node.compile(source, self.high_precision()) {
-                        Ok(_) => {
-                            println!("Node '{}' compiled successfully.", node.name);
-                            self.nodes.insert(node.name.clone(), node);
-                        }
-                        Err(err) => {
-                            return Err(err);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     /// Compile the WAT source code and run the shader with the given arguments. The shader will be executed on the given buffer.
     pub fn render_2d(
         &self,
         ft: Arc<FT>,
-        rpu: &RPU,
         buffer: &mut Arc<Mutex<RenderBuffer>>,
         tile_size: (usize, usize),
-    ) -> Result<Vec<Value>, String> {
+    ) {
         let width = buffer.lock().unwrap().width;
         let height = buffer.lock().unwrap().height;
 
-        let tiles = rpu.create_tiles(width, height, tile_size.0, tile_size.1);
+        let tiles = self.create_tiles(width, height, tile_size.0, tile_size.1);
         let screen_size = Vec2::new(width as F, height as F);
         let tiles_mutex = Arc::new(Mutex::new(tiles));
 
@@ -105,8 +68,6 @@ impl FT {
             let buffer_mutex = Arc::clone(buffer);
 
             let handle = thread::spawn(move || {
-                let mut node_execution_ctx = ft.build_node_execution_ctx();
-
                 let mut tile_buffer = RenderBuffer::new(tile_size.0, tile_size.1);
                 loop {
                     // Lock mutex to access tiles
@@ -127,14 +88,8 @@ impl FT {
                                     continue;
                                 }
 
-                                let p = ft.graph.execute(
-                                    x,
-                                    y,
-                                    screen_size,
-                                    &ft.nodes,
-                                    &mut node_execution_ctx,
-                                );
-                                tile_buffer.set(w, h, p);
+                                let p = ft.graph.evaluate_color(x, y, screen_size);
+                                tile_buffer.set(w, h, p.into_array());
                             }
                         }
                         // Save the tile buffer to the main buffer
@@ -165,8 +120,6 @@ impl FT {
 
         let _stop = ft.get_time();
         println!("Shader execution time: {:?} ms.", _stop - _start);
-
-        Ok(vec![])
     }
 
     /// Render in 3D
@@ -174,17 +127,14 @@ impl FT {
     pub fn render_3d(
         &self,
         ft: Arc<FT>,
-        rpu: &RPU,
         buffer: &mut Arc<Mutex<RenderBuffer>>,
         tile_size: (usize, usize),
         model: Arc<ModelBuffer>,
-    ) -> Result<Vec<Value>, String> {
-        let high_precision = self.high_precision();
-
+    ) {
         let width = buffer.lock().unwrap().width;
         let height = buffer.lock().unwrap().height;
 
-        let tiles = rpu.create_tiles(width, height, tile_size.0, tile_size.1);
+        let tiles = self.create_tiles(width, height, tile_size.0, tile_size.1);
 
         let tiles_mutex = Arc::new(Mutex::new(tiles));
 
@@ -263,8 +213,6 @@ impl FT {
 
         let _stop = self.get_time();
         println!("Shader execution time: {:?} ms.", _stop - _start);
-
-        Ok(vec![])
     }
 
     pub fn pixel_at_3d(
@@ -288,35 +236,6 @@ impl FT {
         // [x as F / screen_size.x, y as F / screen_size.y, 0.0, 1.0]
     }
 
-    /// Compile and instantiate all nodes
-    pub fn build_node_execution_ctx(&self) -> NodeExecutionCtx {
-        let mut store = Store::default();
-        let mut result = FxHashMap::default();
-
-        for (name, node) in &self.nodes {
-            if node.wat.is_empty() {
-                continue;
-            }
-
-            let module = Module::new(&store, &node.wat)
-                .unwrap_or_else(|e| panic!("Failed to compile '{}': {}", name, e));
-
-            let arc_module = Arc::new(module);
-
-            let import_object = RPU::create_imports(&mut store, self.high_precision());
-
-            let instance = Instance::new(&mut store, &arc_module, &import_object)
-                .unwrap_or_else(|e| panic!("Failed to instantiate '{}': {}", name, e));
-
-            result.insert(name.clone(), (arc_module, instance));
-        }
-
-        NodeExecutionCtx {
-            store,
-            modules_instances: result,
-        }
-    }
-
     /// Get the current time
     pub fn get_time(&self) -> u128 {
         #[cfg(target_arch = "wasm32")]
@@ -331,6 +250,43 @@ impl FT {
             stop.as_millis()
         }
     }
+
+    /// Create the tiles for the given image size.
+    fn create_tiles(
+        &self,
+        image_width: usize,
+        image_height: usize,
+        tile_width: usize,
+        tile_height: usize,
+    ) -> Vec<Tile> {
+        let mut tiles = Vec::new();
+        let mut x = 0;
+        let mut y = 0;
+        while x < image_width && y < image_height {
+            let tile = Tile {
+                x,
+                y,
+                width: tile_width,
+                height: tile_height,
+            };
+            tiles.push(tile);
+            x += tile_width;
+            if x >= image_width {
+                x = 0;
+                y += tile_height;
+            }
+        }
+
+        tiles
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Tile {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
 }
 
 /*

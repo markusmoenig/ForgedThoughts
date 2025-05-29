@@ -36,7 +36,7 @@ impl NodeTerminalRole {
     /// Converts any role into Vec4 (with 0-padding if necessary).
     pub fn to_vec4(&self) -> Vec4<F> {
         match self {
-            NodeTerminalRole::Vec1(x) => Vec4::new(*x, 0.0, 0.0, 0.0),
+            NodeTerminalRole::Vec1(x) => Vec4::broadcast(*x),
             NodeTerminalRole::Vec2(v) => Vec4::new(v.x, v.y, 0.0, 0.0),
             NodeTerminalRole::Vec3(v) => Vec4::new(v.x, v.y, v.z, 0.0),
             NodeTerminalRole::Vec4(v) => *v,

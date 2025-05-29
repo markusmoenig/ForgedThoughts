@@ -169,8 +169,6 @@ impl ModelBuffer {
         let z_slices: Vec<_> = data.chunks_mut(size_x * size_y).collect();
 
         z_slices.into_par_iter().enumerate().for_each(|(z, slice)| {
-            let mut node_execution_ctx = ft.build_node_execution_ctx();
-
             for y in 0..size_y {
                 for x in 0..size_x {
                     let i = y * size_x + x;
@@ -187,9 +185,9 @@ impl ModelBuffer {
                             - Vec3::new(bounds[0], bounds[1], bounds[2]) / F::from(2.0)
                     };
 
-                    let d = ft
-                        .graph
-                        .get_model_distance(world, &ft.nodes, &mut node_execution_ctx);
+                    let d = ft.graph.evaluate_shapes(world);
+
+                    // let d = (world - Vec3::zero()).magnitude() - 1.0;
 
                     if d < slice[i].distance {
                         slice[i].distance = d;
@@ -265,13 +263,7 @@ impl ModelBuffer {
     pub fn raymarch(&self, ray: &Ray) -> Option<Hit> {
         let bbox = self.bbox();
 
-        let (t_min, t_max) = match ray.intersect_aabb(&bbox) {
-            Some(range) => range,
-            None => return None,
-        };
-
-        let center = self.size.map(|v| v / 2);
-        let voxel = self.get(center[0], center[1], center[2]);
+        let (t_min, t_max) = ray.intersect_aabb(&bbox)?;
 
         let epsilon = 0.001;
         let mut t = t_min.max(0.0) + epsilon;

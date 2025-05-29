@@ -1,5 +1,5 @@
 use clap::{arg, Command};
-use forgedthoughts::{modelbuffer::Vec3, prelude::*};
+use forgedthoughts::prelude::*;
 use std::sync::{Arc, Mutex};
 
 fn cli() -> Command {
@@ -45,16 +45,6 @@ fn main() {
     println!("{}", file_name);
 
     let mut ft = FT::new();
-    match ft.compile_nodes() {
-        Ok(_) => {
-            println!("Nodes compiled successfully.");
-        }
-        Err(err) => {
-            println!("Error compiling '{}': ", err);
-            return;
-        }
-    }
-
     let rc = ft.compile(std::path::PathBuf::new(), file_name.into());
     match rc {
         Ok(_) => {
@@ -71,7 +61,6 @@ fn main() {
     let height = 600;
 
     let mut buffer = Arc::new(Mutex::new(ft.create_render_buffer(width, height)));
-    let rpu = rpu::RPU::new();
 
     let mut path = std::path::PathBuf::new();
     path.push("out.png");
@@ -88,15 +77,14 @@ fn main() {
 
         model_buffer.model(Arc::clone(&ft));
 
-        let rc = ft.render_3d(
+        ft.render_3d(
             Arc::clone(&ft),
-            &rpu,
             &mut buffer,
             (60, 60),
             Arc::new(model_buffer),
         );
     } else {
-        let rc = ft.render_2d(Arc::clone(&ft), &rpu, &mut buffer, (60, 60));
+        ft.render_2d(Arc::clone(&ft), &mut buffer, (60, 60));
     }
 
     buffer.lock().unwrap().save(path);
