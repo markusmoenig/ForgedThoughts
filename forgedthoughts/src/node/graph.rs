@@ -262,8 +262,15 @@ impl Graph {
                                 NodeTerminalRole::Vec4(Vec4::broadcast(*node_index as F))
                             } else {
                                 self.evaluate_at(*node_index, ctx);
-
                                 let out = ctx.outputs[*node_index];
+
+                                // if self.parsed_nodes[index].role == NodeRole::Material {
+                                //     println!(
+                                //         "{}: {}",
+                                //         self.parsed_nodes[*node_index].node_type, out
+                                //     );
+                                // }
+
                                 let extracted =
                                     terminal.role.extract_from_vec4(out, &terminal.swizzle);
                                 extracted.coerce_to(input.role.len())

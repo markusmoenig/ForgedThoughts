@@ -6,8 +6,13 @@
 [pointA: Point3D]
     position = vec3(0.0, 0.0, 0.0)
 
+[noise: ValueNoise3D]
+    scale = vec3(1.0, 1.0, 1.0)
+    octaves = 3.0
+
 [material: Material]
-    albedo = vec3(1.0, 0.0, 0.0)
+    #albedo = vec3(1.0, 0.0, 0.0)
+    albedo = noise.output
 
 [sphere: Sphere]
     #center = vec3(0.0, 0.0, 0.0)

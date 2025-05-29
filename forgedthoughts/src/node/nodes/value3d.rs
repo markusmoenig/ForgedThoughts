@@ -37,11 +37,11 @@ impl Node for ValueNoise3D {
     }
 
     fn evaluate_3d(&self, pos: Vec3<F>, inputs: &[Vec4<F>]) -> Vec4<F> {
-        fn hash(n: F) -> F {
-            let mut n = n.fract() * 0.011;
-            n *= n + 7.5;
-            n *= n + n;
-            n.fract()
+        fn hash(p: F) -> F {
+            let mut p = (p * 0.011).fract();
+            p *= p + 7.5;
+            p *= p + p;
+            p.fract()
         }
 
         fn noise(x: Vec3<F>) -> F {
@@ -51,8 +51,6 @@ impl Node for ValueNoise3D {
             let n = i.dot(step);
 
             let u = f * f * (Vec3::broadcast(3.0) - 2.0 * f);
-
-            let lerp = |a, b, t| a * (1.0 - t) + b * t;
 
             lerp(
                 lerp(
@@ -87,7 +85,7 @@ impl Node for ValueNoise3D {
 
         let scale = inputs[0].xyz();
         let octaves = inputs[1].x as i32;
-        let offset = inputs[2].xyz();
+        let offset = inputs[2].xyz() + Vec3::broadcast(10.0);
 
         let mut x = pos / scale + offset;
 
