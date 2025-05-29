@@ -117,6 +117,16 @@ impl Graph {
         self.node_map
             .insert(node.name().into(), self.nodesink.len());
         self.nodesink.push(Box::new(node));
+
+        let node = crate::node::shapes::line::Line::new();
+        self.node_map
+            .insert(node.name().into(), self.nodesink.len());
+        self.nodesink.push(Box::new(node));
+
+        let node = crate::node::shapes::boxnode::Box::new();
+        self.node_map
+            .insert(node.name().into(), self.nodesink.len());
+        self.nodesink.push(Box::new(node));
     }
 
     /// Compile the graph.
