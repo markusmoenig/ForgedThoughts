@@ -5,6 +5,7 @@ pub mod modelbuffer;
 pub mod node;
 pub mod ray;
 pub mod renderbuffer;
+pub mod renderer;
 pub mod scanner;
 pub mod utils;
 
@@ -41,6 +42,7 @@ pub use crate::{
     },
     ray::{Hit, Ray},
     renderbuffer::RenderBuffer,
+    renderer::{pbr::PBR, Renderer},
     scanner::{Scanner, TokenType},
 };
 
@@ -51,4 +53,5 @@ pub mod prelude {
     pub use crate::{Graph, Node, NodeDomain, NodeRole, NodeTerminal, NodeTerminalRole};
     pub use crate::{Hit, Ray};
     pub use crate::{ModelBuffer, RenderBuffer};
+    pub use crate::{Renderer, PBR};
 }

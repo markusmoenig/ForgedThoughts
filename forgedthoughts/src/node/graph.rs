@@ -4,6 +4,12 @@ use vek::{Vec2, Vec3, Vec4};
 
 use super::NodeRole;
 
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub enum RenderPass {
+    Modeling,
+    Rendering,
+}
+
 #[derive(Debug, Clone)]
 pub struct RenderContext {
     pub uv: Vec2<F>,
@@ -11,6 +17,9 @@ pub struct RenderContext {
     pub world_pos: Vec3<F>,
 
     pub outputs: Vec<Vec4<f32>>,
+    pub pass: RenderPass,
+    pub material_links: FxHashMap<usize, usize>,
+    pub material_out: Vec<Vec4<F>>,
 }
 
 #[derive(Debug, Clone)]
@@ -61,9 +70,20 @@ impl Graph {
         }
     }
 
+    /// Install all the nodes into the sink
     pub fn install(&mut self) {
+        let node = crate::node::material::Material::new();
+        self.node_map
+            .insert(node.name().into(), self.nodesink.len());
+        self.nodesink.push(Box::new(node));
+
         // Nodes
         let node = crate::node::nodes::value2d::ValueNoise2D::new();
+        self.node_map
+            .insert(node.name().into(), self.nodesink.len());
+        self.nodesink.push(Box::new(node));
+
+        let node = crate::node::nodes::value3d::ValueNoise3D::new();
         self.node_map
             .insert(node.name().into(), self.nodesink.len());
         self.nodesink.push(Box::new(node));
@@ -110,17 +130,36 @@ impl Graph {
         Ok(())
     }
 
+    /// Evaluates the material node at the given index and returns its arguments.
+    pub fn evaluate_material(&self, index: usize, hit: Hit) -> Vec<Vec4<F>> {
+        let mut ctx = RenderContext {
+            uv: Vec2::zero(),
+            screen_size: Vec2::zero(),
+            world_pos: hit.position,
+            outputs: vec![Vec4::zero(); self.parsed_nodes.len()],
+            pass: RenderPass::Rendering,
+            material_links: FxHashMap::default(),
+            material_out: vec![],
+        };
+
+        self.evaluate_at(index, &mut ctx);
+        ctx.material_out
+    }
+
     /// Evaluates the shape distances for the given world position.
-    pub fn evaluate_shapes(&self, pos: Vec3<f32>) -> F {
+    pub fn evaluate_shapes(&self, pos: Vec3<f32>) -> (F, u16) {
         let mut ctx = RenderContext {
             uv: Vec2::zero(),
             screen_size: Vec2::zero(),
             world_pos: pos,
             outputs: vec![Vec4::zero(); self.parsed_nodes.len()],
+            pass: RenderPass::Modeling,
+            material_links: FxHashMap::default(),
+            material_out: vec![],
         };
 
         let mut min_dist = f32::MAX;
-        // let mut hit_shape: Option<&ParsedNode> = None;
+        let mut material_index = u16::MAX;
 
         for index in &self.shapes {
             self.evaluate_at(*index, &mut ctx);
@@ -128,11 +167,17 @@ impl Graph {
             // println!("{}", v4);
             if v4.x < min_dist {
                 min_dist = v4.x;
-                // hit_shape = Some(parsed_node);
+                if let Some(material) = ctx.material_links.get(index) {
+                    // println!(
+                    //     "Found material {} for shape {}",
+                    //     self.parsed_nodes[*material].name, self.parsed_nodes[*index].name
+                    // );
+                    material_index = *material as u16;
+                }
             }
         }
 
-        min_dist
+        (min_dist, material_index)
     }
 
     /// Executes the graph.
@@ -151,6 +196,9 @@ impl Graph {
             screen_size,
             world_pos: Vec3::zero(),
             outputs: vec![Vec4::zero(); self.parsed_nodes.len()],
+            pass: RenderPass::Rendering,
+            material_links: FxHashMap::default(),
+            material_out: vec![],
         };
 
         self.evaluate_at(self.parsed_nodes.len() - 1, &mut ctx)
@@ -171,11 +219,23 @@ impl Graph {
                             terminal,
                         }) => {
                             // Recursively compute dependency
-                            self.evaluate_at(*node_index, ctx);
 
-                            let out = ctx.outputs[*node_index];
-                            let extracted = terminal.role.extract_from_vec4(out, &terminal.swizzle);
-                            extracted.coerce_to(input.role.len())
+                            if ctx.pass == RenderPass::Modeling
+                                && self.parsed_nodes[*node_index].role == NodeRole::Material
+                            {
+                                // During Modeling we do not resolve links to materials as
+                                // we are only interested in the index of the material
+                                // node which we bake into the ModelBuffer
+                                ctx.material_links.insert(index, *node_index);
+                                NodeTerminalRole::Vec4(Vec4::broadcast(*node_index as F))
+                            } else {
+                                self.evaluate_at(*node_index, ctx);
+
+                                let out = ctx.outputs[*node_index];
+                                let extracted =
+                                    terminal.role.extract_from_vec4(out, &terminal.swizzle);
+                                extracted.coerce_to(input.role.len())
+                            }
                         }
 
                         None => input.role.clone(),
@@ -184,7 +244,10 @@ impl Graph {
                     args.push(value.to_vec4());
                 }
 
-                if self.parsed_nodes[index].domain == NodeDomain::D3 {
+                if self.parsed_nodes[index].role == NodeRole::Material {
+                    ctx.outputs[index] = Vec4::broadcast(index as F);
+                    ctx.material_out = args;
+                } else if self.parsed_nodes[index].domain == NodeDomain::D3 {
                     ctx.outputs[index] = node.evaluate_3d(ctx.world_pos, &args);
                 } else {
                     ctx.outputs[index] = node.evaluate_2d(ctx.uv, ctx.screen_size, &args);
@@ -215,7 +278,7 @@ impl Graph {
 
                 if let Some((name, node_type)) = trimmed[1..trimmed.len() - 1].split_once(':') {
                     let node_type = node_type.trim();
-                    if node_type != "Output" && !self.node_map.contains_key(node_type) {
+                    if !self.node_map.contains_key(node_type) {
                         return Err(format!(
                             "Unknown node type '{}' at line {}",
                             node_type,

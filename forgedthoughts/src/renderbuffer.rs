@@ -59,6 +59,30 @@ impl RenderBuffer {
         }
     }
 
+    /// Copy and accumulate pixels from another buffer to this buffer
+    pub fn accum_from(&mut self, x: usize, y: usize, other: &RenderBuffer, iteration: u32) {
+        for local_y in 0..other.height {
+            for local_x in 0..other.width {
+                let global_x = x + local_x;
+                let global_y = y + local_y;
+
+                if global_x >= self.width || global_y >= self.height {
+                    continue;
+                }
+
+                let index = (global_y * self.width + global_x) * 4;
+                let local_index = (local_y * other.width + local_x) * 4;
+
+                for i in 0..4 {
+                    let old = self.pixels[index + i];
+                    let new = other.pixels[local_index + i];
+                    let factor = 1.0 / iteration as f32;
+                    self.pixels[index + i] = old * (1.0 - factor) + new * factor;
+                }
+            }
+        }
+    }
+
     /// Convert the frame to an u8 vec, applying gamma correction
     pub fn to_u8_vec_gamma(&self) -> Vec<u8> {
         let source = &self.pixels[..];

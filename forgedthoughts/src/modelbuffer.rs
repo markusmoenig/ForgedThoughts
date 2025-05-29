@@ -185,13 +185,11 @@ impl ModelBuffer {
                             - Vec3::new(bounds[0], bounds[1], bounds[2]) / F::from(2.0)
                     };
 
-                    let d = ft.graph.evaluate_shapes(world);
+                    let (distance, material) = ft.graph.evaluate_shapes(world);
 
-                    // let d = (world - Vec3::zero()).magnitude() - 1.0;
-
-                    if d < slice[i].distance {
-                        slice[i].distance = d;
-                        slice[i].material = 0;
+                    if distance < slice[i].distance {
+                        slice[i].distance = distance;
+                        slice[i].material = material;
                     }
                 }
             }

@@ -27,6 +27,7 @@ impl Node for Sphere {
         vec![
             NodeTerminal::new("center", NodeTerminalRole::Vec3(Vec3::broadcast(0.0)), ""),
             NodeTerminal::new("radius", NodeTerminalRole::Vec1(1.0), ""),
+            NodeTerminal::new("material", NodeTerminalRole::Vec1(1.0), ""),
         ]
     }
 

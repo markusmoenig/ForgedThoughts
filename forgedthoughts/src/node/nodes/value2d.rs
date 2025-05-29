@@ -42,13 +42,13 @@ impl Node for ValueNoise2D {
     fn evaluate_2d(&self, uv: Vec2<F>, _resolution: Vec2<F>, inputs: &[Vec4<F>]) -> Vec4<F> {
         let octaves = inputs[1].x as i32;
 
-        fn hash(p: Vec2<f32>) -> f32 {
+        fn hash(p: Vec2<F>) -> F {
             let mut p3 = Vec3::new(p.x, p.y, p.x).map(|v| (v * 0.13).fract());
             p3 += p3.dot(Vec3::new(p3.y, p3.z, p3.x) + 3.333);
             ((p3.x + p3.y) * p3.z).fract()
         }
 
-        fn noise(x: Vec2<f32>) -> f32 {
+        fn noise(x: Vec2<F>) -> F {
             let i = x.map(|v| v.floor());
             let f = x.map(|v| v.fract());
 

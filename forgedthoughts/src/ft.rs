@@ -2,7 +2,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use vek::Vec2;
 
-use crate::camera::Camera;
 use crate::prelude::*;
 
 pub struct FT {
@@ -128,28 +127,32 @@ impl FT {
         &self,
         ft: Arc<FT>,
         buffer: &mut Arc<Mutex<RenderBuffer>>,
-        tile_size: (usize, usize),
         model: Arc<ModelBuffer>,
+        renderer: Arc<Box<dyn Renderer>>,
+        tile_size: (usize, usize),
+        accum: u32,
     ) {
         let width = buffer.lock().unwrap().width;
         let height = buffer.lock().unwrap().height;
 
         let tiles = self.create_tiles(width, height, tile_size.0, tile_size.1);
+        let screen_size = Vec2::new(width as F, height as F);
 
         let tiles_mutex = Arc::new(Mutex::new(tiles));
 
         let num_cpus = num_cpus::get();
         let _start = self.get_time();
 
-        let model_clone = Arc::clone(&model);
-
+        let model_arc = Arc::clone(&model);
         let ft_arc = Arc::clone(&ft);
+        let renderer_arc = Arc::clone(&renderer);
 
         // Create threads
         let mut handles = vec![];
         for _ in 0..num_cpus {
             let ft = Arc::clone(&ft_arc);
-            let model = Arc::clone(&model_clone);
+            let model = Arc::clone(&model_arc);
+            let renderer = Arc::clone(&renderer_arc);
 
             let tiles_mutex = Arc::clone(&tiles_mutex);
             let buffer_mutex = Arc::clone(buffer);
@@ -176,20 +179,30 @@ impl FT {
                                     continue;
                                 }
 
-                                let p = ft.pixel_at_3d(
-                                    x,
-                                    height - y,
-                                    Vec2::new(width as F, height as F),
+                                // Render
+
+                                let uv = Vec2::new(
+                                    x as F / screen_size.x,
+                                    1.0 - (y as F / screen_size.y),
+                                );
+
+                                let p = renderer.render(
+                                    uv,
+                                    screen_size,
+                                    Arc::clone(&ft),
                                     Arc::clone(&model),
                                 );
-                                tile_buffer.set(w, h, p);
+
+                                tile_buffer.set(w, h, p.into_array());
                             }
                         }
                         // Save the tile buffer to the main buffer
-                        buffer_mutex
-                            .lock()
-                            .unwrap()
-                            .copy_from(tile.x, tile.y, &tile_buffer);
+                        buffer_mutex.lock().unwrap().accum_from(
+                            tile.x,
+                            tile.y,
+                            &tile_buffer,
+                            accum,
+                        );
 
                         // Save thebuffer optionally to disk after each completed block.
                         if let Ok(buffer) = buffer_mutex.lock() {
@@ -213,27 +226,6 @@ impl FT {
 
         let _stop = self.get_time();
         println!("Shader execution time: {:?} ms.", _stop - _start);
-    }
-
-    pub fn pixel_at_3d(
-        &self,
-        x: usize,
-        y: usize,
-        screen_size: Vec2<F>,
-        model: Arc<ModelBuffer>,
-    ) -> Color {
-        let uv = Vec2::new(x as F / screen_size.x, y as F / screen_size.y);
-
-        let camera = Camera::default();
-        let ray = camera.create_ray(uv, Vec2::zero(), screen_size);
-
-        if let Some(hit) = model.raymarch(&ray) {
-            [hit.normal.x, hit.normal.y, hit.normal.z, 1.0]
-        } else {
-            [0.0, 0.0, 0.0, 0.0]
-        }
-
-        // [x as F / screen_size.x, y as F / screen_size.y, 0.0, 1.0]
     }
 
     /// Get the current time

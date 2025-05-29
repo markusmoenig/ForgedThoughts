@@ -42,7 +42,7 @@ fn main() {
     //     _ => {}
     // }
 
-    println!("{}", file_name);
+    println!("Working on {} ...", file_name);
 
     let mut ft = FT::new();
     let rc = ft.compile(std::path::PathBuf::new(), file_name.into());
@@ -73,21 +73,26 @@ fn main() {
             "Model buffer allocated, using {}.",
             model_buffer.memory_usage()
         );
-        // model_buffer.add_sphere(Vec3::zero(), 1.0, 0);
 
         model_buffer.model(Arc::clone(&ft));
+        let model_buffer = Arc::new(model_buffer);
 
-        ft.render_3d(
-            Arc::clone(&ft),
-            &mut buffer,
-            (60, 60),
-            Arc::new(model_buffer),
-        );
+        let renderer: Arc<Box<dyn Renderer>> = Arc::new(Box::new(PBR::new()));
+
+        for i in 1..=1 {
+            ft.render_3d(
+                Arc::clone(&ft),
+                &mut buffer,
+                Arc::clone(&model_buffer),
+                Arc::clone(&renderer),
+                (60, 60),
+                i as u32,
+            );
+            buffer.lock().unwrap().save(path.clone());
+        }
     } else {
         ft.render_2d(Arc::clone(&ft), &mut buffer, (60, 60));
     }
-
-    buffer.lock().unwrap().save(path);
 
     // let rc = ft.render_3d(
     //     Arc::clone(&ft),

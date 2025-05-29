@@ -1,6 +1,7 @@
 pub mod graph;
 pub mod terminal;
 
+pub mod material;
 pub mod nodes;
 pub mod shapes;
 
@@ -11,6 +12,7 @@ use vek::{Vec2, Vec3, Vec4};
 pub enum NodeRole {
     Node,
     Shape,
+    Material,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
