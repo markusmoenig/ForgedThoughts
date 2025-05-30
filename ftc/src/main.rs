@@ -68,7 +68,7 @@ fn main() {
     let modeling = true;
 
     if modeling {
-        let mut model_buffer = ModelBuffer::new([2.1, 2.1, 2.1], 128);
+        let mut model_buffer = ModelBuffer::new([2.1, 2.1, 2.1], 96);
         println!(
             "Model buffer allocated, using {}.",
             model_buffer.memory_usage()
@@ -79,7 +79,7 @@ fn main() {
 
         let renderer: Arc<Box<dyn Renderer>> = Arc::new(Box::new(PBR::new()));
 
-        for i in 1..=10 {
+        for i in 1..=20 {
             ft.render_3d(
                 Arc::clone(&ft),
                 &mut buffer,

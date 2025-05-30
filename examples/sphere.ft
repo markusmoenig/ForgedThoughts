@@ -17,8 +17,8 @@
 [material: Material]
     albedo = vec3(0.8, 0.2, 0.2)
     #albedo = noise.output
-    roughness = 1.5
-    metallic = 0.0
+    roughness = 0.5
+    metallic = 0.5
 
 [sphere: Sphere]
     #center = vec3(0.0, 0.0, 0.0)

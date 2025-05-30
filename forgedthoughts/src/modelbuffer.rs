@@ -163,35 +163,108 @@ impl ModelBuffer {
 
     /// Computes the normal at the given world position.
     pub fn compute_normal(&self, pos: Vec3<F>) -> Vec3<F> {
-        // Estimate voxel size in world units
-        // let voxel_size = Vec3::new(
-        //     self.bounds[0] / self.size[0] as F,
-        //     self.bounds[1] / self.size[1] as F,
-        //     self.bounds[2] / self.size[2] as F,
-        // );
+        // Estimate minimal voxel size across all axes
+        let voxel_size = self.voxel_size_min();
+        let eps = voxel_size; // Optional scaling factor here if needed
 
-        let voxel_size = Vec3::broadcast(self.voxel_size_min() * 0.5);
+        // Sample the SDF around the point
+        let dx = match (
+            self.sample(pos + Vec3::new(eps, 0.0, 0.0)),
+            self.sample(pos - Vec3::new(eps, 0.0, 0.0)),
+        ) {
+            (Some(p), Some(m)) => p - m,
+            _ => return Vec3::zero(),
+        };
 
-        // Use average voxel size
-        let eps = (voxel_size.x + voxel_size.y + voxel_size.z) / F::from(3.0);
+        let dy = match (
+            self.sample(pos + Vec3::new(0.0, eps, 0.0)),
+            self.sample(pos - Vec3::new(0.0, eps, 0.0)),
+        ) {
+            (Some(p), Some(m)) => p - m,
+            _ => return Vec3::zero(),
+        };
 
-        let dx = self.sample(pos + Vec3::new(eps, 0.0, 0.0))
-            - self.sample(pos - Vec3::new(eps, 0.0, 0.0));
-        let dy = self.sample(pos + Vec3::new(0.0, eps, 0.0))
-            - self.sample(pos - Vec3::new(0.0, eps, 0.0));
-        let dz = self.sample(pos + Vec3::new(0.0, 0.0, eps))
-            - self.sample(pos - Vec3::new(0.0, 0.0, eps));
+        let dz = match (
+            self.sample(pos + Vec3::new(0.0, 0.0, eps)),
+            self.sample(pos - Vec3::new(0.0, 0.0, eps)),
+        ) {
+            (Some(p), Some(m)) => p - m,
+            _ => return Vec3::zero(),
+        };
 
         Vec3::new(dx, dy, dz).normalized()
     }
 
     /// Samples the buffer at the given world position.
-    pub fn sample(&self, pos: Vec3<F>) -> F {
-        if let Some(index) = self.world_to_index(pos) {
-            self.data[self.index(index.x, index.y, index.z)].distance
-        } else {
-            F::MAX
+    pub fn sample(&self, pos: Vec3<F>) -> Option<F> {
+        let local = self.world_to_voxel(pos)?;
+
+        let ix = local.map(|v| v.floor() as isize);
+        let fx = local - ix.map(|v| v as F);
+
+        let get = |x, y, z| {
+            let (x, y, z) = (x as usize, y as usize, z as usize);
+            if x < self.size[0] && y < self.size[1] && z < self.size[2] {
+                self.data[self.index(x, y, z)].distance
+            } else {
+                F::MAX
+            }
+        };
+
+        // Fetch 8 corner distances
+        let d000 = get(ix.x, ix.y, ix.z);
+        let d100 = get(ix.x + 1, ix.y, ix.z);
+        let d010 = get(ix.x, ix.y + 1, ix.z);
+        let d110 = get(ix.x + 1, ix.y + 1, ix.z);
+        let d001 = get(ix.x, ix.y, ix.z + 1);
+        let d101 = get(ix.x + 1, ix.y, ix.z + 1);
+        let d011 = get(ix.x, ix.y + 1, ix.z + 1);
+        let d111 = get(ix.x + 1, ix.y + 1, ix.z + 1);
+
+        // Interpolate
+        let lerp = |a, b, t| a * (1.0 - t) + b * t;
+
+        let d00 = lerp(d000, d100, fx.x);
+        let d01 = lerp(d001, d101, fx.x);
+        let d10 = lerp(d010, d110, fx.x);
+        let d11 = lerp(d011, d111, fx.x);
+
+        let d0 = lerp(d00, d10, fx.y);
+        let d1 = lerp(d01, d11, fx.y);
+
+        Some(lerp(d0, d1, fx.z))
+    }
+
+    /// Converts a world-space position to continuous voxel-space coordinates.
+    pub fn world_to_voxel(&self, pos: Vec3<F>) -> Option<Vec3<F>> {
+        let shifted = Vec3::new(
+            pos.x + self.bounds[0] / 2.0,
+            pos.y,
+            pos.z + self.bounds[2] / 2.0,
+        );
+
+        let scale = Vec3::new(
+            self.size[0] as F / self.bounds[0],
+            self.size[1] as F / self.bounds[1],
+            self.size[2] as F / self.bounds[2],
+        );
+
+        let grid = shifted * scale;
+
+        // Check that the 8 corners for trilinear interpolation would be in bounds
+        let min = grid.map(|v| v.floor() as isize);
+        let max = min + Vec3::broadcast(1);
+        if min.x < 0
+            || min.y < 0
+            || min.z < 0
+            || max.x >= self.size[0] as isize
+            || max.y >= self.size[1] as isize
+            || max.z >= self.size[2] as isize
+        {
+            return None;
         }
+
+        Some(grid)
     }
 
     /// Returns the bbox of the buffer centered at the origin.
@@ -244,36 +317,37 @@ impl ModelBuffer {
         // let eps_norm = voxel * 0.50; // ½ voxel: gradient step
         // let eps_shadow = voxel * 1.00; // 1   voxel: safe shadow bias
 
-        let eps = self.voxel_size_min() * 0.25;
+        let eps = self.voxel_size_min();
+        let eps_hit = eps * 0.25;
 
         let (t_min, t_max) = ray.intersect_aabb(&bbox)?;
 
-        let mut t = t_min.max(0.0) + eps;
+        let mut t = t_min.max(0.0) + eps * 1.5;
         let max_distance = t_max.min(1000.0);
         let max_steps = 512;
 
         for _ in 0..max_steps {
             let p = ray.at(&t);
-            let d = self.sample(p);
+            if let Some(d) = self.sample(p) {
+                if d < eps_hit {
+                    // Hit — convert world pos to voxel and return Voxel
+                    let pos = self.world_to_index(p)?;
+                    let i = self.index(pos.x, pos.y, pos.z);
+                    let voxel = self.data[i];
+                    let normal = self.compute_normal(p);
 
-            if d < eps {
-                // Hit — convert world pos to voxel and return Voxel
-                let pos = self.world_to_index(p)?;
-                let i = self.index(pos.x, pos.y, pos.z);
-                let voxel = self.data[i];
-                let normal = self.compute_normal(p);
+                    return Some(Hit {
+                        position: p,
+                        normal,
+                        voxel,
+                    });
+                }
 
-                return Some(Hit {
-                    position: p,
-                    normal,
-                    voxel,
-                });
-            }
+                t += d * 0.5;
 
-            t += d * 0.5;
-
-            if t > max_distance {
-                break;
+                if t > max_distance {
+                    break;
+                }
             }
         }
 

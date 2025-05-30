@@ -154,7 +154,7 @@ impl Renderer for PBR {
                     let roughness = material.roughness.clamp(0.001, 1.0);
                     let alpha = roughness * roughness;
                     let metallic = material.metallic;
-                    let reflectance = 0.5;
+                    let reflectance = 1.0;
                     let base_f0 = 0.04;
                     let f0 = base_f0 + (1.0 - base_f0) * metallic; // 0.04 for dielectrics → 1.0 for metal
                     let v = (-ray.dir).normalized();
