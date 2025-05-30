@@ -164,11 +164,13 @@ impl ModelBuffer {
     /// Computes the normal at the given world position.
     pub fn compute_normal(&self, pos: Vec3<F>) -> Vec3<F> {
         // Estimate voxel size in world units
-        let voxel_size = Vec3::new(
-            self.bounds[0] / self.size[0] as F,
-            self.bounds[1] / self.size[1] as F,
-            self.bounds[2] / self.size[2] as F,
-        );
+        // let voxel_size = Vec3::new(
+        //     self.bounds[0] / self.size[0] as F,
+        //     self.bounds[1] / self.size[1] as F,
+        //     self.bounds[2] / self.size[2] as F,
+        // );
+
+        let voxel_size = Vec3::broadcast(self.voxel_size_min() * 0.5);
 
         // Use average voxel size
         let eps = (voxel_size.x + voxel_size.y + voxel_size.z) / F::from(3.0);
@@ -214,13 +216,39 @@ impl ModelBuffer {
         }
     }
 
+    /// Average voxel edge length in world units.
+    pub fn voxel_size(&self) -> F {
+        let vs = Vec3::new(
+            self.bounds[0] / self.size[0] as F,
+            self.bounds[1] / self.size[1] as F,
+            self.bounds[2] / self.size[2] as F,
+        );
+        (vs.x + vs.y + vs.z) / 3.0
+    }
+
+    /// Smallest voxel edge length (safer for very anisotropic grids).
+    pub fn voxel_size_min(&self) -> F {
+        let vs = Vec3::new(
+            self.bounds[0] / self.size[0] as F,
+            self.bounds[1] / self.size[1] as F,
+            self.bounds[2] / self.size[2] as F,
+        );
+        vs.x.min(vs.y).min(vs.z)
+    }
+
+    /// Raymarch.
     pub fn raymarch(&self, ray: &Ray) -> Option<Hit> {
         let bbox = self.bbox();
 
+        // let eps_hit = voxel * 0.25; // ¼ voxel: fine hit threshold
+        // let eps_norm = voxel * 0.50; // ½ voxel: gradient step
+        // let eps_shadow = voxel * 1.00; // 1   voxel: safe shadow bias
+
+        let eps = self.voxel_size_min() * 0.25;
+
         let (t_min, t_max) = ray.intersect_aabb(&bbox)?;
 
-        let epsilon = 0.001;
-        let mut t = t_min.max(0.0) + epsilon;
+        let mut t = t_min.max(0.0) + eps;
         let max_distance = t_max.min(1000.0);
         let max_steps = 512;
 
@@ -228,7 +256,7 @@ impl ModelBuffer {
             let p = ray.at(&t);
             let d = self.sample(p);
 
-            if d < epsilon {
+            if d < eps {
                 // Hit — convert world pos to voxel and return Voxel
                 let pos = self.world_to_index(p)?;
                 let i = self.index(pos.x, pos.y, pos.z);

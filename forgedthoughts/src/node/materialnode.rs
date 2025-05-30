@@ -1,9 +1,9 @@
 use crate::prelude::*;
 use vek::{Vec2, Vec3, Vec4};
 
-pub struct Material {}
+pub struct MaterialNode {}
 
-impl Node for Material {
+impl Node for MaterialNode {
     fn new() -> Self
     where
         Self: Sized,
@@ -24,11 +24,12 @@ impl Node for Material {
     }
 
     fn inputs(&self) -> Vec<NodeTerminal> {
-        vec![NodeTerminal::new(
-            "albedo",
-            NodeTerminalRole::Vec3(Vec3::one()),
-            "",
-        )]
+        vec![
+            NodeTerminal::new("albedo", NodeTerminalRole::Vec3(Vec3::one()), ""),
+            NodeTerminal::new("emission", NodeTerminalRole::Vec3(Vec3::zero()), ""),
+            NodeTerminal::new("roughness", NodeTerminalRole::Vec1(0.5), ""),
+            NodeTerminal::new("metallic", NodeTerminalRole::Vec1(0.0), ""),
+        ]
     }
 
     fn outputs(&self) -> Vec<NodeTerminal> {

@@ -1,10 +1,13 @@
 pub mod graph;
 pub mod terminal;
 
-pub mod material;
+pub mod materialnode;
 pub mod nodes;
-pub mod pinholenode;
 pub mod shapes;
+
+// Nodes which get converted to native trait instance
+pub mod pinholenode;
+pub mod pointlightnode;
 
 use crate::{NodeTerminal, F};
 use vek::{Vec2, Vec3, Vec4};
@@ -15,6 +18,7 @@ pub enum NodeRole {
     Shape,
     Material,
     Camera,
+    Light,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]

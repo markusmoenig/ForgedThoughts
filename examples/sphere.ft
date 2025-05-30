@@ -15,13 +15,20 @@
     value = 0.4
 
 [material: Material]
-    #albedo = vec3(1.0, 0.0, 0.0)
-    albedo = noise.output
+    albedo = vec3(0.8, 0.2, 0.2)
+    #albedo = noise.output
+    roughness = 1.5
+    metallic = 0.0
 
 [sphere: Sphere]
     #center = vec3(0.0, 0.0, 0.0)
     center = pointA.position
     radius = 1.0
 
-    modifier = noiseScale.output
+    #modifier = noiseScale.output
     material = material.output
+
+[sphere: PointLight]
+    position = vec3(0.3, 1.2, 1.0)
+    radius = 1.0
+    intensity = 1.0

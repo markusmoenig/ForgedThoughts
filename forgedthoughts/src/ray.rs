@@ -12,7 +12,7 @@ pub struct Hit {
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct Ray {
     pub origin: Vec3<F>,
-    pub direction: Vec3<F>,
+    pub dir: Vec3<F>,
 
     pub inv_direction: Vec3<F>,
 
@@ -22,20 +22,27 @@ pub struct Ray {
 }
 
 impl Ray {
-    pub fn new(origin: Vec3<F>, direction: Vec3<F>) -> Self {
+    pub fn new(origin: Vec3<F>, dir: Vec3<F>) -> Self {
         Self {
             origin,
-            direction,
+            dir,
 
-            inv_direction: Vec3::new(1.0 / direction.x, 1.0 / direction.y, 1.0 / direction.z),
-            sign_x: (direction.x < 0.0) as usize,
-            sign_y: (direction.y < 0.0) as usize,
-            sign_z: (direction.z < 0.0) as usize,
+            inv_direction: Vec3::new(1.0 / dir.x, 1.0 / dir.y, 1.0 / dir.z),
+            sign_x: (dir.x < 0.0) as usize,
+            sign_y: (dir.y < 0.0) as usize,
+            sign_z: (dir.z < 0.0) as usize,
         }
     }
 
+    /// Returns the position by `dist` units along its direction.
     pub fn at(&self, dist: &F) -> Vec3<F> {
-        self.origin + *dist * self.direction
+        self.origin + *dist * self.dir
+    }
+
+    /// Returns a new Ray advanced by `dist` units along its direction.
+    #[inline(always)]
+    pub fn advanced(&self, dist: F) -> Self {
+        Self::new(self.at(&dist), self.dir)
     }
 
     /// Intersects this ray with an AABB. Returns Some(tmin, tmax) if it hits, None otherwise.
@@ -58,6 +65,32 @@ impl Ray {
             Some((tmin, tmax))
         } else {
             None
+        }
+    }
+
+    /// Intersects the ray with a sphere.
+    /// Returns `Some(t)` where `t` is the distance along the ray to the intersection,
+    /// or `None` if there is no hit.
+    pub fn intersect_sphere(&self, center: Vec3<F>, radius: F) -> Option<F> {
+        let oc = center - self.origin;
+        let b = oc.dot(self.dir);
+        let det = b * b - oc.dot(oc) + radius * radius;
+
+        if det < 0.0 {
+            None
+        } else {
+            let sqrt_det = det.sqrt();
+            let t1 = b - sqrt_det;
+            let t2 = b + sqrt_det;
+            let epsilon = 1e-3;
+
+            if t1 > epsilon {
+                Some(t1)
+            } else if t2 > epsilon {
+                Some(t2)
+            } else {
+                None
+            }
         }
     }
 }

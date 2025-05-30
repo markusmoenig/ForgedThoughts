@@ -18,8 +18,8 @@
     value = 0.4
 
 [material: Material]
-    #albedo = vec3(1.0, 0.0, 0.0)
-    albedo = noise.output
+    albedo = vec3(1.0, 0.0, 0.0)
+    #albedo = noise.output
 
 [line: Box]
     #center = vec3(0.0, 0.0, 0.0)
@@ -28,3 +28,8 @@
 
     #modifier = noiseScale.output
     material = material.output
+
+[sphere: PointLight]
+    position = vec3(0.3, 1.2, 1.0)
+    radius = 1.0
+    intensity = 1.0

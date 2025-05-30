@@ -144,4 +144,60 @@ impl RenderBuffer {
 
         image.save(path).unwrap();
     }
+
+    pub fn save_srgb(&self, path: std::path::PathBuf) {
+        let gamma = 1.0 / 2.2;
+        let mut image = image::ImageBuffer::new(self.width as u32, self.height as u32);
+
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let i = y * self.width * 4 + x * 4;
+
+                let r = self.pixels[i].max(0.0).powf(gamma);
+                let g = self.pixels[i + 1].max(0.0).powf(gamma);
+                let b = self.pixels[i + 2].max(0.0).powf(gamma);
+
+                let rgb = image::Rgb([
+                    (r * 255.0).min(255.0) as u8,
+                    (g * 255.0).min(255.0) as u8,
+                    (b * 255.0).min(255.0) as u8,
+                ]);
+                image.put_pixel(x as u32, y as u32, rgb);
+            }
+        }
+
+        image.save(path).unwrap();
+    }
+
+    pub fn save_film(&self, path: std::path::PathBuf) {
+        fn tonemap_film(x: F) -> F {
+            let a = 2.51;
+            let b = 0.03;
+            let c = 2.43;
+            let d = 0.59;
+            let e = 0.14;
+            ((x * (a * x + b)) / (x * (c * x + d) + e)).clamp(0.0, 1.0)
+        }
+
+        let mut image = image::ImageBuffer::new(self.width as u32, self.height as u32);
+
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let i = y * self.width * 4 + x * 4;
+
+                let r = tonemap_film(self.pixels[i]);
+                let g = tonemap_film(self.pixels[i + 1]);
+                let b = tonemap_film(self.pixels[i + 2]);
+
+                let rgb = image::Rgb([
+                    (r * 255.0).min(255.0) as u8,
+                    (g * 255.0).min(255.0) as u8,
+                    (b * 255.0).min(255.0) as u8,
+                ]);
+                image.put_pixel(x as u32, y as u32, rgb);
+            }
+        }
+
+        image.save(path).unwrap();
+    }
 }

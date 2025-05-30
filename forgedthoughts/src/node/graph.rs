@@ -52,6 +52,7 @@ pub struct Graph {
     parsed_nodes: Vec<ParsedNode>,
 
     pub camera: Box<dyn Camera>,
+    pub lights: Vec<Box<dyn Light>>,
 }
 
 impl Default for Graph {
@@ -71,12 +72,13 @@ impl Graph {
             parsed_nodes: vec![],
 
             camera: Box::new(Pinhole::new()),
+            lights: vec![],
         }
     }
 
     /// Install all the nodes into the sink
     pub fn install(&mut self) {
-        let node = crate::node::material::Material::new();
+        let node = crate::node::materialnode::MaterialNode::new();
         self.node_map
             .insert(node.name().into(), self.nodesink.len());
         self.nodesink.push(Box::new(node));
@@ -127,6 +129,12 @@ impl Graph {
         self.node_map
             .insert(node.name().into(), self.nodesink.len());
         self.nodesink.push(Box::new(node));
+
+        // Lights
+        let node = crate::node::pointlightnode::PointLightNode::new();
+        self.node_map
+            .insert(node.name().into(), self.nodesink.len());
+        self.nodesink.push(Box::new(node));
     }
 
     /// Compile the graph.
@@ -169,11 +177,35 @@ impl Graph {
             }
         }
 
+        // Extract the lights from the graph
+        for (index, parsed) in self.parsed_nodes.iter().enumerate() {
+            if parsed.role == NodeRole::Light {
+                let mut ctx = RenderContext {
+                    uv: Vec2::zero(),
+                    screen_size: Vec2::zero(),
+                    world_pos: Vec3::zero(),
+                    outputs: vec![Vec4::zero(); self.parsed_nodes.len()],
+                    pass: RenderPass::Rendering,
+                    material_links: FxHashMap::default(),
+                    node_args: vec![],
+                };
+                self.evaluate_at(index, &mut ctx);
+                if parsed.node_type == "PointLight" {
+                    let mut light = PointLight::new();
+                    light.set_position(ctx.node_args[0].xyz());
+                    light.set_color(ctx.node_args[1].xyz());
+                    light.set_radius(ctx.node_args[2].x);
+                    light.set_intensity(ctx.node_args[3].x);
+                    self.lights.push(Box::new(light));
+                }
+            }
+        }
+
         Ok(())
     }
 
     /// Evaluates the material node at the given index and returns its arguments.
-    pub fn evaluate_material(&self, index: usize, hit: Hit) -> Vec<Vec4<F>> {
+    pub fn evaluate_material(&self, index: usize, hit: Hit) -> Material {
         let mut ctx = RenderContext {
             uv: Vec2::zero(),
             screen_size: Vec2::zero(),
@@ -185,7 +217,14 @@ impl Graph {
         };
 
         self.evaluate_at(index, &mut ctx);
-        ctx.node_args
+
+        Material {
+            albedo: ctx.node_args[0].xyz(),
+            emission: ctx.node_args[1].xyz(),
+            roughness: ctx.node_args[2].x,
+            metallic: ctx.node_args[3].x,
+            ..Default::default()
+        }
     }
 
     /// Evaluates the shape distances for the given world position.
@@ -296,7 +335,9 @@ impl Graph {
                 if self.parsed_nodes[index].role == NodeRole::Material {
                     ctx.outputs[index] = Vec4::broadcast(index as F);
                     ctx.node_args = args;
-                } else if self.parsed_nodes[index].role == NodeRole::Camera {
+                } else if self.parsed_nodes[index].role == NodeRole::Camera
+                    || self.parsed_nodes[index].role == NodeRole::Light
+                {
                     ctx.node_args = args;
                 } else if self.parsed_nodes[index].domain == NodeDomain::D3 {
                     ctx.outputs[index] = node.evaluate_3d(ctx.world_pos, &args);
