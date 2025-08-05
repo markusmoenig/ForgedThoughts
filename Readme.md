@@ -1,9 +1,7 @@
 
-# Rewrite in Progress
+# Shape-Z
 
-A complete rewrite of the old ForgedThoughts is currently in process with a radical new design.
-
-The website and current readme's are out of date and will be updated soon.
+[Shape-Z](https://Shape-Z.com) is the successor of Forged Thoughts. Please check it out instead of Forged Thoughts.
 
 ---
 
