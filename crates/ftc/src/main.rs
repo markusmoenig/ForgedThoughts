@@ -93,8 +93,7 @@ enum Command {
         accel: Option<CliAccelMode>,
     },
     /// Path trace a scene to PNG
-    #[command(alias = "path")]
-    Trace {
+    Path {
         /// Path to a .ft scene file
         #[arg(short, long)]
         scene: Option<PathBuf>,
@@ -229,7 +228,7 @@ fn main() -> ExitCode {
             height,
             accel,
         } => run_render(scene, output, width, height, accel.map(Into::into), &cfg),
-        Command::Trace {
+        Command::Path {
             scene,
             output,
             width,

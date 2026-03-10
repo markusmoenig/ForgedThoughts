@@ -49,6 +49,7 @@ Current FT material hooks:
 - `thin_walled`
 - `emission_color`
 - `emission_strength`
+- `normal`
 - `medium`
 - `subsurface`
 - `eval`
@@ -70,5 +71,14 @@ Current reality:
 
 - `eval/pdf/sample` are integrated most cleanly in the path tracer
 - the recursive `ray` renderer still has some built-in material branching
+- `normal(ctx)` perturbs the shading normal only; it does not change SDF intersections or silhouettes
 - `medium` already affects transmission through simple absorption
 - `subsurface` is structured material data but is not yet consumed as real transport
+
+Use `normal(ctx)` for things like:
+
+- brick and mortar relief
+- grooves
+- fine surface breakup
+
+True displacement that changes the actual SDF shape is a later feature.

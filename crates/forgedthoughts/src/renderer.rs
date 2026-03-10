@@ -985,25 +985,7 @@ fn render_depth_image(
                         let t = (1.0 - (hit.t / options.max_dist)).clamp(0.0, 1.0);
                         let material =
                             resolve_material_at_hit(setup, hit, dir.mul(-1.0).normalize());
-                        let local_position = to_local(
-                            hit.position,
-                            setup
-                                .object_transforms
-                                .get(hit.object_id as usize)
-                                .copied()
-                                .unwrap_or_else(PrimitiveTransform::identity),
-                        );
-                        let bsdf_ctx = BsdfContextBase {
-                            hit,
-                            local_position,
-                            normal: if hit.front_face {
-                                hit.normal.normalize()
-                            } else {
-                                hit.normal.mul(-1.0).normalize()
-                            },
-                            wo: dir.mul(-1.0).normalize(),
-                            current_ior: 1.0,
-                        };
+                        let bsdf_ctx = build_bsdf_context(setup, hit, dir.mul(-1.0), 1.0);
                         let lit =
                             shade_color(accel, setup, options, &setup.lights, material, bsdf_ctx);
                         spectrum_to_rgb8(lit.scale(t))
@@ -1320,6 +1302,44 @@ struct BsdfContextBase {
     normal: Vec3,
     wo: Vec3,
     current_ior: f32,
+}
+
+fn build_bsdf_context(
+    setup: &RenderSetup,
+    hit: RayHit,
+    view_dir: Vec3,
+    current_ior: f32,
+) -> BsdfContextBase {
+    let transform = setup
+        .object_transforms
+        .get(hit.object_id as usize)
+        .copied()
+        .unwrap_or_else(PrimitiveTransform::identity);
+    let local_position = to_local(hit.position, transform);
+    let geometric_normal = if hit.front_face {
+        hit.normal.normalize()
+    } else {
+        hit.normal.mul(-1.0).normalize()
+    };
+    let material = material_for_id(&setup.materials, hit.material_id);
+    let normal = resolve_dynamic_normal(
+        &setup.state,
+        &setup.material_def_names,
+        material,
+        hit,
+        local_position,
+        view_dir,
+        geometric_normal,
+    )
+    .unwrap_or(geometric_normal);
+
+    BsdfContextBase {
+        hit,
+        local_position,
+        normal,
+        wo: view_dir.normalize(),
+        current_ior,
+    }
 }
 
 fn estimate_direct_mis<A: Accelerator + Sync>(
@@ -2767,6 +2787,33 @@ fn resolve_dynamic_number(
     Some(v)
 }
 
+fn resolve_dynamic_normal(
+    state: &EvalState,
+    material_def_names: &[String],
+    material: MaterialKindRt,
+    hit: RayHit,
+    local_position: Vec3,
+    view_dir: Vec3,
+    geometric_normal: Vec3,
+) -> Option<Vec3> {
+    let dynamic_material_id = match material {
+        MaterialKindRt::Lambert(params)
+        | MaterialKindRt::Metal(params)
+        | MaterialKindRt::Dielectric(params) => params.dynamic_material_id,
+    }?;
+    let name = material_def_names.get(dynamic_material_id as usize)?;
+    let ctx = make_shading_context_with_normal(hit, local_position, view_dir, geometric_normal);
+    let value = eval_material_function(state, name, "normal", ctx).ok()?;
+    let mut normal = vec3_from_value(&value)?.normalize();
+    if normal.length() <= 1.0e-6 {
+        return None;
+    }
+    if normal.dot(geometric_normal) < 0.0 {
+        normal = normal.mul(-1.0);
+    }
+    Some(normal)
+}
+
 fn resolve_dynamic_object(
     state: &EvalState,
     material_def_names: &[String],
@@ -2807,13 +2854,27 @@ fn resolve_pattern_color(params: MaterialParams, local_position: Vec3) -> Spectr
 }
 
 fn make_shading_context(hit: RayHit, local_position: Vec3, view_dir: Vec3) -> Value {
+    let normal = if hit.front_face {
+        hit.normal.normalize()
+    } else {
+        hit.normal.mul(-1.0).normalize()
+    };
+    make_shading_context_with_normal(hit, local_position, view_dir, normal)
+}
+
+fn make_shading_context_with_normal(
+    hit: RayHit,
+    local_position: Vec3,
+    view_dir: Vec3,
+    normal: Vec3,
+) -> Value {
     let mut fields = std::collections::HashMap::new();
     fields.insert("position".to_string(), vec3_value_value(hit.position));
     fields.insert(
         "local_position".to_string(),
         vec3_value_value(local_position),
     );
-    fields.insert("normal".to_string(), vec3_value_value(hit.normal));
+    fields.insert("normal".to_string(), vec3_value_value(normal));
     fields.insert("view_dir".to_string(), vec3_value_value(view_dir));
     fields.insert(
         "front_face".to_string(),
@@ -3872,6 +3933,48 @@ mod tests {
         assert!((sample.f.g - 0.4).abs() < 1.0e-6);
         assert!((sample.pdf - 0.35).abs() < 1.0e-6);
         assert!((sample.next_ior - 1.1).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn resolves_ft_material_dynamic_normal_hook() {
+        let source = r#"
+            material Bumped {
+              model: Lambert;
+              fn normal(ctx) {
+                return normalize(vec3(ctx.normal.x + 0.35, ctx.normal.y, ctx.normal.z));
+              }
+            };
+
+            let scene = Sphere {
+              material: Bumped {}
+            };
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let scene = super::compile_scene(
+            &state,
+            state
+                .bindings
+                .get("scene")
+                .map(|b| &b.value)
+                .expect("scene binding"),
+            super::default_material(),
+        )
+        .expect("scene should compile");
+        let setup = super::build_render_setup(&state, &scene, RenderOptions::default());
+        let hit = super::RayHit {
+            t: 1.0,
+            position: super::Vec3::new(0.0, 0.0, 1.0),
+            normal: super::Vec3::new(0.0, 0.0, 1.0),
+            front_face: true,
+            object_id: 1,
+            material_id: 1,
+        };
+
+        let ctx = super::build_bsdf_context(&setup, hit, super::Vec3::new(0.0, 0.0, 1.0), 1.0);
+        assert!(ctx.normal.x > 0.2);
+        assert!(ctx.normal.z > 0.9);
     }
 
     #[test]

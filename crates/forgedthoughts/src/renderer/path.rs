@@ -47,26 +47,7 @@ pub(super) fn trace_path(
         let hit_point = hit.position;
         let _ = (hit.object_id, hit.material_id);
         let mat = resolve_material_at_hit(setup, hit, dir.mul(-1.0).normalize());
-        let normal = if hit.front_face {
-            hit.normal.normalize()
-        } else {
-            hit.normal.mul(-1.0).normalize()
-        };
-        let wo = dir.mul(-1.0).normalize();
-        let bsdf_ctx = BsdfContextBase {
-            hit,
-            local_position: to_local(
-                hit.position,
-                setup
-                    .object_transforms
-                    .get(hit.object_id as usize)
-                    .copied()
-                    .unwrap_or_else(PrimitiveTransform::identity),
-            ),
-            normal,
-            wo,
-            current_ior: medium.ior,
-        };
+        let bsdf_ctx = build_bsdf_context(setup, hit, dir.mul(-1.0), medium.ior);
         let emission = mat.emission();
         if emission.r > 0.0 || emission.g > 0.0 || emission.b > 0.0 {
             radiance = radiance + (throughput * emission);
@@ -80,7 +61,7 @@ pub(super) fn trace_path(
             break;
         }
         if sample.apply_cos {
-            let cos_theta = normal.dot(sample.wi).max(0.0);
+            let cos_theta = bsdf_ctx.normal.dot(sample.wi).max(0.0);
             if cos_theta <= 0.0 {
                 break;
             }
@@ -113,7 +94,7 @@ pub(super) fn trace_path(
             medium.ior = sample.next_ior.clamp(1.0, 3.0);
             origin = hit_point.add(dir.mul((options.epsilon * 256.0).max(1.0e-3)));
         } else {
-            origin = hit_point.add(normal.mul((options.epsilon * 10.0).max(1.0e-4)));
+            origin = hit_point.add(bsdf_ctx.normal.mul((options.epsilon * 10.0).max(1.0e-4)));
         }
     }
 

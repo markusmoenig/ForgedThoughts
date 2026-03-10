@@ -32,4 +32,6 @@ Current supported pieces include:
 - built-ins such as `mix`, `clamp`, `step`, `smoothstep`, `dot`, `length`, `normalize`, `sin`, `cos`
 - material definitions with local bindings and functions
 
+Material functions can now also drive shading-normal perturbation with `fn normal(ctx) { ... }`, which is useful for procedural bump-style detail without changing the underlying SDF geometry.
+
 The language is intentionally still small. Semantics are being stabilized before a VM/JIT layer is added.

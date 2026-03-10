@@ -34,20 +34,7 @@ pub(super) fn trace_ray_recursive(
     } else {
         hit.normal.mul(-1.0).normalize()
     };
-    let bsdf_ctx = BsdfContextBase {
-        hit,
-        local_position: to_local(
-            hit.position,
-            setup
-                .object_transforms
-                .get(hit.object_id as usize)
-                .copied()
-                .unwrap_or_else(PrimitiveTransform::identity),
-        ),
-        normal,
-        wo: dir.mul(-1.0).normalize(),
-        current_ior: medium.ior,
-    };
+    let bsdf_ctx = build_bsdf_context(setup, hit, dir.mul(-1.0), medium.ior);
     let (transmission, ior, thin, specular_color, base_color, metallic) = match mat {
         MaterialKindRt::Lambert(m) => (0.0, 1.0, false, Spectrum::rgb(0.0, 0.0, 0.0), m.color, 0.0),
         MaterialKindRt::Metal(m) => (0.0, 1.0, false, m.color, m.color, 1.0),

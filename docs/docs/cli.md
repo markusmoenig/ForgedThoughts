@@ -26,7 +26,7 @@ cargo run -p ftc -- ray --scene examples/glass.ft
 Path trace:
 
 ```bash
-cargo run -p ftc -- trace --scene examples/glass.ft --spp 64 --bounces 8
+cargo run -p ftc -- path --scene examples/glass.ft --spp 64 --bounces 8
 ```
 
 Benchmark acceleration backends:
@@ -39,4 +39,4 @@ Notes:
 
 - Output defaults to the input scene path with `.png`
 - `ray` supports progressive tile updates and debug AOVs
-- `trace` supports adaptive sampling controls and preview overwrites
+- `path` supports adaptive sampling controls and preview overwrites
