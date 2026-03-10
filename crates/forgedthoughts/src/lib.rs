@@ -14,9 +14,9 @@ use std::{
 
 pub use ast::{BinaryOp, Expr, Program, Statement, UnaryOp};
 pub use eval::{
-    Binding, EvalError, EvalState, ObjectValue, Value, eval_material_function,
-    eval_material_properties, eval_program, eval_sdf_function, eval_sdf_zero_arg_function,
-    eval_top_level_function,
+    Binding, EvalError, EvalState, ObjectValue, Value, eval_environment_function,
+    eval_material_function, eval_material_properties, eval_program, eval_sdf_function,
+    eval_sdf_zero_arg_function, eval_top_level_function,
 };
 pub use materials::{
     BsdfSample as MaterialBsdfSample, ColorPattern, DielectricMaterial, LambertMaterial, Material,
@@ -323,6 +323,9 @@ fn namespace_statements(statements: Vec<Statement>, alias: &str) -> Vec<Statemen
             Statement::SdfDef(def) => {
                 top_level_names.insert(def.name.clone());
             }
+            Statement::EnvironmentDef(def) => {
+                top_level_names.insert(def.name.clone());
+            }
             Statement::Assign { .. } | Statement::Import { .. } | Statement::Export(_) => {}
         }
     }
@@ -350,8 +353,8 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
         },
         Statement::FunctionDef(mut def) => {
             let mut fn_scope = HashSet::new();
-            if !def.param.is_empty() {
-                fn_scope.insert(def.param.clone());
+            for param in &def.params {
+                fn_scope.insert(param.clone());
             }
             let mut rewritten_body = Vec::with_capacity(def.body.len());
             for stmt in def.body {
@@ -396,9 +399,9 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                             expr: namespace_expr(expr, alias, names, &scope),
                         }
                     }
-                    ast::MaterialStatement::Function { name, param, body } => {
+                    ast::MaterialStatement::Function { name, params, body } => {
                         let mut fn_scope = scope.clone();
-                        if !param.is_empty() {
+                        for param in &params {
                             fn_scope.insert(param.clone());
                         }
                         let mut rewritten_body = Vec::with_capacity(body.len());
@@ -420,7 +423,7 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                             }
                         }
                         let body = rewritten_body;
-                        ast::MaterialStatement::Function { name, param, body }
+                        ast::MaterialStatement::Function { name, params, body }
                     }
                 })
                 .collect();
@@ -442,9 +445,9 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                         name,
                         expr: namespace_expr(expr, alias, names, &scope),
                     },
-                    ast::SdfStatement::Function { name, param, body } => {
+                    ast::SdfStatement::Function { name, params, body } => {
                         let mut fn_scope = scope.clone();
-                        if !param.is_empty() {
+                        for param in &params {
                             fn_scope.insert(param.clone());
                         }
                         let mut rewritten_body = Vec::with_capacity(body.len());
@@ -466,11 +469,65 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                             }
                         }
                         let body = rewritten_body;
-                        ast::SdfStatement::Function { name, param, body }
+                        ast::SdfStatement::Function { name, params, body }
                     }
                 })
                 .collect();
             Statement::SdfDef(def)
+        }
+        Statement::EnvironmentDef(mut def) => {
+            let mut scope = HashSet::new();
+            for stmt in &def.statements {
+                if let ast::MaterialStatement::Binding { name, .. } = stmt {
+                    scope.insert(name.clone());
+                }
+            }
+            def.name = qualify_name(alias, &def.name);
+            def.statements = def
+                .statements
+                .into_iter()
+                .map(|stmt| match stmt {
+                    ast::MaterialStatement::Binding { name, expr } => {
+                        ast::MaterialStatement::Binding {
+                            name,
+                            expr: namespace_expr(expr, alias, names, &scope),
+                        }
+                    }
+                    ast::MaterialStatement::Property { name, expr } => {
+                        ast::MaterialStatement::Property {
+                            name,
+                            expr: namespace_expr(expr, alias, names, &scope),
+                        }
+                    }
+                    ast::MaterialStatement::Function { name, params, body } => {
+                        let mut fn_scope = scope.clone();
+                        for param in &params {
+                            fn_scope.insert(param.clone());
+                        }
+                        let mut rewritten_body = Vec::with_capacity(body.len());
+                        for stmt in body {
+                            match stmt {
+                                ast::MaterialFunctionStatement::Binding { name, expr } => {
+                                    let expr = namespace_expr(expr, alias, names, &fn_scope);
+                                    fn_scope.insert(name.clone());
+                                    rewritten_body.push(ast::MaterialFunctionStatement::Binding {
+                                        name,
+                                        expr,
+                                    });
+                                }
+                                ast::MaterialFunctionStatement::Return { expr } => {
+                                    rewritten_body.push(ast::MaterialFunctionStatement::Return {
+                                        expr: namespace_expr(expr, alias, names, &fn_scope),
+                                    });
+                                }
+                            }
+                        }
+                        let body = rewritten_body;
+                        ast::MaterialStatement::Function { name, params, body }
+                    }
+                })
+                .collect();
+            Statement::EnvironmentDef(def)
         }
         Statement::Import { path, alias } => Statement::Import { path, alias },
         Statement::Export(names) => Statement::Export(names),
@@ -508,6 +565,9 @@ fn filter_exported_statements(
             Statement::SdfDef(def) => {
                 by_name.insert(def.name.clone(), stmt.clone());
             }
+            Statement::EnvironmentDef(def) => {
+                by_name.insert(def.name.clone(), stmt.clone());
+            }
             Statement::Assign { .. } | Statement::Import { .. } | Statement::Export(_) => {}
         }
     }
@@ -535,6 +595,7 @@ fn filter_exported_statements(
             Statement::FunctionDef(def) => keep.contains(&def.name),
             Statement::MaterialDef(def) => keep.contains(&def.name),
             Statement::SdfDef(def) => keep.contains(&def.name),
+            Statement::EnvironmentDef(def) => keep.contains(&def.name),
             Statement::Assign { path, .. } => path.first().is_some_and(|name| keep.contains(name)),
             Statement::Import { .. } | Statement::Export(_) => false,
         })
@@ -548,8 +609,8 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
         Statement::FunctionDef(def) => {
             let mut deps = HashSet::new();
             let mut scope = HashSet::new();
-            if !def.param.is_empty() {
-                scope.insert(def.param.clone());
+            for param in &def.params {
+                scope.insert(param.clone());
             }
             for stmt in &def.body {
                 match stmt {
@@ -578,9 +639,9 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
                     | ast::MaterialStatement::Property { expr, .. } => {
                         deps.extend(expr_dependencies(expr, &scope));
                     }
-                    ast::MaterialStatement::Function { param, body, .. } => {
+                    ast::MaterialStatement::Function { params, body, .. } => {
                         let mut fn_scope = scope.clone();
-                        if !param.is_empty() {
+                        for param in params {
                             fn_scope.insert(param.clone());
                         }
                         for stmt in body {
@@ -612,9 +673,44 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
                     ast::SdfStatement::Binding { expr, .. } => {
                         deps.extend(expr_dependencies(expr, &scope));
                     }
-                    ast::SdfStatement::Function { param, body, .. } => {
+                    ast::SdfStatement::Function { params, body, .. } => {
                         let mut fn_scope = scope.clone();
-                        if !param.is_empty() {
+                        for param in params {
+                            fn_scope.insert(param.clone());
+                        }
+                        for stmt in body {
+                            match stmt {
+                                ast::MaterialFunctionStatement::Binding { name, expr } => {
+                                    deps.extend(expr_dependencies(expr, &fn_scope));
+                                    fn_scope.insert(name.clone());
+                                }
+                                ast::MaterialFunctionStatement::Return { expr } => {
+                                    deps.extend(expr_dependencies(expr, &fn_scope));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            deps
+        }
+        Statement::EnvironmentDef(def) => {
+            let mut deps = HashSet::new();
+            let mut scope = HashSet::new();
+            for stmt in &def.statements {
+                if let ast::MaterialStatement::Binding { name, .. } = stmt {
+                    scope.insert(name.clone());
+                }
+            }
+            for stmt in &def.statements {
+                match stmt {
+                    ast::MaterialStatement::Binding { expr, .. }
+                    | ast::MaterialStatement::Property { expr, .. } => {
+                        deps.extend(expr_dependencies(expr, &scope));
+                    }
+                    ast::MaterialStatement::Function { params, body, .. } => {
+                        let mut fn_scope = scope.clone();
+                        for param in params {
                             fn_scope.insert(param.clone());
                         }
                         for stmt in body {
@@ -759,8 +855,9 @@ fn qualify_name(alias: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoreError, ObjectValue, Value, eval_program, eval_sdf_function, eval_sdf_zero_arg_function,
-        eval_top_level_function, load_and_eval_scene, load_program_with_imports, parse_program,
+        CoreError, ObjectValue, Value, eval_environment_function, eval_program, eval_sdf_function,
+        eval_sdf_zero_arg_function, eval_top_level_function, load_and_eval_scene,
+        load_program_with_imports, parse_program,
     };
     use std::{
         collections::HashMap,
@@ -969,24 +1066,38 @@ mod tests {
               return x * 2.0;
             }
 
+            fn add(a, b) {
+              return a + b;
+            }
+
             fn accent() {
               return #ebc757;
             }
 
             let a = twice(3.0);
+            let c = add(1.5, 2.5);
             let b = accent();
         "#;
         let program = parse_program(source).expect("program should parse");
         let state = eval_program(&program).expect("program should evaluate");
         assert_eq!(
-            eval_top_level_function(&state, "twice", Some(Value::Number(4.0)))
+            eval_top_level_function(&state, "twice", &[Value::Number(4.0)])
                 .expect("function should evaluate"),
             Value::Number(8.0)
+        );
+        assert_eq!(
+            eval_top_level_function(&state, "add", &[Value::Number(2.0), Value::Number(5.0)])
+                .expect("function should evaluate"),
+            Value::Number(7.0)
         );
         let Value::Object(color) = state.bindings.get("b").expect("b binding").value.clone() else {
             panic!("b should be a color");
         };
         assert_eq!(color.fields.get("x"), Some(&Value::Number(235.0 / 255.0)));
+        assert_eq!(
+            state.bindings.get("c").expect("c binding").value,
+            Value::Number(4.0)
+        );
     }
 
     #[test]
@@ -1016,6 +1127,59 @@ mod tests {
             program.statements.first(),
             Some(super::Statement::Export(names)) if names == &vec!["Gold".to_string(), "camera".to_string()]
         ));
+    }
+
+    #[test]
+    fn parses_environment_statement() {
+        let program = parse_program(
+            r#"
+            environment Sky {
+              fn color(dir) {
+                return vec3(0.1, 0.2, 0.3);
+              }
+            };
+            "#,
+        )
+        .expect("parse should work");
+        assert!(matches!(
+            program.statements.first(),
+            Some(super::Statement::EnvironmentDef(def)) if def.name == "Sky"
+        ));
+    }
+
+    #[test]
+    fn evaluates_environment_function() {
+        let source = r#"
+            environment Sky {
+              let zenith = #4d74c7;
+              let horizon = #d8e7ff;
+
+              fn color(dir) {
+                let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+                return mix(horizon, zenith, t);
+              }
+            };
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let value = eval_environment_function(
+            &state,
+            "Sky",
+            "color",
+            &[Value::Object(ObjectValue {
+                type_name: Some("vec3".to_string()),
+                fields: HashMap::from([
+                    ("x".to_string(), Value::Number(0.0)),
+                    ("y".to_string(), Value::Number(1.0)),
+                    ("z".to_string(), Value::Number(0.0)),
+                ]),
+            })],
+        )
+        .expect("environment function should evaluate");
+        let Value::Object(color) = value else {
+            panic!("environment color should be vec3");
+        };
+        assert!(matches!(color.fields.get("z"), Some(Value::Number(v)) if *v > 0.7));
     }
 
     #[test]

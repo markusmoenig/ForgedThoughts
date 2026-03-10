@@ -39,15 +39,15 @@ export default [
   },
   {
     path: '/docs',
-    component: ComponentCreator('/docs', '755'),
+    component: ComponentCreator('/docs', 'a68'),
     routes: [
       {
         path: '/docs',
-        component: ComponentCreator('/docs', '23d'),
+        component: ComponentCreator('/docs', '11f'),
         routes: [
           {
             path: '/docs',
-            component: ComponentCreator('/docs', 'c79'),
+            component: ComponentCreator('/docs', '680'),
             routes: [
               {
                 path: '/docs/',
@@ -70,6 +70,12 @@ export default [
               {
                 path: '/docs/language',
                 component: ComponentCreator('/docs/language', 'fef'),
+                exact: true,
+                sidebar: "mainSidebar"
+              },
+              {
+                path: '/docs/lights',
+                component: ComponentCreator('/docs/lights', '5d7'),
                 exact: true,
                 sidebar: "mainSidebar"
               },

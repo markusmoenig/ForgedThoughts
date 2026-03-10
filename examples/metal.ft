@@ -15,16 +15,19 @@ let camera = Camera {
 
 let key = PointLight {
   position: vec3(2.8, 4.5, 5.5),
-  intensity: vec3(180.0, 165.0, 145.0)
+  color: vec3(1.0, 0.917, 0.806),
+  intensity: 180.0
 };
 
 let rim = PointLight {
   position: vec3(-4.0, 2.2, -1.4),
-  intensity: vec3(52.0, 56.0, 70.0)
+  color: vec3(0.743, 0.8, 1.0),
+  intensity: 70.0
 };
 
 let sky = EnvLight {
-  radiance: vec3(0.26, 0.28, 0.32)
+  color: vec3(0.813, 0.875, 1.0),
+  intensity: 0.32
 };
 
 let gold = Metal {

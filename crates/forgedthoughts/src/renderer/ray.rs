@@ -16,12 +16,12 @@ pub(super) fn trace_ray_recursive(
     let min_t = if depth == 0 {
         0.0
     } else {
-        (ctx.options.epsilon * 96.0).max(5.0e-4)
+        secondary_min_t(ctx.options.epsilon)
     };
     let Some(hit) = raymarch_hit(accel, origin, dir, ctx.options, min_t, ctx.options.max_dist)
     else {
         return apply_medium_attenuation(
-            env_radiance(&setup.path_lights),
+            environment_color(setup, dir).unwrap_or_else(|| env_radiance(&setup.path_lights)),
             medium,
             ctx.options.max_dist,
         );
@@ -57,7 +57,17 @@ pub(super) fn trace_ray_recursive(
 
     let wo = bsdf_ctx.wo;
     let reflect_dir = reflect(dir, normal).normalize();
-    let reflect_origin = hit_point.add(normal.mul((ctx.options.epsilon * 10.0).max(1.0e-4)));
+    let geometric_normal = if hit.front_face {
+        hit.normal.normalize()
+    } else {
+        hit.normal.mul(-1.0).normalize()
+    };
+    let reflect_origin = offset_ray_origin(
+        hit_point,
+        geometric_normal,
+        reflect_dir,
+        ctx.options.epsilon,
+    );
 
     let fresnel = if transmission > 1.0e-4 {
         fresnel_dielectric_scalar(normal.dot(wo).abs(), eta_i, eta_t)
@@ -94,8 +104,12 @@ pub(super) fn trace_ray_recursive(
     if transmission > 1.0e-4
         && let Some(refract_dir) = refract(dir, normal, eta_i / eta_t)
     {
-        let refract_origin =
-            hit_point.add(refract_dir.mul((ctx.options.epsilon * 256.0).max(1.0e-3)));
+        let refract_origin = offset_ray_origin(
+            hit_point,
+            geometric_normal,
+            refract_dir,
+            ctx.options.epsilon * 8.0,
+        );
         let mut next_medium = if thin {
             medium
         } else {

@@ -1,8 +1,8 @@
 use thiserror::Error;
 
 use crate::ast::{
-    BinaryOp, Expr, FunctionDef, MaterialDef, MaterialFunctionStatement, MaterialStatement,
-    Program, SdfDef, SdfStatement, Statement, UnaryOp,
+    BinaryOp, EnvironmentDef, Expr, FunctionDef, MaterialDef, MaterialFunctionStatement,
+    MaterialStatement, Program, SdfDef, SdfStatement, Statement, UnaryOp,
 };
 use crate::lexer::{LexError, Token, TokenKind, tokenize};
 
@@ -57,6 +57,10 @@ impl Parser {
             return self.parse_sdf_def();
         }
 
+        if self.matches_ident_literal("environment") {
+            return self.parse_environment_def();
+        }
+
         if self.matches_kind(TokenKind::Fn) {
             return self.parse_function_def();
         }
@@ -102,13 +106,7 @@ impl Parser {
 
     fn parse_function_def(&mut self) -> Result<Statement, ParseError> {
         let name = self.expect_ident()?;
-        self.expect_kind(TokenKind::LParen, "(")?;
-        let param = if matches!(self.peek_kind(), Some(TokenKind::RParen)) {
-            String::new()
-        } else {
-            self.expect_ident()?
-        };
-        self.expect_kind(TokenKind::RParen, ")")?;
+        let params = self.parse_function_params()?;
         let body = if self.matches_kind(TokenKind::Equal) {
             let expr = self.parse_expr()?;
             self.expect_kind(TokenKind::Semicolon, ";")?;
@@ -116,7 +114,7 @@ impl Parser {
         } else {
             self.parse_material_function_body()?
         };
-        Ok(Statement::FunctionDef(FunctionDef { name, param, body }))
+        Ok(Statement::FunctionDef(FunctionDef { name, params, body }))
     }
 
     fn parse_material_def(&mut self) -> Result<Statement, ParseError> {
@@ -140,13 +138,7 @@ impl Parser {
 
             if self.matches_kind(TokenKind::Fn) {
                 let fn_name = self.expect_ident()?;
-                self.expect_kind(TokenKind::LParen, "(")?;
-                let param = if matches!(self.peek_kind(), Some(TokenKind::RParen)) {
-                    String::new()
-                } else {
-                    self.expect_ident()?
-                };
-                self.expect_kind(TokenKind::RParen, ")")?;
+                let params = self.parse_function_params()?;
                 let body = if self.matches_kind(TokenKind::Equal) {
                     let expr = self.parse_expr()?;
                     self.expect_kind(TokenKind::Semicolon, ";")?;
@@ -156,7 +148,7 @@ impl Parser {
                 };
                 statements.push(MaterialStatement::Function {
                     name: fn_name,
-                    param,
+                    params,
                     body,
                 });
                 continue;
@@ -212,13 +204,7 @@ impl Parser {
 
             if self.matches_kind(TokenKind::Fn) {
                 let fn_name = self.expect_ident()?;
-                self.expect_kind(TokenKind::LParen, "(")?;
-                let param = if matches!(self.peek_kind(), Some(TokenKind::RParen)) {
-                    String::new()
-                } else {
-                    self.expect_ident()?
-                };
-                self.expect_kind(TokenKind::RParen, ")")?;
+                let params = self.parse_function_params()?;
                 let body = if self.matches_kind(TokenKind::Equal) {
                     let expr = self.parse_expr()?;
                     self.expect_kind(TokenKind::Semicolon, ";")?;
@@ -228,7 +214,7 @@ impl Parser {
                 };
                 statements.push(SdfStatement::Function {
                     name: fn_name,
-                    param,
+                    params,
                     body,
                 });
                 continue;
@@ -242,6 +228,55 @@ impl Parser {
 
         self.expect_kind(TokenKind::Semicolon, ";")?;
         Ok(Statement::SdfDef(SdfDef { name, statements }))
+    }
+
+    fn parse_environment_def(&mut self) -> Result<Statement, ParseError> {
+        let name = self.expect_ident()?;
+        self.expect_kind(TokenKind::LBrace, "{")?;
+        let mut statements = Vec::new();
+
+        while !self.matches_kind(TokenKind::RBrace) {
+            if self.matches_kind(TokenKind::Let) {
+                let binding_name = self.expect_ident()?;
+                self.expect_kind(TokenKind::Equal, "=")?;
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                statements.push(MaterialStatement::Binding {
+                    name: binding_name,
+                    expr,
+                });
+                continue;
+            }
+
+            if self.matches_kind(TokenKind::Fn) {
+                let fn_name = self.expect_ident()?;
+                let params = self.parse_function_params()?;
+                let body = if self.matches_kind(TokenKind::Equal) {
+                    let expr = self.parse_expr()?;
+                    self.expect_kind(TokenKind::Semicolon, ";")?;
+                    vec![MaterialFunctionStatement::Return { expr }]
+                } else {
+                    self.parse_material_function_body()?
+                };
+                statements.push(MaterialStatement::Function {
+                    name: fn_name,
+                    params,
+                    body,
+                });
+                continue;
+            }
+
+            return Err(ParseError::Expected {
+                expected: "let or fn",
+                offset: self.current_offset(),
+            });
+        }
+
+        self.expect_kind(TokenKind::Semicolon, ";")?;
+        Ok(Statement::EnvironmentDef(EnvironmentDef {
+            name,
+            statements,
+        }))
     }
 
     fn parse_material_function_body(
@@ -270,6 +305,22 @@ impl Parser {
             });
         }
         Ok(body)
+    }
+
+    fn parse_function_params(&mut self) -> Result<Vec<String>, ParseError> {
+        self.expect_kind(TokenKind::LParen, "(")?;
+        let mut params = Vec::new();
+        if !self.matches_kind(TokenKind::RParen) {
+            loop {
+                params.push(self.expect_ident()?);
+                if self.matches_kind(TokenKind::Comma) {
+                    continue;
+                }
+                self.expect_kind(TokenKind::RParen, ")")?;
+                break;
+            }
+        }
+        Ok(params)
     }
 
     fn parse_binding(&mut self, mutable: bool) -> Result<Statement, ParseError> {

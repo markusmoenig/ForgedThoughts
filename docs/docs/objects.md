@@ -15,6 +15,88 @@ Current built-ins include:
 - `Box`
 - `Cylinder`
 - `Torus`
+- `ExtrudePolygon`
+
+Supported fields today:
+
+`Sphere`
+
+- `radius` or `r`
+- `pos.x`, `pos.y`, `pos.z` or legacy `x`, `y`, `z`
+- `rot.x`, `rot.y`, `rot.z` or legacy `rot_x`, `rot_y`, `rot_z`
+- `material`
+
+```ft
+let ball = Sphere {
+  radius: 1.0,
+  material: Metal {
+    color: #ebc757,
+    roughness: 0.18
+  }
+};
+```
+
+`Box`
+
+- `size: vec3(...)`
+- `pos.*`
+- `rot.*`
+- `material`
+
+```ft
+let block = Box {
+  size: vec3(1.2, 0.8, 1.2)
+};
+```
+
+`Cylinder`
+
+- `radius` or `r`
+- `height` or `h`
+- `pos.*`
+- `rot.*`
+- `material`
+
+```ft
+let column = Cylinder {
+  radius: 0.5,
+  height: 2.4
+};
+```
+
+`Torus`
+
+- `major_radius` or `R`
+- `minor_radius` or `r`
+- `pos.*`
+- `rot.*`
+- `material`
+
+```ft
+let ring = Torus {
+  major_radius: 1.0,
+  minor_radius: 0.2
+};
+```
+
+`ExtrudePolygon`
+
+- `sides` or `n` with a minimum of `3`
+- `radius` or `r`
+- `height` or `h`
+- `pos.*`
+- `rot.*`
+- `material`
+
+This is a regular N-gon extruded along the Y axis.
+
+```ft
+let hex = ExtrudePolygon {
+  sides: 6,
+  radius: 0.8,
+  height: 0.35
+};
+```
 
 Example:
 
@@ -30,6 +112,8 @@ let scene = sphere;
 ```
 
 Transforms are currently driven with nested properties like `pos.x`, `pos.y`, `rot.x`, and `rot.z`.
+
+Rounding is not yet a native primitive field like `Box { rounding: 0.2 }`. Right now rounded or beveled shapes are created with shape operators such as `.round(r)`.
 
 ## CSG and Shape Operators
 

@@ -1,0 +1,54 @@
+let mat = Metal {
+  color: #ebc757,
+  roughness: 0.2
+};
+
+let floor_mat = Lambert {
+  color: vec3(0.82, 0.84, 0.88)
+};
+
+let camera = Camera {
+  origin: vec3(0.0, 1.7, 5.2),
+  target: vec3(0.0, 0.25, 0.0),
+  fov_y: 34.0
+};
+
+let key = PointLight {
+  position: vec3(2.8, 4.0, 4.8),
+  intensity: vec3(140.0, 132.0, 120.0)
+};
+
+let rim = PointLight {
+  position: vec3(-2.4, 2.1, -1.2),
+  intensity: vec3(32.0, 36.0, 42.0)
+};
+
+let sky = EnvLight {
+  radiance: vec3(0.24, 0.27, 0.31)
+};
+
+let render = RenderSettings {
+  width: 800,
+  height: 800,
+  max_steps: 320,
+  max_dist: 70.0,
+  epsilon: 0.00018,
+  accel: Bvh{}
+};
+
+var floor = Box {
+  size: vec3(8.0, 0.5, 8.0),
+  material: floor_mat
+};
+floor.pos.y = -1.15;
+
+var hex = ExtrudePolygon {
+  sides: 6,
+  radius: 0.9,
+  height: 0.45,
+  material: mat
+};
+hex.rot.y = 30.0;
+hex.pos.y = 0.1;
+
+let scene = floor + hex;

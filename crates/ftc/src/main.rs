@@ -1,8 +1,10 @@
 use std::{
     ffi::OsString,
+    fs,
     path::{Path, PathBuf},
     process::ExitCode,
-    time::Instant,
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -36,6 +38,10 @@ enum Command {
         /// Path to a .ft scene file
         #[arg(short, long)]
         scene: Option<PathBuf>,
+
+        /// Re-run when the scene file changes
+        #[arg(long)]
+        watch: bool,
     },
     /// Render a fast recursive raytraced PNG from a scene
     Ray {
@@ -67,9 +73,17 @@ enum Command {
         #[arg(long, default_value_t = 64)]
         tile_size: u32,
 
+        /// Camera samples per pixel for anti-aliasing
+        #[arg(long, default_value_t = 1)]
+        aa: u32,
+
         /// Debug AOV output (replaces beauty)
         #[arg(long, value_enum)]
         debug_aov: Option<CliRayDebugAov>,
+
+        /// Re-render when the scene file changes
+        #[arg(long)]
+        watch: bool,
     },
     /// Render a fast shaded preview PNG from a scene
     Render {
@@ -96,6 +110,14 @@ enum Command {
         /// Tile size for progressive preview updates
         #[arg(long, default_value_t = 64)]
         tile_size: u32,
+
+        /// Camera samples per pixel for anti-aliasing
+        #[arg(long, default_value_t = 4)]
+        aa: u32,
+
+        /// Re-render when the scene file changes
+        #[arg(long)]
+        watch: bool,
     },
     /// Path trace a scene to PNG
     Path {
@@ -138,6 +160,10 @@ enum Command {
         /// Save preview PNG every N samples
         #[arg(long, default_value_t = 5)]
         preview_every: u32,
+
+        /// Re-render when the scene file changes
+        #[arg(long)]
+        watch: bool,
     },
     /// Benchmark all acceleration backends on the same scene
     Bench {
@@ -237,7 +263,7 @@ fn main() -> ExitCode {
 
     let cfg = AppConfig::from_env();
     match cli.command {
-        Command::Check { scene } => run_check(scene, &cfg),
+        Command::Check { scene, watch } => run_check(scene, watch, &cfg),
         Command::Render {
             scene,
             output,
@@ -245,13 +271,19 @@ fn main() -> ExitCode {
             height,
             accel,
             tile_size,
+            aa,
+            watch,
         } => run_render(
-            scene,
-            output,
-            width,
-            height,
-            accel.map(Into::into),
-            tile_size,
+            RenderParams {
+                scene,
+                output,
+                width,
+                height,
+                accel: accel.map(Into::into),
+                tile_size,
+                aa,
+                watch,
+            },
             &cfg,
         ),
         Command::Path {
@@ -265,6 +297,7 @@ fn main() -> ExitCode {
             min_spp,
             noise_threshold,
             preview_every,
+            watch,
         } => run_pathtrace(
             PathtraceParams {
                 scene,
@@ -277,6 +310,7 @@ fn main() -> ExitCode {
                 min_spp,
                 noise_threshold,
                 preview_every,
+                watch,
             },
             &cfg,
         ),
@@ -288,7 +322,9 @@ fn main() -> ExitCode {
             accel,
             depth,
             tile_size,
+            aa,
             debug_aov,
+            watch,
         } => run_ray(
             RayParams {
                 scene,
@@ -298,7 +334,9 @@ fn main() -> ExitCode {
                 accel: accel.map(Into::into),
                 depth,
                 tile_size,
+                aa,
                 debug_aov: debug_aov.map(Into::into),
+                watch,
             },
             &cfg,
         ),
@@ -313,131 +351,119 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_check(scene: Option<PathBuf>, cfg: &AppConfig) -> ExitCode {
-    match resolve_scene_path(scene, cfg) {
-        Ok(scene_path) => match load_and_eval_scene(&scene_path) {
-            Ok(state) => {
-                info!(
-                    scene = %scene_path.display(),
-                    bindings = state.bindings.len(),
-                    "scene parsed and evaluated"
-                );
-                info!("check completed");
-                ExitCode::SUCCESS
-            }
-            Err(err) => {
-                error!(scene = %scene_path.display(), "{err}");
-                ExitCode::from(3)
-            }
-        },
-        Err(CoreError::MissingSceneInput) => {
-            error!("missing scene input; pass --scene <path> or set FORGEDTHOUGHTS_SCENE");
-            ExitCode::from(2)
+fn run_check(scene: Option<PathBuf>, watch: bool, cfg: &AppConfig) -> ExitCode {
+    run_with_watch(scene, watch, cfg, run_check_once)
+}
+
+fn run_check_once(scene_path: &Path) -> ExitCode {
+    match load_and_eval_scene(scene_path) {
+        Ok(state) => {
+            info!(
+                scene = %scene_path.display(),
+                bindings = state.bindings.len(),
+                "scene parsed and evaluated"
+            );
+            info!("check completed");
+            ExitCode::SUCCESS
         }
         Err(err) => {
-            error!("{err}");
+            error!(scene = %scene_path.display(), "{err}");
             ExitCode::from(3)
         }
     }
 }
 
-fn run_render(
-    scene: Option<PathBuf>,
-    output: Option<PathBuf>,
-    width: Option<u32>,
-    height: Option<u32>,
-    accel: Option<AccelMode>,
-    tile_size: u32,
-    cfg: &AppConfig,
-) -> ExitCode {
-    let total_start = Instant::now();
-    match resolve_scene_path(scene, cfg) {
-        Ok(scene_path) => {
-            let parse_eval_start = Instant::now();
-            match load_and_eval_scene(&scene_path) {
-                Ok(state) => {
-                    let scene_settings = extract_scene_render_settings(&state);
-                    let options = merged_render_options(&scene_settings, width, height);
-                    let accel = accel.or(scene_settings.accel).unwrap_or(AccelMode::Naive);
-                    let parse_eval_elapsed = parse_eval_start.elapsed();
-                    info!(
-                        scene = %scene_path.display(),
-                        bindings = state.bindings.len(),
-                        "scene parsed and evaluated"
-                    );
+fn run_render(params: RenderParams, cfg: &AppConfig) -> ExitCode {
+    run_with_watch(params.scene.clone(), params.watch, cfg, |scene_path| {
+        run_render_once(scene_path, &params)
+    })
+}
 
-                    let output_path = output.unwrap_or_else(|| default_output_path(&scene_path));
-                    let tile_size = tile_size.max(8);
-                    let tiles_x = options.width.div_ceil(tile_size);
-                    let tiles_y = options.height.div_ceil(tile_size);
-                    let tiles_total = u64::from(tiles_x) * u64::from(tiles_y);
-                    let progress = ProgressBar::new(tiles_total.max(1));
-                    let style = ProgressStyle::with_template(
-                        "[{elapsed_precise}] {wide_bar} {pos}/{len} tiles {msg}",
-                    )
-                    .unwrap_or_else(|_| ProgressStyle::default_bar())
-                    .progress_chars("=>-");
-                    progress.set_style(style);
-                    let render_start = Instant::now();
-                    let image = match render_preview_progressive_with_accel(
-                        &state,
-                        options,
-                        accel,
-                        tile_size,
-                        |step, image| {
-                            progress.set_position(u64::from(step.tiles_done));
-                            progress.set_message(format!("{} ms", step.elapsed_ms));
-                            image.save(&output_path)?;
-                            Ok(())
-                        },
-                    ) {
-                        Ok(image) => image,
-                        Err(err) => {
-                            progress.abandon_with_message("failed");
-                            error!(output = %output_path.display(), "{err}");
-                            return ExitCode::from(4);
-                        }
-                    };
-                    if let Err(err) = image.save(&output_path) {
-                        progress.abandon_with_message("failed");
-                        error!(output = %output_path.display(), "{err}");
-                        return ExitCode::from(4);
-                    }
-                    progress.finish_with_message("done");
-                    let render_elapsed = render_start.elapsed();
-                    let total_elapsed = total_start.elapsed();
-                    let megapixels =
-                        (f64::from(options.width) * f64::from(options.height)) / 1_000_000.0;
-                    let mpix_per_sec = megapixels / render_elapsed.as_secs_f64().max(f64::EPSILON);
-                    info!(
-                        output = %output_path.display(),
-                        width = options.width,
-                        height = options.height,
-                        accel = ?accel,
-                        tile_size,
-                        "preview rendered"
-                    );
-                    info!(
-                        parse_eval_ms = parse_eval_elapsed.as_millis(),
-                        render_ms = render_elapsed.as_millis(),
-                        total_ms = total_elapsed.as_millis(),
-                        mpix_per_sec,
-                        "benchmark"
-                    );
-                    ExitCode::SUCCESS
-                }
+fn run_render_once(scene_path: &Path, params: &RenderParams) -> ExitCode {
+    let total_start = Instant::now();
+    let parse_eval_start = Instant::now();
+    match load_and_eval_scene(scene_path) {
+        Ok(state) => {
+            let scene_settings = extract_scene_render_settings(&state);
+            let options = merged_render_options(&scene_settings, params.width, params.height);
+            let accel = params
+                .accel
+                .or(scene_settings.accel)
+                .unwrap_or(AccelMode::Naive);
+            let parse_eval_elapsed = parse_eval_start.elapsed();
+            info!(
+                scene = %scene_path.display(),
+                bindings = state.bindings.len(),
+                "scene parsed and evaluated"
+            );
+
+            let output_path = params
+                .output
+                .as_deref()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| default_output_path(scene_path));
+            let tile_size = params.tile_size.max(8);
+            let tiles_x = options.width.div_ceil(tile_size);
+            let tiles_y = options.height.div_ceil(tile_size);
+            let tiles_total = u64::from(tiles_x) * u64::from(tiles_y);
+            let progress = ProgressBar::new(tiles_total.max(1));
+            let style = ProgressStyle::with_template(
+                "[{elapsed_precise}] {wide_bar} {pos}/{len} tiles {msg}",
+            )
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("=>-");
+            progress.set_style(style);
+            let render_start = Instant::now();
+            let image = match render_preview_progressive_with_accel(
+                &state,
+                options,
+                accel,
+                tile_size,
+                params.aa.max(1),
+                |step, image| {
+                    progress.set_position(u64::from(step.tiles_done));
+                    progress.set_message(format!("{} ms", step.elapsed_ms));
+                    image.save(&output_path)?;
+                    Ok(())
+                },
+            ) {
+                Ok(image) => image,
                 Err(err) => {
-                    error!(scene = %scene_path.display(), "{err}");
-                    ExitCode::from(3)
+                    progress.abandon_with_message("failed");
+                    error!(output = %output_path.display(), "{err}");
+                    return ExitCode::from(4);
                 }
+            };
+            if let Err(err) = image.save(&output_path) {
+                progress.abandon_with_message("failed");
+                error!(output = %output_path.display(), "{err}");
+                return ExitCode::from(4);
             }
-        }
-        Err(CoreError::MissingSceneInput) => {
-            error!("missing scene input; pass --scene <path> or set FORGEDTHOUGHTS_SCENE");
-            ExitCode::from(2)
+            progress.finish_with_message("done");
+            let render_elapsed = render_start.elapsed();
+            let total_elapsed = total_start.elapsed();
+            let megapixels = (f64::from(options.width) * f64::from(options.height)) / 1_000_000.0;
+            let mpix_per_sec = megapixels / render_elapsed.as_secs_f64().max(f64::EPSILON);
+            info!(
+                output = %output_path.display(),
+                width = options.width,
+                height = options.height,
+                accel = ?accel,
+                tile_size,
+                aa = params.aa.max(1),
+                "preview rendered"
+            );
+            info!(
+                parse_eval_ms = parse_eval_elapsed.as_millis(),
+                render_ms = render_elapsed.as_millis(),
+                total_ms = total_elapsed.as_millis(),
+                mpix_per_sec,
+                "benchmark"
+            );
+            ExitCode::SUCCESS
         }
         Err(err) => {
-            error!("{err}");
+            error!(scene = %scene_path.display(), "{err}");
             ExitCode::from(3)
         }
     }
@@ -568,238 +594,223 @@ fn run_list(kind: ListCommand) -> ExitCode {
 }
 
 fn run_pathtrace(params: PathtraceParams, cfg: &AppConfig) -> ExitCode {
-    let PathtraceParams {
-        scene,
-        output,
-        width,
-        height,
-        accel,
-        spp,
-        bounces,
-        min_spp,
-        noise_threshold,
-        preview_every,
-    } = params;
-    let total_start = Instant::now();
-    match resolve_scene_path(scene, cfg) {
-        Ok(scene_path) => {
-            let parse_eval_start = Instant::now();
-            match load_and_eval_scene(&scene_path) {
-                Ok(state) => {
-                    let scene_settings = extract_scene_render_settings(&state);
-                    let options = merged_render_options(&scene_settings, width, height);
-                    let accel = accel.or(scene_settings.accel).unwrap_or(AccelMode::Naive);
-                    let spp = spp.or(scene_settings.trace_spp).unwrap_or(16).max(1);
-                    let bounces = bounces.or(scene_settings.trace_bounces).unwrap_or(4).max(1);
-                    let min_spp = min_spp
-                        .or(scene_settings.trace_min_spp)
-                        .unwrap_or(8)
-                        .max(1)
-                        .min(spp);
-                    let noise_threshold = noise_threshold
-                        .or(scene_settings.trace_noise_threshold)
-                        .unwrap_or(0.03)
-                        .max(0.0);
-                    let preview_every = preview_every.max(1);
-                    let parse_eval_elapsed = parse_eval_start.elapsed();
-                    let output_path = output.unwrap_or_else(|| default_output_path(&scene_path));
-                    let progress = ProgressBar::new(u64::from(spp));
-                    let style = ProgressStyle::with_template(
-                        "[{elapsed_precise}] {wide_bar} {pos}/{len} spp {msg}",
-                    )
-                    .unwrap_or_else(|_| ProgressStyle::default_bar())
-                    .progress_chars("=>-");
-                    progress.set_style(style);
+    run_with_watch(params.scene.clone(), params.watch, cfg, |scene_path| {
+        run_pathtrace_once(scene_path, &params)
+    })
+}
 
-                    let render_start = Instant::now();
-                    let image = match render_pathtrace_progressive_with_accel(
-                        &state,
-                        options,
-                        accel,
-                        PathtraceSettings {
-                            spp,
-                            max_bounces: bounces,
-                            preview_every,
-                            min_spp,
-                            noise_threshold,
-                        },
-                        |step, image| {
-                            let elapsed_s = (step.elapsed_ms as f64) / 1000.0;
-                            let spp_per_sec =
-                                f64::from(step.samples_done) / elapsed_s.max(f64::EPSILON);
-                            progress.set_position(u64::from(step.samples_done));
-                            progress.set_message(format!(
-                                "{spp_per_sec:.2} spp/s, active {}",
-                                step.active_pixels
-                            ));
-                            if step.samples_done % preview_every == 0
-                                || step.samples_done == step.samples_total
-                            {
-                                image.save(&output_path)?;
-                            }
-                            Ok(())
-                        },
-                    ) {
-                        Ok(image) => image,
-                        Err(err) => {
-                            progress.abandon_with_message("failed");
-                            error!(output = %output_path.display(), "{err}");
-                            return ExitCode::from(4);
-                        }
-                    };
-                    if let Err(err) = image.save(&output_path) {
-                        progress.abandon_with_message("failed");
-                        error!(output = %output_path.display(), "{err}");
-                        return ExitCode::from(4);
+fn run_pathtrace_once(scene_path: &Path, params: &PathtraceParams) -> ExitCode {
+    let total_start = Instant::now();
+    let parse_eval_start = Instant::now();
+    match load_and_eval_scene(scene_path) {
+        Ok(state) => {
+            let scene_settings = extract_scene_render_settings(&state);
+            let options = merged_render_options(&scene_settings, params.width, params.height);
+            let accel = params
+                .accel
+                .or(scene_settings.accel)
+                .unwrap_or(AccelMode::Naive);
+            let spp = params.spp.or(scene_settings.trace_spp).unwrap_or(16).max(1);
+            let bounces = params
+                .bounces
+                .or(scene_settings.trace_bounces)
+                .unwrap_or(4)
+                .max(1);
+            let min_spp = params
+                .min_spp
+                .or(scene_settings.trace_min_spp)
+                .unwrap_or(8)
+                .max(1)
+                .min(spp);
+            let noise_threshold = params
+                .noise_threshold
+                .or(scene_settings.trace_noise_threshold)
+                .unwrap_or(0.03)
+                .max(0.0);
+            let preview_every = params.preview_every.max(1);
+            let parse_eval_elapsed = parse_eval_start.elapsed();
+            let output_path = params
+                .output
+                .as_deref()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| default_output_path(scene_path));
+            let progress = ProgressBar::new(u64::from(spp));
+            let style = ProgressStyle::with_template(
+                "[{elapsed_precise}] {wide_bar} {pos}/{len} spp {msg}",
+            )
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("=>-");
+            progress.set_style(style);
+
+            let render_start = Instant::now();
+            let image = match render_pathtrace_progressive_with_accel(
+                &state,
+                options,
+                accel,
+                PathtraceSettings {
+                    spp,
+                    max_bounces: bounces,
+                    preview_every,
+                    min_spp,
+                    noise_threshold,
+                },
+                |step, image| {
+                    let elapsed_s = (step.elapsed_ms as f64) / 1000.0;
+                    let spp_per_sec = f64::from(step.samples_done) / elapsed_s.max(f64::EPSILON);
+                    progress.set_position(u64::from(step.samples_done));
+                    progress.set_message(format!(
+                        "{spp_per_sec:.2} spp/s, active {}",
+                        step.active_pixels
+                    ));
+                    if step.samples_done % preview_every == 0
+                        || step.samples_done == step.samples_total
+                    {
+                        image.save(&output_path)?;
                     }
-                    progress.finish_with_message("done");
-                    let render_elapsed = render_start.elapsed();
-                    let total_elapsed = total_start.elapsed();
-                    let megapixels =
-                        (f64::from(options.width) * f64::from(options.height)) / 1_000_000.0;
-                    let secs = render_elapsed.as_secs_f64().max(f64::EPSILON);
-                    let mpix_per_sec = megapixels / secs;
-                    let spp_per_sec = f64::from(spp) / secs;
-                    let avg_ms_per_sample = (secs * 1000.0) / f64::from(spp);
-                    info!(
-                        output = %output_path.display(),
-                        width = options.width,
-                        height = options.height,
-                        accel = ?accel,
-                        spp,
-                        bounces,
-                        min_spp,
-                        noise_threshold,
-                        "pathtrace rendered"
-                    );
-                    info!(
-                        parse_eval_ms = parse_eval_elapsed.as_millis(),
-                        render_ms = render_elapsed.as_millis(),
-                        total_ms = total_elapsed.as_millis(),
-                        mpix_per_sec,
-                        spp_per_sec,
-                        avg_ms_per_sample,
-                        "benchmark"
-                    );
-                    ExitCode::SUCCESS
-                }
+                    Ok(())
+                },
+            ) {
+                Ok(image) => image,
                 Err(err) => {
-                    error!(scene = %scene_path.display(), "{err}");
-                    ExitCode::from(3)
+                    progress.abandon_with_message("failed");
+                    error!(output = %output_path.display(), "{err}");
+                    return ExitCode::from(4);
                 }
+            };
+            if let Err(err) = image.save(&output_path) {
+                progress.abandon_with_message("failed");
+                error!(output = %output_path.display(), "{err}");
+                return ExitCode::from(4);
             }
-        }
-        Err(CoreError::MissingSceneInput) => {
-            error!("missing scene input; pass --scene <path> or set FORGEDTHOUGHTS_SCENE");
-            ExitCode::from(2)
+            progress.finish_with_message("done");
+            let render_elapsed = render_start.elapsed();
+            let total_elapsed = total_start.elapsed();
+            let megapixels = (f64::from(options.width) * f64::from(options.height)) / 1_000_000.0;
+            let secs = render_elapsed.as_secs_f64().max(f64::EPSILON);
+            let mpix_per_sec = megapixels / secs;
+            let spp_per_sec = f64::from(spp) / secs;
+            let avg_ms_per_sample = (secs * 1000.0) / f64::from(spp);
+            info!(
+                output = %output_path.display(),
+                width = options.width,
+                height = options.height,
+                accel = ?accel,
+                spp,
+                bounces,
+                min_spp,
+                noise_threshold,
+                "pathtrace rendered"
+            );
+            info!(
+                parse_eval_ms = parse_eval_elapsed.as_millis(),
+                render_ms = render_elapsed.as_millis(),
+                total_ms = total_elapsed.as_millis(),
+                mpix_per_sec,
+                spp_per_sec,
+                avg_ms_per_sample,
+                "benchmark"
+            );
+            ExitCode::SUCCESS
         }
         Err(err) => {
-            error!("{err}");
+            error!(scene = %scene_path.display(), "{err}");
             ExitCode::from(3)
         }
     }
 }
 
 fn run_ray(params: RayParams, cfg: &AppConfig) -> ExitCode {
-    let RayParams {
-        scene,
-        output,
-        width,
-        height,
-        accel,
-        depth,
-        tile_size,
-        debug_aov,
-    } = params;
-    let total_start = Instant::now();
-    match resolve_scene_path(scene, cfg) {
-        Ok(scene_path) => {
-            let parse_eval_start = Instant::now();
-            match load_and_eval_scene(&scene_path) {
-                Ok(state) => {
-                    let scene_settings = extract_scene_render_settings(&state);
-                    let options = merged_render_options(&scene_settings, width, height);
-                    let accel = accel.or(scene_settings.accel).unwrap_or(AccelMode::Naive);
-                    let parse_eval_elapsed = parse_eval_start.elapsed();
-                    let output_path = output.unwrap_or_else(|| default_output_path(&scene_path));
-                    let tile_size = tile_size.max(8);
-                    let tiles_x = options.width.div_ceil(tile_size);
-                    let tiles_y = options.height.div_ceil(tile_size);
-                    let tiles_total = u64::from(tiles_x) * u64::from(tiles_y);
-                    let progress = ProgressBar::new(tiles_total.max(1));
-                    let style = ProgressStyle::with_template(
-                        "[{elapsed_precise}] {wide_bar} {pos}/{len} tiles {msg}",
-                    )
-                    .unwrap_or_else(|_| ProgressStyle::default_bar())
-                    .progress_chars("=>-");
-                    progress.set_style(style);
+    run_with_watch(params.scene.clone(), params.watch, cfg, |scene_path| {
+        run_ray_once(scene_path, &params)
+    })
+}
 
-                    let render_start = Instant::now();
-                    let image = match render_ray_progressive_with_accel(
-                        &state,
-                        options,
-                        accel,
-                        RaySettings {
-                            max_depth: depth.max(1),
-                            tile_size,
-                            debug_aov,
-                        },
-                        |step, image| {
-                            progress.set_position(u64::from(step.tiles_done));
-                            progress.set_message(format!("{} ms", step.elapsed_ms));
-                            image.save(&output_path)?;
-                            Ok(())
-                        },
-                    ) {
-                        Ok(image) => image,
-                        Err(err) => {
-                            progress.abandon_with_message("failed");
-                            error!(output = %output_path.display(), "{err}");
-                            return ExitCode::from(4);
-                        }
-                    };
-                    if let Err(err) = image.save(&output_path) {
-                        progress.abandon_with_message("failed");
-                        error!(output = %output_path.display(), "{err}");
-                        return ExitCode::from(4);
-                    }
-                    progress.finish_with_message("done");
-                    let render_elapsed = render_start.elapsed();
-                    let total_elapsed = total_start.elapsed();
-                    let megapixels =
-                        (f64::from(options.width) * f64::from(options.height)) / 1_000_000.0;
-                    let mpix_per_sec = megapixels / render_elapsed.as_secs_f64().max(f64::EPSILON);
-                    info!(
-                        output = %output_path.display(),
-                        width = options.width,
-                        height = options.height,
-                        accel = ?accel,
-                        depth = depth.max(1),
-                        tile_size,
-                        debug_aov = ?debug_aov,
-                        "ray rendered"
-                    );
-                    info!(
-                        parse_eval_ms = parse_eval_elapsed.as_millis(),
-                        render_ms = render_elapsed.as_millis(),
-                        total_ms = total_elapsed.as_millis(),
-                        mpix_per_sec,
-                        "benchmark"
-                    );
-                    ExitCode::SUCCESS
-                }
+fn run_ray_once(scene_path: &Path, params: &RayParams) -> ExitCode {
+    let total_start = Instant::now();
+    let parse_eval_start = Instant::now();
+    match load_and_eval_scene(scene_path) {
+        Ok(state) => {
+            let scene_settings = extract_scene_render_settings(&state);
+            let options = merged_render_options(&scene_settings, params.width, params.height);
+            let accel = params
+                .accel
+                .or(scene_settings.accel)
+                .unwrap_or(AccelMode::Naive);
+            let parse_eval_elapsed = parse_eval_start.elapsed();
+            let output_path = params
+                .output
+                .as_deref()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| default_output_path(scene_path));
+            let tile_size = params.tile_size.max(8);
+            let tiles_x = options.width.div_ceil(tile_size);
+            let tiles_y = options.height.div_ceil(tile_size);
+            let tiles_total = u64::from(tiles_x) * u64::from(tiles_y);
+            let progress = ProgressBar::new(tiles_total.max(1));
+            let style = ProgressStyle::with_template(
+                "[{elapsed_precise}] {wide_bar} {pos}/{len} tiles {msg}",
+            )
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("=>-");
+            progress.set_style(style);
+
+            let render_start = Instant::now();
+            let image = match render_ray_progressive_with_accel(
+                &state,
+                options,
+                accel,
+                RaySettings {
+                    max_depth: params.depth.max(1),
+                    tile_size,
+                    aa_samples: params.aa.max(1),
+                    debug_aov: params.debug_aov,
+                },
+                |step, image| {
+                    progress.set_position(u64::from(step.tiles_done));
+                    progress.set_message(format!("{} ms", step.elapsed_ms));
+                    image.save(&output_path)?;
+                    Ok(())
+                },
+            ) {
+                Ok(image) => image,
                 Err(err) => {
-                    error!(scene = %scene_path.display(), "{err}");
-                    ExitCode::from(3)
+                    progress.abandon_with_message("failed");
+                    error!(output = %output_path.display(), "{err}");
+                    return ExitCode::from(4);
                 }
+            };
+            if let Err(err) = image.save(&output_path) {
+                progress.abandon_with_message("failed");
+                error!(output = %output_path.display(), "{err}");
+                return ExitCode::from(4);
             }
-        }
-        Err(CoreError::MissingSceneInput) => {
-            error!("missing scene input; pass --scene <path> or set FORGEDTHOUGHTS_SCENE");
-            ExitCode::from(2)
+            progress.finish_with_message("done");
+            let render_elapsed = render_start.elapsed();
+            let total_elapsed = total_start.elapsed();
+            let megapixels = (f64::from(options.width) * f64::from(options.height)) / 1_000_000.0;
+            let mpix_per_sec = megapixels / render_elapsed.as_secs_f64().max(f64::EPSILON);
+            info!(
+                output = %output_path.display(),
+                width = options.width,
+                height = options.height,
+                accel = ?accel,
+                depth = params.depth.max(1),
+                tile_size,
+                aa = params.aa.max(1),
+                debug_aov = ?params.debug_aov,
+                "ray rendered"
+            );
+            info!(
+                parse_eval_ms = parse_eval_elapsed.as_millis(),
+                render_ms = render_elapsed.as_millis(),
+                total_ms = total_elapsed.as_millis(),
+                mpix_per_sec,
+                "benchmark"
+            );
+            ExitCode::SUCCESS
         }
         Err(err) => {
-            error!("{err}");
+            error!(scene = %scene_path.display(), "{err}");
             ExitCode::from(3)
         }
     }
@@ -816,6 +827,18 @@ struct PathtraceParams {
     min_spp: Option<u32>,
     noise_threshold: Option<f32>,
     preview_every: u32,
+    watch: bool,
+}
+
+struct RenderParams {
+    scene: Option<PathBuf>,
+    output: Option<PathBuf>,
+    width: Option<u32>,
+    height: Option<u32>,
+    accel: Option<AccelMode>,
+    tile_size: u32,
+    aa: u32,
+    watch: bool,
 }
 
 struct RayParams {
@@ -826,7 +849,58 @@ struct RayParams {
     accel: Option<AccelMode>,
     depth: u32,
     tile_size: u32,
+    aa: u32,
     debug_aov: Option<RayDebugAov>,
+    watch: bool,
+}
+
+fn run_with_watch(
+    scene: Option<PathBuf>,
+    watch: bool,
+    cfg: &AppConfig,
+    mut action: impl FnMut(&Path) -> ExitCode,
+) -> ExitCode {
+    match resolve_scene_path(scene, cfg) {
+        Ok(scene_path) => {
+            if !watch {
+                return action(&scene_path);
+            }
+
+            let mut last_stamp = file_stamp(&scene_path);
+            info!(scene = %scene_path.display(), "watch mode active");
+            let _ = action(&scene_path);
+
+            loop {
+                thread::sleep(Duration::from_millis(250));
+                let current_stamp = file_stamp(&scene_path);
+                if current_stamp.is_some() && current_stamp != last_stamp {
+                    last_stamp = current_stamp;
+                    info!(scene = %scene_path.display(), "change detected, rerunning");
+                    let _ = action(&scene_path);
+                }
+            }
+        }
+        Err(CoreError::MissingSceneInput) => {
+            error!("missing scene input; pass --scene <path> or set FORGEDTHOUGHTS_SCENE");
+            ExitCode::from(2)
+        }
+        Err(err) => {
+            error!("{err}");
+            ExitCode::from(3)
+        }
+    }
+}
+
+fn file_stamp(path: &Path) -> Option<(u64, u128)> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    Some((metadata.len(), modified_millis(modified)))
+}
+
+fn modified_millis(time: SystemTime) -> u128 {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 fn merged_render_options(

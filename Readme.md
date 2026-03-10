@@ -42,6 +42,12 @@ Ray tracer:
 ftc ray --scene examples/glass.ft
 ```
 
+Ray tracer with supersampling:
+
+```bash
+ftc ray --scene examples/glass.ft --aa 4
+```
+
 Path trace:
 
 ```bash
@@ -52,6 +58,18 @@ Shaded preview render:
 
 ```bash
 ftc render --scene examples/mvp.ft
+```
+
+Preview with smoother edges:
+
+```bash
+ftc render --scene examples/mvp.ft --aa 4
+```
+
+Watch and re-render on save:
+
+```bash
+ftc render --scene examples/mvp.ft --watch
 ```
 
 Acceleration benchmark:
@@ -68,6 +86,7 @@ Outputs default to the scene path with `.png` extension, so `examples/glass.ft` 
 
 - Classical Whitted-style CPU ray tracer for quick iteration
 - Progressive tiled updates
+- Supports `--aa` for camera supersampling
 - Supports debug AOVs with `--debug-aov`
 - Uses the shared material system, but still has some hardcoded reflection/refraction logic internally
 
@@ -76,6 +95,8 @@ Outputs default to the scene path with `.png` extension, so `examples/glass.ft` 
 - Fast shaded preview renderer
 - Uses material shading and direct light response
 - Skips shadow tracing and recursive effects for speed
+- Supports `--aa` for camera supersampling
+- Supports `--watch` for iterative modeling loops
 
 `path`
 
@@ -116,6 +137,7 @@ Supported language pieces today include:
 - scalar and `vec3` math
 - hex color literals like `#ff0000` and `#f00`
 - material definitions with local bindings and functions
+- environment definitions with local bindings and functions
 - custom SDF definitions with `sdf Name { fn distance(p) { ... } }`
 
 Example Forge material:
@@ -156,9 +178,13 @@ fn accent() {
   return #ebc757;
 }
 
+fn tint(base, amount) {
+  return mix(base, vec3(1.0), amount);
+}
+
 fn make_gold() {
   return Metal {
-    color: accent(),
+    color: tint(accent(), 0.12),
     roughness: 0.18
   };
 }
@@ -200,6 +226,22 @@ let scene = SoftBlob {};
 ```
 
 `fn bounds()` is optional, but it matters for performance. Without it, custom SDFs fall back to a very conservative bound and acceleration quality drops sharply.
+
+Example procedural environment:
+
+```ft
+environment Sky {
+  let zenith = #4d74c7;
+  let horizon = #d8e7ff;
+
+  fn color(dir) {
+    let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    return mix(horizon, zenith, t);
+  }
+};
+```
+
+`color(dir)` is used as the visible background on misses in `render`, `ray`, and `path`.
 
 ## Imports
 

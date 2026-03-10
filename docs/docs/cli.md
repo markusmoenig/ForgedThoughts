@@ -25,10 +25,28 @@ Shaded preview render:
 ftc render --scene examples/mvp.ft
 ```
 
+Higher-quality preview edges:
+
+```bash
+ftc render --scene examples/mvp.ft --aa 4
+```
+
+Watch and re-render on save:
+
+```bash
+ftc render --scene examples/mvp.ft --watch
+```
+
 Ray tracer:
 
 ```bash
 ftc ray --scene examples/glass.ft
+```
+
+Ray tracer with supersampling:
+
+```bash
+ftc ray --scene examples/glass.ft --aa 4
 ```
 
 Path trace:
@@ -47,5 +65,8 @@ Notes:
 
 - Output defaults to the input scene path with `.png`
 - `render` is a fast shaded preview path with materials but without shadow tracing
+- `render` and `ray` support `--aa` for camera supersampling
 - `ray` supports progressive tile updates and debug AOVs
 - `path` supports adaptive sampling controls and preview overwrites
+- `check`, `render`, `ray`, and `path` support `--watch` to rerun when the scene file changes
+- current `--watch` tracks the scene file itself, not imported files yet

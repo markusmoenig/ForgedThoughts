@@ -23,9 +23,14 @@ pub(super) fn trace_path(
     let mut medium = MediumState::air();
 
     for bounce in 0..max_bounces {
-        let Some(hit) = raymarch_hit(accel, origin, dir, options, 0.0, options.max_dist) else {
+        let min_t = if bounce == 0 {
+            0.0
+        } else {
+            secondary_min_t(options.epsilon)
+        };
+        let Some(hit) = raymarch_hit(accel, origin, dir, options, min_t, options.max_dist) else {
             let env = apply_medium_attenuation(
-                env_radiance(&setup.path_lights),
+                environment_color(setup, dir).unwrap_or_else(|| env_radiance(&setup.path_lights)),
                 medium,
                 options.max_dist,
             );
@@ -89,12 +94,17 @@ pub(super) fn trace_path(
         }
 
         dir = sample.wi.normalize();
+        let geometric_normal = if hit.front_face {
+            hit.normal.normalize()
+        } else {
+            hit.normal.mul(-1.0).normalize()
+        };
         if sample.transmission && !sample.thin_walled {
             medium = transition_medium(mat, hit.front_face, medium);
             medium.ior = sample.next_ior.clamp(1.0, 3.0);
-            origin = hit_point.add(dir.mul((options.epsilon * 256.0).max(1.0e-3)));
+            origin = offset_ray_origin(hit_point, geometric_normal, dir, options.epsilon * 8.0);
         } else {
-            origin = hit_point.add(bsdf_ctx.normal.mul((options.epsilon * 10.0).max(1.0e-4)));
+            origin = offset_ray_origin(hit_point, geometric_normal, dir, options.epsilon);
         }
     }
 

@@ -8,8 +8,8 @@ use thiserror::Error;
 
 use crate::{
     ColorPattern, EvalState, Material, MaterialParams, MaterialSampleInput, MediumParams,
-    ObjectValue, SubsurfaceParams, Value, eval_material_function, eval_material_properties,
-    eval_sdf_function, eval_sdf_zero_arg_function,
+    ObjectValue, SubsurfaceParams, Value, eval_environment_function, eval_material_function,
+    eval_material_properties, eval_sdf_function, eval_sdf_zero_arg_function,
     render_api::{
         Camera, CameraKind, EnvLight, Light, PinholeCamera, PointLight, Spectrum, Vec3 as ApiVec3,
     },
@@ -115,6 +115,7 @@ impl Default for PathtraceSettings {
 pub struct RaySettings {
     pub max_depth: u32,
     pub tile_size: u32,
+    pub aa_samples: u32,
     pub debug_aov: Option<RayDebugAov>,
 }
 
@@ -123,6 +124,7 @@ impl Default for RaySettings {
         Self {
             max_depth: 8,
             tile_size: 64,
+            aa_samples: 1,
             debug_aov: None,
         }
     }
@@ -176,6 +178,14 @@ enum SdfNode {
         transform: PrimitiveTransform,
         major_radius: f32,
         minor_radius: f32,
+        object_id: u32,
+        material_id: u32,
+    },
+    ExtrudePolygon {
+        transform: PrimitiveTransform,
+        sides: u32,
+        radius: f32,
+        half_height: f32,
         object_id: u32,
         material_id: u32,
     },
@@ -325,6 +335,7 @@ struct RenderSetup {
     materials: Vec<MaterialKindRt>,
     object_transforms: Vec<PrimitiveTransform>,
     material_def_names: Vec<String>,
+    environment_name: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -524,6 +535,7 @@ pub fn render_ray_png_with_accel(
     let settings = RaySettings {
         max_depth: max_depth.max(1),
         tile_size: options.width.max(options.height),
+        aa_samples: 1,
         debug_aov: None,
     };
     let image =
@@ -574,6 +586,7 @@ pub fn render_preview_progressive_with_accel(
     options: RenderOptions,
     accel_mode: AccelMode,
     tile_size: u32,
+    aa_samples: u32,
     mut on_tile: impl FnMut(PreviewProgress, &RgbImage) -> Result<(), RenderError>,
 ) -> Result<RgbImage, RenderError> {
     let root = find_scene_root(state).ok_or(RenderError::MissingSceneRoot)?;
@@ -586,6 +599,7 @@ pub fn render_preview_progressive_with_accel(
             setup,
             options,
             tile_size,
+            aa_samples,
             &mut on_tile,
         )?,
         AccelMode::Bvh => render_preview_with_accel_progressive::<BvhAccel>(
@@ -593,6 +607,7 @@ pub fn render_preview_progressive_with_accel(
             setup,
             options,
             tile_size,
+            aa_samples,
             &mut on_tile,
         )?,
         AccelMode::Bricks => render_preview_with_accel_progressive::<BricksAccel>(
@@ -600,6 +615,7 @@ pub fn render_preview_progressive_with_accel(
             setup,
             options,
             tile_size,
+            aa_samples,
             &mut on_tile,
         )?,
     };
@@ -776,6 +792,26 @@ fn compile_sdf(
                 material_id,
             })
         }
+        "ExtrudePolygon" => {
+            let transform = read_transform(object);
+            let sides = read_number_field(object, &["sides", "n"])
+                .map(|v| v.round() as u32)
+                .unwrap_or(6)
+                .max(3);
+            let radius = read_number_field(object, &["radius", "r"]).unwrap_or(1.0);
+            let height = read_number_field(object, &["height", "h"]).unwrap_or(1.0);
+            let object_id = ctx.alloc_object_id();
+            ctx.register_object_transform(object_id, transform);
+            let material_id = primitive_material_id(state, object, ctx);
+            Ok(SdfNode::ExtrudePolygon {
+                transform,
+                sides,
+                radius,
+                half_height: height * 0.5,
+                object_id,
+                material_id,
+            })
+        }
         custom if state.sdf_defs.contains_key(custom) => {
             let transform = read_transform(object);
             let object_id = ctx.alloc_object_id();
@@ -946,7 +982,13 @@ fn render_with_accel<A: Accelerator + Sync>(
     options: RenderOptions,
 ) -> RgbImage {
     let accel = A::from_scene(scene);
-    render_preview_image(&accel, &setup, options, options.width.max(options.height))
+    render_preview_image(
+        &accel,
+        &setup,
+        options,
+        options.width.max(options.height),
+        4,
+    )
 }
 
 fn render_ray_with_accel_progressive<A: Accelerator + Sync>(
@@ -965,6 +1007,8 @@ fn render_ray_with_accel_progressive<A: Accelerator + Sync>(
         options,
         max_depth: settings.max_depth.max(1),
     };
+    let aa_samples = settings.aa_samples.max(1);
+    let sample_offsets = pixel_sample_offsets(aa_samples);
     let tile_size = settings.tile_size.max(1) as usize;
     let tiles_x = width.div_ceil(tile_size);
     let tiles_y = height.div_ceil(tile_size);
@@ -985,26 +1029,33 @@ fn render_ray_with_accel_progressive<A: Accelerator + Sync>(
                     for lx in 0..tile_w {
                         let x = tx + lx;
                         let x_u32 = x as u32;
-                        let px = ((x_u32 as f32 + 0.5) / options.width as f32) * 2.0 - 1.0;
-                        let py = 1.0 - ((y_u32 as f32 + 0.5) / options.height as f32) * 2.0;
-                        let ray = setup.camera.generate_ray(px * aspect, py);
-                        let origin = from_api_vec3(ray.origin);
-                        let dir = from_api_vec3(ray.direction).normalize();
-                        let rgb = if let Some(aov) = settings.debug_aov {
-                            let c =
-                                ray::trace_ray_debug_aov(&accel, &setup, ray_ctx, origin, dir, aov);
-                            spectrum_to_rgb8(c)
+                        let mut sum = Spectrum::black();
+                        for &(sx, sy) in &sample_offsets {
+                            let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
+                            let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
+                            let ray = setup.camera.generate_ray(px * aspect, py);
+                            let origin = from_api_vec3(ray.origin);
+                            let dir = from_api_vec3(ray.direction).normalize();
+                            let c = if let Some(aov) = settings.debug_aov {
+                                ray::trace_ray_debug_aov(&accel, &setup, ray_ctx, origin, dir, aov)
+                            } else {
+                                ray::trace_ray_recursive(
+                                    &accel,
+                                    &setup,
+                                    ray_ctx,
+                                    origin,
+                                    dir,
+                                    MediumState::air(),
+                                    0,
+                                )
+                            };
+                            sum = sum + c;
+                        }
+                        let avg = sum.scale(1.0 / aa_samples as f32);
+                        let rgb = if settings.debug_aov.is_some() {
+                            spectrum_to_rgb8(avg)
                         } else {
-                            let c = ray::trace_ray_recursive(
-                                &accel,
-                                &setup,
-                                ray_ctx,
-                                origin,
-                                dir,
-                                MediumState::air(),
-                                0,
-                            );
-                            spectrum_to_rgb8_reinhard(c)
+                            spectrum_to_rgb8_reinhard(avg)
                         };
                         let i = lx * 3;
                         row[i] = rgb[0];
@@ -1041,9 +1092,12 @@ fn render_preview_image(
     setup: &RenderSetup,
     options: RenderOptions,
     tile_size: u32,
+    aa_samples: u32,
 ) -> RgbImage {
-    render_preview_tiled(accel, setup, options, tile_size, &mut |_, _| Ok(()))
-        .expect("preview rendering without callback failure should succeed")
+    render_preview_tiled(accel, setup, options, tile_size, aa_samples, &mut |_, _| {
+        Ok(())
+    })
+    .expect("preview rendering without callback failure should succeed")
 }
 
 fn render_preview_with_accel_progressive<A: Accelerator + Sync>(
@@ -1051,10 +1105,11 @@ fn render_preview_with_accel_progressive<A: Accelerator + Sync>(
     setup: RenderSetup,
     options: RenderOptions,
     tile_size: u32,
+    aa_samples: u32,
     on_tile: &mut impl FnMut(PreviewProgress, &RgbImage) -> Result<(), RenderError>,
 ) -> Result<RgbImage, RenderError> {
     let accel = A::from_scene(scene);
-    render_preview_tiled(&accel, &setup, options, tile_size, on_tile)
+    render_preview_tiled(&accel, &setup, options, tile_size, aa_samples, on_tile)
 }
 
 fn render_preview_tiled(
@@ -1062,12 +1117,15 @@ fn render_preview_tiled(
     setup: &RenderSetup,
     options: RenderOptions,
     tile_size: u32,
+    aa_samples: u32,
     on_tile: &mut impl FnMut(PreviewProgress, &RgbImage) -> Result<(), RenderError>,
 ) -> Result<RgbImage, RenderError> {
     let aspect = options.width as f32 / options.height as f32;
     let width = options.width as usize;
     let height = options.height as usize;
     let mut buffer = vec![0_u8; width * height * 3];
+    let aa_samples = aa_samples.max(1);
+    let sample_offsets = pixel_sample_offsets(aa_samples);
     let tile_size = tile_size.max(1) as usize;
     let tiles_x = width.div_ceil(tile_size);
     let tiles_y = height.div_ceil(tile_size);
@@ -1088,23 +1146,32 @@ fn render_preview_tiled(
                     for lx in 0..tile_w {
                         let x = tx + lx;
                         let x_u32 = x as u32;
-                        let px = ((x_u32 as f32 + 0.5) / options.width as f32) * 2.0 - 1.0;
-                        let py = 1.0 - ((y_u32 as f32 + 0.5) / options.height as f32) * 2.0;
-                        let ray = setup.camera.generate_ray(px * aspect, py);
-                        let origin = from_api_vec3(ray.origin);
-                        let dir = from_api_vec3(ray.direction).normalize();
-                        let hit = raymarch_hit(accel, origin, dir, options, 0.0, options.max_dist);
-                        let rgb = match hit {
-                            Some(hit) => {
-                                let material =
-                                    resolve_material_at_hit(setup, hit, dir.mul(-1.0).normalize());
-                                let bsdf_ctx = build_bsdf_context(setup, hit, dir.mul(-1.0), 1.0);
-                                let lit =
-                                    shade_preview_color(setup, &setup.lights, material, bsdf_ctx);
-                                spectrum_to_rgb8_reinhard(lit)
-                            }
-                            None => [0, 0, 0],
-                        };
+                        let mut sum = Spectrum::black();
+                        for &(sx, sy) in &sample_offsets {
+                            let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
+                            let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
+                            let ray = setup.camera.generate_ray(px * aspect, py);
+                            let origin = from_api_vec3(ray.origin);
+                            let dir = from_api_vec3(ray.direction).normalize();
+                            let hit =
+                                raymarch_hit(accel, origin, dir, options, 0.0, options.max_dist);
+                            let c = match hit {
+                                Some(hit) => {
+                                    let material = resolve_material_at_hit(
+                                        setup,
+                                        hit,
+                                        dir.mul(-1.0).normalize(),
+                                    );
+                                    let bsdf_ctx =
+                                        build_bsdf_context(setup, hit, dir.mul(-1.0), 1.0);
+                                    shade_preview_color(setup, &setup.lights, material, bsdf_ctx)
+                                }
+                                None => environment_color(setup, dir)
+                                    .unwrap_or_else(|| env_radiance(&setup.path_lights)),
+                            };
+                            sum = sum + c;
+                        }
+                        let rgb = spectrum_to_rgb8_reinhard(sum.scale(1.0 / aa_samples as f32));
                         let i = lx * 3;
                         row[i] = rgb[0];
                         row[i + 1] = rgb[1];
@@ -1214,6 +1281,7 @@ fn sdf_center(node: &SdfNode) -> Vec3 {
         SdfNode::Box { transform, .. } => transform.center,
         SdfNode::Cylinder { transform, .. } => transform.center,
         SdfNode::Torus { transform, .. } => transform.center,
+        SdfNode::ExtrudePolygon { transform, .. } => transform.center,
         SdfNode::Custom { transform, .. } => transform.center,
         SdfNode::Union { lhs, rhs } => {
             let l = sdf_center(lhs);
@@ -1272,6 +1340,11 @@ fn raymarch_hit(
     None
 }
 
+fn secondary_min_t(epsilon: f32) -> f32 {
+    // Hardwired higher for now to suppress immediate re-hits in tight reflective lips/rims.
+    epsilon * 2.0
+}
+
 fn refine_hit_distance(
     accel: &(impl Accelerator + Sync),
     origin: Vec3,
@@ -1301,7 +1374,12 @@ fn estimate_normal(accel: &(impl Accelerator + Sync), p: Vec3, e: f32) -> Vec3 {
         accel.distance(Vec3::new(p.x, p.y + e, p.z)) - accel.distance(Vec3::new(p.x, p.y - e, p.z));
     let dz =
         accel.distance(Vec3::new(p.x, p.y, p.z + e)) - accel.distance(Vec3::new(p.x, p.y, p.z - e));
-    Vec3::new(dx, dy, dz).normalize()
+    let normal = Vec3::new(dx, dy, dz);
+    if normal.length() > 1.0e-8 {
+        normal.normalize()
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    }
 }
 
 fn shade_color(
@@ -1318,6 +1396,11 @@ fn shade_color(
 
     let p = to_api_vec3(bsdf_ctx.hit.position);
     let n = bsdf_ctx.normal.normalize();
+    let geometric_normal = if bsdf_ctx.hit.front_face {
+        bsdf_ctx.hit.normal.normalize()
+    } else {
+        bsdf_ctx.hit.normal.mul(-1.0).normalize()
+    };
     let mut color = Spectrum::black();
     for light in lights {
         let sample = light.sample_li(p);
@@ -1326,10 +1409,12 @@ fn shade_color(
         if ndotl <= 0.0 {
             continue;
         }
-        let shadow_origin = bsdf_ctx
-            .hit
-            .position
-            .add(n.mul((options.epsilon * 12.0).max(1.0e-4)));
+        let shadow_origin = offset_ray_origin(
+            bsdf_ctx.hit.position,
+            geometric_normal,
+            from_api_vec3(wi),
+            options.epsilon,
+        );
         let max_t = if sample.distance.is_finite() {
             (sample.distance - (options.epsilon * 8.0)).max(0.0)
         } else {
@@ -1401,6 +1486,13 @@ fn env_radiance(lights: &[PathLight]) -> Spectrum {
         }
     }
     sum
+}
+
+fn environment_color(setup: &RenderSetup, dir: Vec3) -> Option<Spectrum> {
+    let name = setup.environment_name.as_deref()?;
+    let value =
+        eval_environment_function(&setup.state, name, "color", &[vec3_value_value(dir)]).ok()?;
+    spectrum_from_value(&value)
 }
 
 fn env_light_pdf_for_dir(
@@ -1528,11 +1620,12 @@ fn estimate_direct_mis<A: Accelerator + Sync>(
         return Spectrum::black();
     }
 
-    let shadow_origin = hit_point.add(
-        bsdf_ctx
-            .normal
-            .mul((ctx.options.epsilon * 12.0).max(1.0e-4)),
-    );
+    let geometric_normal = if bsdf_ctx.hit.front_face {
+        bsdf_ctx.hit.normal.normalize()
+    } else {
+        bsdf_ctx.hit.normal.mul(-1.0).normalize()
+    };
+    let shadow_origin = offset_ray_origin(hit_point, geometric_normal, li.wi, ctx.options.epsilon);
     let vis = shadow_visibility(
         ctx.accel,
         shadow_origin,
@@ -1636,7 +1729,7 @@ fn shadow_visibility(
     max_t: f32,
     epsilon: f32,
 ) -> f32 {
-    let mut t = (epsilon * 4.0).max(1.0e-4);
+    let mut t = secondary_min_t(epsilon);
     let mut visibility = 1.0_f32;
     for _ in 0..80 {
         if t >= max_t {
@@ -1747,6 +1840,24 @@ fn image_from_pixels(pixels: &[PixelAccumulator], width: u32, height: u32) -> Rg
     }
     RgbImage::from_vec(width, height, buffer)
         .expect("pixel buffer length must match image dimensions")
+}
+
+fn pixel_sample_offsets(samples: u32) -> Vec<(f32, f32)> {
+    let samples = samples.max(1);
+    let grid = (samples as f32).sqrt().ceil() as u32;
+    let mut offsets = Vec::with_capacity(samples as usize);
+    for iy in 0..grid {
+        for ix in 0..grid {
+            if offsets.len() >= samples as usize {
+                break;
+            }
+            offsets.push((
+                (ix as f32 + 0.5) / grid as f32,
+                (iy as f32 + 0.5) / grid as f32,
+            ));
+        }
+    }
+    offsets
 }
 
 #[derive(Clone, Copy)]
@@ -1947,6 +2058,18 @@ fn bsdf_sample_from_value(value: &Value) -> Option<BsdfSample> {
 
 fn reflect(v: Vec3, n: Vec3) -> Vec3 {
     v.sub(n.mul(2.0 * v.dot(n)))
+}
+
+fn offset_ray_origin(position: Vec3, geometric_normal: Vec3, dir: Vec3, epsilon: f32) -> Vec3 {
+    let n = if geometric_normal.length() > 1.0e-8 {
+        geometric_normal.normalize()
+    } else {
+        dir.normalize()
+    };
+    let sign = if dir.dot(n) >= 0.0 { 1.0 } else { -1.0 };
+    let normal_offset = n.mul(sign * (epsilon * 16.0).max(2.0e-4));
+    let dir_offset = dir.normalize().mul((epsilon * 8.0).max(1.0e-4));
+    position.add(normal_offset).add(dir_offset)
 }
 
 fn refract(incident: Vec3, normal: Vec3, eta: f32) -> Option<Vec3> {
@@ -2150,6 +2273,19 @@ fn sdf_bounds(node: &SdfNode) -> Aabb {
                 max: transform.center.add(rv),
             }
         }
+        SdfNode::ExtrudePolygon {
+            transform,
+            radius,
+            half_height,
+            ..
+        } => {
+            let r = (radius * radius + half_height * half_height).sqrt();
+            let rv = Vec3::new(r, r, r);
+            Aabb {
+                min: transform.center.sub(rv),
+                max: transform.center.add(rv),
+            }
+        }
         SdfNode::Custom {
             transform,
             bounds_radius,
@@ -2233,6 +2369,25 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
                 material_id: *material_id,
             }
         }
+        SdfNode::ExtrudePolygon {
+            transform,
+            sides,
+            radius,
+            half_height,
+            object_id,
+            material_id,
+        } => {
+            let q = to_local(p, *transform);
+            let radial = sd_regular_ngon(Vec3::new(q.x, 0.0, q.z), *sides, *radius);
+            let dy = q.y.abs() - *half_height;
+            let outside = (radial.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
+            let inside = radial.max(dy).min(0.0);
+            DistanceInfo {
+                distance: outside + inside,
+                object_id: *object_id,
+                material_id: *material_id,
+            }
+        }
         SdfNode::Custom {
             transform,
             runtime,
@@ -2306,6 +2461,16 @@ fn eval_custom_sdf_bounds_radius(state: &EvalState, name: &str) -> f32 {
     }
 }
 
+fn sd_regular_ngon(p: Vec3, sides: u32, radius: f32) -> f32 {
+    let n = sides.max(3) as f32;
+    let an = std::f32::consts::PI / n;
+    let apothem = radius * an.cos();
+    let angle = p.z.atan2(p.x);
+    let sector = 2.0 * an;
+    let wrapped = ((angle + an).rem_euclid(sector)) - an;
+    p.x.hypot(p.z) * wrapped.cos() - apothem
+}
+
 fn to_local(p: Vec3, transform: PrimitiveTransform) -> Vec3 {
     let mut q = p.sub(transform.center);
     q = rotate_x(q, -transform.rot_deg.x);
@@ -2347,6 +2512,7 @@ fn build_render_setup(
         materials: scene.materials.clone(),
         object_transforms: scene.object_transforms.clone(),
         material_def_names: sorted_material_def_names(state),
+        environment_name: find_environment_name(state),
     }
 }
 
@@ -2388,8 +2554,7 @@ fn parse_lights(state: &EvalState) -> (Vec<Box<dyn Light>>, Vec<PathLight>) {
         match type_name {
             "PointLight" => {
                 let position = read_vec3_field(obj, "position").unwrap_or_else(|| read_center(obj));
-                let intensity = read_spectrum_field(obj, "intensity")
-                    .or_else(|| read_spectrum_field(obj, "color"))
+                let intensity = read_light_spectrum(obj, "color", "intensity", &["intensity"])
                     .unwrap_or(Spectrum::rgb(8.0, 8.0, 8.0));
                 lights.push(Box::new(PointLight {
                     position: to_api_vec3(position),
@@ -2401,9 +2566,9 @@ fn parse_lights(state: &EvalState) -> (Vec<Box<dyn Light>>, Vec<PathLight>) {
                 });
             }
             "EnvLight" => {
-                let radiance = read_spectrum_field(obj, "radiance")
-                    .or_else(|| read_spectrum_field(obj, "color"))
-                    .unwrap_or(Spectrum::rgb(0.15, 0.15, 0.15));
+                let radiance =
+                    read_light_spectrum(obj, "color", "intensity", &["radiance", "color"])
+                        .unwrap_or(Spectrum::rgb(0.15, 0.15, 0.15));
                 lights.push(Box::new(EnvLight { radiance }));
                 path_lights.push(PathLight::Env { radiance });
             }
@@ -2704,6 +2869,22 @@ fn read_spectrum_field(obj: &ObjectValue, name: &str) -> Option<Spectrum> {
     }
 }
 
+fn read_light_spectrum(
+    obj: &ObjectValue,
+    color_field: &str,
+    scalar_intensity_field: &str,
+    legacy_fields: &[&str],
+) -> Option<Spectrum> {
+    if let Some(color) = read_spectrum_field(obj, color_field) {
+        let intensity = read_number_field(obj, &[scalar_intensity_field]).unwrap_or(1.0);
+        return Some(color.scale(intensity.max(0.0)));
+    }
+
+    legacy_fields
+        .iter()
+        .find_map(|field| read_spectrum_field(obj, field))
+}
+
 fn read_pattern_field(obj: &ObjectValue, name: &str) -> Option<ColorPattern> {
     let Value::Object(pattern) = obj.fields.get(name)? else {
         return None;
@@ -2807,6 +2988,24 @@ fn sorted_material_def_names(state: &EvalState) -> Vec<String> {
     let mut names: Vec<_> = state.material_defs.keys().cloned().collect();
     names.sort();
     names
+}
+
+fn find_environment_name(state: &EvalState) -> Option<String> {
+    for key in ["environment", "env", "sky"] {
+        if let Some(binding) = state.bindings.get(key)
+            && let Value::Object(obj) = &binding.value
+            && let Some(type_name) = obj.type_name.as_deref()
+            && state.environment_defs.contains_key(type_name)
+        {
+            return Some(type_name.to_string());
+        }
+    }
+
+    if state.environment_defs.len() == 1 {
+        return state.environment_defs.keys().next().cloned();
+    }
+
+    None
 }
 
 fn resolve_material_at_hit(setup: &RenderSetup, hit: RayHit, view_dir: Vec3) -> MaterialKindRt {
@@ -3153,6 +3352,7 @@ mod tests {
             function_defs: HashMap::new(),
             material_defs: HashMap::new(),
             sdf_defs: HashMap::new(),
+            environment_defs: HashMap::new(),
         }
     }
 
@@ -3298,14 +3498,16 @@ mod tests {
 
         let mut point_light_fields = HashMap::new();
         point_light_fields.insert("position".to_string(), vec3_value(2.0, 2.0, 4.0));
-        point_light_fields.insert("intensity".to_string(), vec3_value(6.0, 6.0, 6.0));
+        point_light_fields.insert("color".to_string(), vec3_value(1.0, 0.5, 0.25));
+        point_light_fields.insert("intensity".to_string(), Value::Number(6.0));
         let point_light = Value::Object(crate::ObjectValue {
             type_name: Some("PointLight".to_string()),
             fields: point_light_fields,
         });
 
         let mut env_fields = HashMap::new();
-        env_fields.insert("radiance".to_string(), vec3_value(0.08, 0.08, 0.08));
+        env_fields.insert("color".to_string(), vec3_value(0.5, 0.5, 1.0));
+        env_fields.insert("intensity".to_string(), Value::Number(0.08));
         let env_light = Value::Object(crate::ObjectValue {
             type_name: Some("EnvLight".to_string()),
             fields: env_fields,
@@ -4259,7 +4461,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_cylinder_and_torus_with_rotation() {
+    fn renders_cylinder_torus_and_extruded_polygon_with_rotation() {
         let mut cyl_fields = HashMap::new();
         cyl_fields.insert("radius".to_string(), Value::Number(0.7));
         cyl_fields.insert("height".to_string(), Value::Number(2.2));
@@ -4287,9 +4489,28 @@ mod tests {
             fields: torus_fields,
         });
 
+        let mut poly_fields = HashMap::new();
+        poly_fields.insert("sides".to_string(), Value::Number(6.0));
+        poly_fields.insert("radius".to_string(), Value::Number(0.75));
+        poly_fields.insert("height".to_string(), Value::Number(0.6));
+        poly_fields.insert("x".to_string(), Value::Number(-1.2));
+        poly_fields.insert("y".to_string(), Value::Number(-0.2));
+        let polygon = Value::Object(crate::ObjectValue {
+            type_name: Some("ExtrudePolygon".to_string()),
+            fields: poly_fields,
+        });
+
         let mut add_fields = HashMap::new();
         add_fields.insert("lhs".to_string(), cylinder);
         add_fields.insert("rhs".to_string(), torus);
+        let combined = Value::Object(crate::ObjectValue {
+            type_name: Some("add".to_string()),
+            fields: add_fields,
+        });
+
+        let mut add_fields = HashMap::new();
+        add_fields.insert("lhs".to_string(), combined);
+        add_fields.insert("rhs".to_string(), polygon);
         let scene = Value::Object(crate::ObjectValue {
             type_name: Some("add".to_string()),
             fields: add_fields,
@@ -4320,6 +4541,42 @@ mod tests {
         .expect("render should succeed");
         assert!(std::fs::metadata(&output).is_ok());
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn resolves_environment_color_on_miss() {
+        let source = r#"
+            environment Sky {
+              let zenith = #4d74c7;
+              let horizon = #d8e7ff;
+
+              fn color(dir) {
+                let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+                return mix(horizon, zenith, t);
+              }
+            };
+
+            let scene = Sphere {
+              radius: 1.0
+            };
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let scene = super::compile_scene(
+            &state,
+            state
+                .bindings
+                .get("scene")
+                .map(|b| &b.value)
+                .expect("scene binding"),
+            super::default_material(),
+        )
+        .expect("scene should compile");
+        let setup = super::build_render_setup(&state, &scene, RenderOptions::default());
+        let sky = super::environment_color(&setup, super::Vec3::new(0.0, 1.0, 0.0))
+            .expect("environment color should resolve");
+        assert!(sky.b > sky.r);
     }
 
     #[test]

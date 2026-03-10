@@ -6,16 +6,19 @@ let camera = Camera {
 
 let key = PointLight {
   position: vec3(3.4, 4.0, 4.8),
-  intensity: vec3(120.0, 118.0, 112.0)
+  color: vec3(1.0, 0.983, 0.933),
+  intensity: 120.0
 };
 
 let rim = PointLight {
   position: vec3(-4.0, 2.8, -2.2),
-  intensity: vec3(30.0, 34.0, 42.0)
+  color: vec3(0.714, 0.81, 1.0),
+  intensity: 42.0
 };
 
 let sky = EnvLight {
-  radiance: vec3(0.3, 0.34, 0.42)
+  color: vec3(0.714, 0.81, 1.0),
+  intensity: 0.42
 };
 
 let glass = Dielectric {

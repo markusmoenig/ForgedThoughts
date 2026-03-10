@@ -41,13 +41,17 @@ material SoftGold {
 };
 ```
 
-Material-local helper functions can also be reused across hooks:
+Material-local helper functions can also be reused across hooks, and they may take multiple arguments:
 
 ```ft
 material BrickLike {
   model: Lambert;
   let brick = vec3(0.68, 0.24, 0.16);
   let mortar = vec3(0.8, 0.77, 0.72);
+
+  fn blend(a, b, t) {
+    return mix(a, b, t);
+  }
 
   fn mortar_mask(ctx) {
     let band_x = smoothstep(-0.12, 0.12, sin(ctx.local_position.x * 11.0));
@@ -56,7 +60,7 @@ material BrickLike {
   }
 
   fn color(ctx) {
-    return mix(brick, mortar, mortar_mask(ctx));
+    return blend(brick, mortar, mortar_mask(ctx));
   }
 
   fn roughness(ctx) {

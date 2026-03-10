@@ -1,0 +1,46 @@
+environment Sky {
+  let zenith = #4d74c7;
+  let horizon = #d8e7ff;
+  let ground = #d7d9de;
+
+  fn up_blend(dir) {
+    return clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+  }
+
+  fn color(dir) {
+    let sky = mix(horizon, zenith, up_blend(dir));
+    let ground_mix = clamp(-dir.y * 2.0, 0.0, 1.0);
+    return mix(sky, ground, ground_mix);
+  }
+};
+
+let camera = Camera {
+  origin: vec3(0.0, 1.2, 5.8),
+  target: vec3(0.0, 0.55, 0.0),
+  fov_y: 34.0
+};
+
+let key = PointLight {
+  position: vec3(2.8, 4.0, 4.8),
+  intensity: vec3(140.0, 132.0, 120.0)
+};
+
+let render = RenderSettings {
+  width: 800,
+  height: 800,
+  max_steps: 320,
+  max_dist: 70.0,
+  epsilon: 0.00018,
+  accel: Bvh{}
+};
+
+var sphere = Sphere {
+  radius: 1.0,
+  material: Metal {
+    color: #ebc757,
+    roughness: 0.18
+  }
+};
+sphere.pos.y = 0.6;
+
+let scene = sphere;

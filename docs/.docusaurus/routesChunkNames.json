@@ -42,42 +42,46 @@
       "plugin": "plugin---docusaurus-debugb-38-ad3"
     }
   },
-  "/docs-755": {
+  "/docs-a68": {
     "__comp": "__comp---theme-docs-root-5-e-9-0b6",
     "__context": {
-      "plugin": "plugin---aba-d70"
+      "plugin": "plugin---docsaba-d7c"
     }
   },
-  "/docs-23d": {
+  "/docs-11f": {
     "__comp": "__comp---theme-doc-version-roota-7-b-5de",
     "__props": "__props---docs-005-788"
   },
-  "/docs-c79": {
+  "/docs-680": {
     "__comp": "__comp---theme-doc-roota-94-67a"
   },
   "/docs/-b43": {
     "__comp": "__comp---theme-doc-item-178-a40",
-    "content": "content---c-37-d02"
+    "content": "content---docs-c-37-4d0"
   },
   "/docs/cli-e2e": {
     "__comp": "__comp---theme-doc-item-178-a40",
-    "content": "content---cli-1-a-2-3f0"
+    "content": "content---docs-cli-1-a-2-6cb"
   },
   "/docs/install-348": {
     "__comp": "__comp---theme-doc-item-178-a40",
-    "content": "content---installc-4-d-880"
+    "content": "content---docs-installc-4-d-119"
   },
   "/docs/language-fef": {
     "__comp": "__comp---theme-doc-item-178-a40",
-    "content": "content---language-9-cf-08c"
+    "content": "content---docs-language-9-cf-97f"
+  },
+  "/docs/lights-5d7": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-lights-7-bc-c8a"
   },
   "/docs/limitations-d9a": {
     "__comp": "__comp---theme-doc-item-178-a40",
-    "content": "content---limitations-147-eba"
+    "content": "content---docs-limitations-147-c03"
   },
   "/docs/materials-730": {
     "__comp": "__comp---theme-doc-item-178-a40",
-    "content": "content---materials-272-597"
+    "content": "content---docs-materials-272-bfb"
   },
   "/docs/objects-5b3": {
     "__comp": "__comp---theme-doc-item-178-a40",

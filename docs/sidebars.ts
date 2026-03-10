@@ -6,6 +6,7 @@ const sidebars: SidebarsConfig = {
     "install",
     "cli",
     "language",
+    "lights",
     "objects",
     "materials",
     "limitations",

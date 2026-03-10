@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::ast::{
-    BinaryOp, Expr, FunctionDef, MaterialDef, MaterialFunctionStatement, MaterialStatement,
-    Program, SdfDef, SdfFunctionStatement, SdfStatement, Statement, UnaryOp,
+    BinaryOp, EnvironmentDef, Expr, FunctionDef, MaterialDef, MaterialFunctionStatement,
+    MaterialStatement, Program, SdfDef, SdfFunctionStatement, SdfStatement, Statement, UnaryOp,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -40,6 +40,7 @@ pub struct EvalState {
     pub function_defs: HashMap<String, FunctionDef>,
     pub material_defs: HashMap<String, MaterialDef>,
     pub sdf_defs: HashMap<String, SdfDef>,
+    pub environment_defs: HashMap<String, EnvironmentDef>,
 }
 
 #[derive(Debug, Error)]
@@ -92,6 +93,7 @@ pub fn eval_program(program: &Program) -> Result<EvalState, EvalError> {
         function_defs: HashMap::new(),
         material_defs: HashMap::new(),
         sdf_defs: HashMap::new(),
+        environment_defs: HashMap::new(),
     };
 
     for stmt in &program.statements {
@@ -134,6 +136,10 @@ fn eval_statement(stmt: &Statement, state: &mut EvalState) -> Result<(), EvalErr
         }
         Statement::SdfDef(def) => {
             state.sdf_defs.insert(def.name.clone(), def.clone());
+            Ok(())
+        }
+        Statement::EnvironmentDef(def) => {
+            state.environment_defs.insert(def.name.clone(), def.clone());
             Ok(())
         }
     }
@@ -371,29 +377,28 @@ fn eval_call(
                 return Ok(value);
             }
             if let Some(runtime) = material_runtime
-                && let Some((param, body)) =
+                && let Some((params, body)) =
                     runtime.def.statements.iter().find_map(|stmt| match stmt {
                         MaterialStatement::Function {
                             name: fn_name,
-                            param,
+                            params,
                             body,
-                        } if fn_name == name => Some((param.clone(), body.clone())),
+                        } if fn_name == name => Some((params.clone(), body.clone())),
                         _ => None,
                     })
             {
                 if runtime.depth >= 32 {
                     return Err(EvalError::MaterialCallDepthExceeded);
                 }
-                let expected_arity = usize::from(!param.is_empty());
-                if arg_values.len() != expected_arity {
+                if arg_values.len() != params.len() {
                     return Err(EvalError::UnsupportedCall);
                 }
                 return eval_material_function_body(
                     state,
                     runtime.def,
-                    &param,
+                    &params,
                     &body,
-                    arg_values.first().cloned(),
+                    &arg_values,
                     runtime.depth + 1,
                 );
             }
@@ -752,30 +757,29 @@ pub fn eval_material_function(
         .material_defs
         .get(material_name)
         .ok_or_else(|| EvalError::UndefinedIdentifier(material_name.to_string()))?;
-    let (param_name, body) = def
+    let (params, body) = def
         .statements
         .iter()
         .find_map(|stmt| match stmt {
-            MaterialStatement::Function { name, param, body } if name == function_name => {
-                Some((param.clone(), body.clone()))
+            MaterialStatement::Function { name, params, body } if name == function_name => {
+                Some((params.clone(), body.clone()))
             }
             _ => None,
         })
         .ok_or_else(|| EvalError::UndefinedIdentifier(function_name.to_string()))?;
-    eval_material_function_body(state, def, &param_name, &body, Some(ctx_value), 0)
+    eval_material_function_body(state, def, &params, &body, &[ctx_value], 0)
 }
 
 pub fn eval_top_level_function(
     state: &EvalState,
     function_name: &str,
-    arg_value: Option<Value>,
+    arg_values: &[Value],
 ) -> Result<Value, EvalError> {
     let def = state
         .function_defs
         .get(function_name)
         .ok_or_else(|| EvalError::UndefinedIdentifier(function_name.to_string()))?;
-    let args = arg_value.into_iter().collect::<Vec<_>>();
-    eval_top_level_function_call(state, def, &args, 0)?
+    eval_top_level_function_call(state, def, arg_values, 0)?
         .ok_or_else(|| EvalError::UndefinedIdentifier(function_name.to_string()))
 }
 
@@ -819,6 +823,29 @@ pub fn eval_material_properties(
     Ok(properties)
 }
 
+pub fn eval_environment_function(
+    state: &EvalState,
+    environment_name: &str,
+    function_name: &str,
+    arg_values: &[Value],
+) -> Result<Value, EvalError> {
+    let def = state
+        .environment_defs
+        .get(environment_name)
+        .ok_or_else(|| EvalError::UndefinedIdentifier(environment_name.to_string()))?;
+    let (params, body) = def
+        .statements
+        .iter()
+        .find_map(|stmt| match stmt {
+            MaterialStatement::Function { name, params, body } if name == function_name => {
+                Some((params.clone(), body.clone()))
+            }
+            _ => None,
+        })
+        .ok_or_else(|| EvalError::UndefinedIdentifier(function_name.to_string()))?;
+    eval_environment_function_body(state, def, &params, &body, arg_values, 0)
+}
+
 pub fn eval_sdf_function(
     state: &EvalState,
     sdf_name: &str,
@@ -829,17 +856,17 @@ pub fn eval_sdf_function(
         .sdf_defs
         .get(sdf_name)
         .ok_or_else(|| EvalError::UndefinedIdentifier(sdf_name.to_string()))?;
-    let (param_name, body) = def
+    let (params, body) = def
         .statements
         .iter()
         .find_map(|stmt| match stmt {
-            SdfStatement::Function { name, param, body } if name == function_name => {
-                Some((param.clone(), body.clone()))
+            SdfStatement::Function { name, params, body } if name == function_name => {
+                Some((params.clone(), body.clone()))
             }
             _ => None,
         })
         .ok_or_else(|| EvalError::UndefinedIdentifier(function_name.to_string()))?;
-    eval_sdf_function_body(state, def, &param_name, &body, Some(arg_value), 0)
+    eval_sdf_function_body(state, def, &params, &body, &[arg_value], 0)
 }
 
 pub fn eval_sdf_zero_arg_function(
@@ -851,36 +878,36 @@ pub fn eval_sdf_zero_arg_function(
         .sdf_defs
         .get(sdf_name)
         .ok_or_else(|| EvalError::UndefinedIdentifier(sdf_name.to_string()))?;
-    let (param_name, body) = def
+    let (params, body) = def
         .statements
         .iter()
         .find_map(|stmt| match stmt {
-            SdfStatement::Function { name, param, body } if name == function_name => {
-                Some((param.clone(), body.clone()))
+            SdfStatement::Function { name, params, body } if name == function_name => {
+                Some((params.clone(), body.clone()))
             }
             _ => None,
         })
         .ok_or_else(|| EvalError::UndefinedIdentifier(function_name.to_string()))?;
-    if !param_name.is_empty() {
+    if !params.is_empty() {
         return Err(EvalError::UnsupportedCall);
     }
-    eval_sdf_function_body(state, def, &param_name, &body, None, 0)
+    eval_sdf_function_body(state, def, &params, &body, &[], 0)
 }
 
 fn eval_sdf_function_body(
     state: &EvalState,
     def: &SdfDef,
-    param_name: &str,
+    params: &[String],
     body: &[SdfFunctionStatement],
-    arg_value: Option<Value>,
+    arg_values: &[Value],
     depth: usize,
 ) -> Result<Value, EvalError> {
     let mut locals = HashMap::new();
-    if !param_name.is_empty() {
-        let Some(arg_value) = arg_value else {
-            return Err(EvalError::UnsupportedCall);
-        };
-        locals.insert(param_name.to_string(), arg_value);
+    if arg_values.len() != params.len() {
+        return Err(EvalError::UnsupportedCall);
+    }
+    for (param, value) in params.iter().zip(arg_values.iter()) {
+        locals.insert(param.clone(), value.clone());
     }
 
     for stmt in &def.statements {
@@ -976,29 +1003,28 @@ fn eval_sdf_call(
                 return Ok(value);
             }
             if let Some(runtime) = sdf_runtime
-                && let Some((param, body)) =
+                && let Some((params, body)) =
                     runtime.def.statements.iter().find_map(|stmt| match stmt {
                         SdfStatement::Function {
                             name: fn_name,
-                            param,
+                            params,
                             body,
-                        } if fn_name == name => Some((param.clone(), body.clone())),
+                        } if fn_name == name => Some((params.clone(), body.clone())),
                         _ => None,
                     })
             {
                 if runtime.depth >= 32 {
                     return Err(EvalError::MaterialCallDepthExceeded);
                 }
-                let expected_arity = usize::from(!param.is_empty());
-                if arg_values.len() != expected_arity {
+                if arg_values.len() != params.len() {
                     return Err(EvalError::UnsupportedCall);
                 }
                 return eval_sdf_function_body(
                     state,
                     runtime.def,
-                    &param,
+                    &params,
                     &body,
-                    arg_values.first().cloned(),
+                    &arg_values,
                     runtime.depth + 1,
                 );
             }
@@ -1090,17 +1116,17 @@ fn eval_sdf_arg_values(
 fn eval_material_function_body(
     state: &EvalState,
     def: &MaterialDef,
-    param_name: &str,
+    params: &[String],
     body: &[MaterialFunctionStatement],
-    arg_value: Option<Value>,
+    arg_values: &[Value],
     depth: usize,
 ) -> Result<Value, EvalError> {
     let mut locals = HashMap::new();
-    if !param_name.is_empty() {
-        let Some(arg_value) = arg_value else {
-            return Err(EvalError::UnsupportedCall);
-        };
-        locals.insert(param_name.to_string(), arg_value);
+    if arg_values.len() != params.len() {
+        return Err(EvalError::UnsupportedCall);
+    }
+    for (param, value) in params.iter().zip(arg_values.iter()) {
+        locals.insert(param.clone(), value.clone());
     }
 
     for stmt in &def.statements {
@@ -1148,14 +1174,121 @@ fn eval_material_function_body(
     ))
 }
 
+fn eval_environment_function_body(
+    state: &EvalState,
+    def: &EnvironmentDef,
+    params: &[String],
+    body: &[MaterialFunctionStatement],
+    arg_values: &[Value],
+    depth: usize,
+) -> Result<Value, EvalError> {
+    let mut locals = HashMap::new();
+    if arg_values.len() != params.len() {
+        return Err(EvalError::UnsupportedCall);
+    }
+    for (param, value) in params.iter().zip(arg_values.iter()) {
+        locals.insert(param.clone(), value.clone());
+    }
+
+    for stmt in &def.statements {
+        match stmt {
+            MaterialStatement::Binding { name, expr } => {
+                let value = eval_expr_in_environment_scope(expr, state, &locals, def, depth)?;
+                locals.insert(name.clone(), value);
+            }
+            MaterialStatement::Property { .. } | MaterialStatement::Function { .. } => {}
+        }
+    }
+
+    for stmt in body {
+        match stmt {
+            MaterialFunctionStatement::Binding { name, expr } => {
+                let value = eval_expr_in_environment_scope(expr, state, &locals, def, depth)?;
+                locals.insert(name.clone(), value);
+            }
+            MaterialFunctionStatement::Return { expr } => {
+                return eval_expr_in_environment_scope(expr, state, &locals, def, depth);
+            }
+        }
+    }
+
+    Err(EvalError::UndefinedIdentifier(
+        "environment function missing return".to_string(),
+    ))
+}
+
+fn eval_expr_in_environment_scope(
+    expr: &Expr,
+    state: &EvalState,
+    locals: &HashMap<String, Value>,
+    def: &EnvironmentDef,
+    depth: usize,
+) -> Result<Value, EvalError> {
+    match expr {
+        Expr::Call { callee, args } => match callee.as_ref() {
+            Expr::Ident(name) => {
+                let arg_values = args
+                    .iter()
+                    .map(|arg| eval_expr_in_environment_scope(arg, state, locals, def, depth))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if let Some(value) = eval_ident_call(name, &arg_values)? {
+                    return Ok(value);
+                }
+                if let Some((params, body)) = def.statements.iter().find_map(|stmt| match stmt {
+                    MaterialStatement::Function {
+                        name: fn_name,
+                        params,
+                        body,
+                    } if fn_name == name => Some((params.clone(), body.clone())),
+                    _ => None,
+                }) {
+                    if depth >= 32 {
+                        return Err(EvalError::MaterialCallDepthExceeded);
+                    }
+                    return eval_environment_function_body(
+                        state,
+                        def,
+                        &params,
+                        &body,
+                        &arg_values,
+                        depth + 1,
+                    );
+                }
+                if let Some(top) = state.function_defs.get(name)
+                    && let Some(value) =
+                        eval_top_level_function_call(state, top, &arg_values, depth + 1)?
+                {
+                    return Ok(value);
+                }
+                Err(EvalError::UnsupportedCall)
+            }
+            Expr::Member { .. } => {
+                let flattened = flatten_member_expr(callee).ok_or(EvalError::UnsupportedCall)?;
+                let arg_values = args
+                    .iter()
+                    .map(|arg| eval_expr_in_environment_scope(arg, state, locals, def, depth))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if let Some(top) = state.function_defs.get(&flattened)
+                    && let Some(value) =
+                        eval_top_level_function_call(state, top, &arg_values, depth + 1)?
+                {
+                    return Ok(value);
+                }
+                Err(EvalError::UnsupportedCall)
+            }
+            _ => Err(EvalError::UnsupportedCall),
+        },
+        _ => eval_expr_in_material_scope(expr, state, locals, None, depth),
+    }
+}
+
 fn eval_top_level_function_call(
     state: &EvalState,
     def: &FunctionDef,
     arg_values: &[Value],
     depth: usize,
 ) -> Result<Option<Value>, EvalError> {
-    let expected_arity = usize::from(!def.param.is_empty());
-    if arg_values.len() != expected_arity {
+    if arg_values.len() != def.params.len() {
         return Err(EvalError::UnsupportedCall);
     }
     if depth >= 32 {
@@ -1163,8 +1296,8 @@ fn eval_top_level_function_call(
     }
 
     let mut locals = HashMap::new();
-    if !def.param.is_empty() {
-        locals.insert(def.param.clone(), arg_values[0].clone());
+    for (param, value) in def.params.iter().zip(arg_values.iter()) {
+        locals.insert(param.clone(), value.clone());
     }
 
     for stmt in &def.body {

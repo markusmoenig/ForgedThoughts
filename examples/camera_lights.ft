@@ -6,16 +6,19 @@ let camera = Camera {
 
 let key = PointLight {
   position: vec3(3.0, 4.0, 6.0),
-  intensity: vec3(160.0, 160.0, 160.0)
+  color: #ffffff,
+  intensity: 160.0
 };
 
 let fill = PointLight {
   position: vec3(-3.0, 2.0, 4.0),
-  intensity: vec3(50.0, 50.0, 50.0)
+  color: #ffffff,
+  intensity: 50.0
 };
 
 let sky = EnvLight {
-  radiance: vec3(0.55, 0.55, 0.65)
+  color: vec3(0.846, 0.846, 1.0),
+  intensity: 0.65
 };
 
 let mat = Material {

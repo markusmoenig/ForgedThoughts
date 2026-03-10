@@ -17,9 +17,15 @@ pub struct SdfDef {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct EnvironmentDef {
+    pub name: String,
+    pub statements: Vec<MaterialStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDef {
     pub name: String,
-    pub param: String,
+    pub params: Vec<String>,
     pub body: Vec<MaterialFunctionStatement>,
 }
 
@@ -41,7 +47,7 @@ pub enum MaterialStatement {
     },
     Function {
         name: String,
-        param: String,
+        params: Vec<String>,
         body: Vec<MaterialFunctionStatement>,
     },
 }
@@ -56,7 +62,7 @@ pub enum SdfStatement {
     },
     Function {
         name: String,
-        param: String,
+        params: Vec<String>,
         body: Vec<SdfFunctionStatement>,
     },
 }
@@ -80,6 +86,7 @@ pub enum Statement {
     FunctionDef(FunctionDef),
     MaterialDef(MaterialDef),
     SdfDef(SdfDef),
+    EnvironmentDef(EnvironmentDef),
 }
 
 #[derive(Debug, Clone, PartialEq)]
