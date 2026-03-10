@@ -1,0 +1,27 @@
+{
+  "id": "materials",
+  "title": "Materials",
+  "description": "ForgedThoughts currently has two layers:",
+  "source": "@site/docs/materials.md",
+  "sourceDirName": ".",
+  "slug": "/materials",
+  "permalink": "/docs/materials",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 5,
+  "frontMatter": {
+    "sidebar_position": 5,
+    "title": "Materials"
+  },
+  "sidebar": "mainSidebar",
+  "previous": {
+    "title": "Language",
+    "permalink": "/docs/language"
+  },
+  "next": {
+    "title": "Limitations",
+    "permalink": "/docs/limitations"
+  }
+}

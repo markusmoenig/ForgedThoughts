@@ -1,0 +1,397 @@
+use thiserror::Error;
+
+use crate::ast::{
+    BinaryOp, Expr, MaterialDef, MaterialFunctionStatement, MaterialStatement, Program, Statement,
+    UnaryOp,
+};
+use crate::lexer::{LexError, Token, TokenKind, tokenize};
+
+#[derive(Debug, Error)]
+pub enum ParseError {
+    #[error("{0}")]
+    Lex(#[from] LexError),
+    #[error("expected {expected} at byte {offset}")]
+    Expected {
+        expected: &'static str,
+        offset: usize,
+    },
+    #[error("unexpected token at byte {offset}")]
+    UnexpectedToken { offset: usize },
+    #[error("unexpected end of input")]
+    UnexpectedEof,
+}
+
+pub fn parse_program(source: &str) -> Result<Program, ParseError> {
+    let tokens = tokenize(source)?;
+    let mut parser = Parser { tokens, pos: 0 };
+    parser.parse_program()
+}
+
+struct Parser {
+    tokens: Vec<Token>,
+    pos: usize,
+}
+
+impl Parser {
+    fn parse_program(&mut self) -> Result<Program, ParseError> {
+        let mut statements = Vec::new();
+        while !self.is_eof() {
+            statements.push(self.parse_statement()?);
+        }
+        Ok(Program { statements })
+    }
+
+    fn parse_statement(&mut self) -> Result<Statement, ParseError> {
+        if self.matches_ident_literal("material") {
+            return self.parse_material_def();
+        }
+
+        if self.matches_kind(TokenKind::Let) {
+            return self.parse_binding(false);
+        }
+
+        if self.matches_kind(TokenKind::Var) {
+            return self.parse_binding(true);
+        }
+
+        self.parse_assignment()
+    }
+
+    fn parse_material_def(&mut self) -> Result<Statement, ParseError> {
+        let name = self.expect_ident()?;
+        self.expect_kind(TokenKind::LBrace, "{")?;
+        let mut model = None;
+        let mut statements = Vec::new();
+
+        while !self.matches_kind(TokenKind::RBrace) {
+            if self.matches_kind(TokenKind::Let) {
+                let binding_name = self.expect_ident()?;
+                self.expect_kind(TokenKind::Equal, "=")?;
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                statements.push(MaterialStatement::Binding {
+                    name: binding_name,
+                    expr,
+                });
+                continue;
+            }
+
+            if self.matches_kind(TokenKind::Fn) {
+                let fn_name = self.expect_ident()?;
+                self.expect_kind(TokenKind::LParen, "(")?;
+                let param = self.expect_ident()?;
+                self.expect_kind(TokenKind::RParen, ")")?;
+                let body = if self.matches_kind(TokenKind::Equal) {
+                    let expr = self.parse_expr()?;
+                    self.expect_kind(TokenKind::Semicolon, ";")?;
+                    vec![MaterialFunctionStatement::Return { expr }]
+                } else {
+                    self.parse_material_function_body()?
+                };
+                statements.push(MaterialStatement::Function {
+                    name: fn_name,
+                    param,
+                    body,
+                });
+                continue;
+            }
+
+            let field = self.expect_ident()?;
+            if self.matches_kind(TokenKind::Equal) {
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                statements.push(MaterialStatement::Property { name: field, expr });
+                continue;
+            }
+            if field == "model" {
+                self.expect_kind(TokenKind::Colon, ":")?;
+                model = Some(self.expect_ident()?);
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                continue;
+            }
+            return Err(ParseError::Expected {
+                expected: "let, fn, property assignment, or model",
+                offset: self.current_offset(),
+            });
+        }
+
+        self.expect_kind(TokenKind::Semicolon, ";")?;
+        Ok(Statement::MaterialDef(MaterialDef {
+            name,
+            model: model.ok_or(ParseError::Expected {
+                expected: "model",
+                offset: self.current_offset(),
+            })?,
+            statements,
+        }))
+    }
+
+    fn parse_material_function_body(
+        &mut self,
+    ) -> Result<Vec<MaterialFunctionStatement>, ParseError> {
+        self.expect_kind(TokenKind::LBrace, "{")?;
+        let mut body = Vec::new();
+        while !self.matches_kind(TokenKind::RBrace) {
+            if self.matches_kind(TokenKind::Let) {
+                let name = self.expect_ident()?;
+                self.expect_kind(TokenKind::Equal, "=")?;
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                body.push(MaterialFunctionStatement::Binding { name, expr });
+                continue;
+            }
+            if self.matches_kind(TokenKind::Return) {
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                body.push(MaterialFunctionStatement::Return { expr });
+                continue;
+            }
+            return Err(ParseError::Expected {
+                expected: "let or return",
+                offset: self.current_offset(),
+            });
+        }
+        Ok(body)
+    }
+
+    fn parse_binding(&mut self, mutable: bool) -> Result<Statement, ParseError> {
+        let name = self.expect_ident()?;
+        self.expect_kind(TokenKind::Equal, "=")?;
+        let expr = self.parse_expr()?;
+        self.expect_kind(TokenKind::Semicolon, ";")?;
+        Ok(Statement::Binding {
+            name,
+            mutable,
+            expr,
+        })
+    }
+
+    fn parse_assignment(&mut self) -> Result<Statement, ParseError> {
+        let mut path = vec![self.expect_ident()?];
+        while self.matches_kind(TokenKind::Dot) {
+            path.push(self.expect_ident()?);
+        }
+        self.expect_kind(TokenKind::Equal, "=")?;
+        let expr = self.parse_expr()?;
+        self.expect_kind(TokenKind::Semicolon, ";")?;
+        Ok(Statement::Assign { path, expr })
+    }
+
+    fn parse_expr(&mut self) -> Result<Expr, ParseError> {
+        self.parse_add_sub()
+    }
+
+    fn parse_add_sub(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_mul_div()?;
+        loop {
+            let op = if self.matches_kind(TokenKind::Plus) {
+                Some(BinaryOp::Add)
+            } else if self.matches_kind(TokenKind::Minus) {
+                Some(BinaryOp::Sub)
+            } else {
+                None
+            };
+
+            if let Some(op) = op {
+                let rhs = self.parse_mul_div()?;
+                expr = Expr::Binary {
+                    lhs: Box::new(expr),
+                    op,
+                    rhs: Box::new(rhs),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(expr)
+    }
+
+    fn parse_mul_div(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_unary()?;
+        loop {
+            let op = if self.matches_kind(TokenKind::Star) {
+                Some(BinaryOp::Mul)
+            } else if self.matches_kind(TokenKind::Slash) {
+                Some(BinaryOp::Div)
+            } else {
+                None
+            };
+
+            if let Some(op) = op {
+                let rhs = self.parse_unary()?;
+                expr = Expr::Binary {
+                    lhs: Box::new(expr),
+                    op,
+                    rhs: Box::new(rhs),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(expr)
+    }
+
+    fn parse_unary(&mut self) -> Result<Expr, ParseError> {
+        if self.matches_kind(TokenKind::Minus) {
+            let expr = self.parse_unary()?;
+            return Ok(Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(expr),
+            });
+        }
+        self.parse_postfix()
+    }
+
+    fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_primary()?;
+        loop {
+            if self.matches_kind(TokenKind::Dot) {
+                let field = self.expect_ident()?;
+                expr = Expr::Member {
+                    target: Box::new(expr),
+                    field,
+                };
+                continue;
+            }
+
+            if self.matches_kind(TokenKind::LParen) {
+                let mut args = Vec::new();
+                if !self.matches_kind(TokenKind::RParen) {
+                    loop {
+                        args.push(self.parse_expr()?);
+                        if self.matches_kind(TokenKind::Comma) {
+                            continue;
+                        }
+                        self.expect_kind(TokenKind::RParen, ")")?;
+                        break;
+                    }
+                }
+                expr = Expr::Call {
+                    callee: Box::new(expr),
+                    args,
+                };
+                continue;
+            }
+
+            break;
+        }
+        Ok(expr)
+    }
+
+    fn parse_primary(&mut self) -> Result<Expr, ParseError> {
+        if self.matches_kind(TokenKind::LParen) {
+            let expr = self.parse_expr()?;
+            self.expect_kind(TokenKind::RParen, ")")?;
+            return Ok(expr);
+        }
+
+        match self.peek_kind() {
+            Some(TokenKind::Number(value)) => {
+                let value = *value;
+                self.pos += 1;
+                Ok(Expr::Number(value))
+            }
+            Some(TokenKind::Ident(_)) => {
+                let name = self.expect_ident()?;
+                if self.matches_kind(TokenKind::LBrace) {
+                    let fields = self.parse_object_fields()?;
+                    Ok(Expr::ObjectLiteral {
+                        type_name: name,
+                        fields,
+                    })
+                } else {
+                    Ok(Expr::Ident(name))
+                }
+            }
+            Some(_) => Err(ParseError::UnexpectedToken {
+                offset: self.current_offset(),
+            }),
+            None => Err(ParseError::UnexpectedEof),
+        }
+    }
+
+    fn parse_object_fields(&mut self) -> Result<Vec<(String, Expr)>, ParseError> {
+        let mut fields = Vec::new();
+        if self.matches_kind(TokenKind::RBrace) {
+            return Ok(fields);
+        }
+
+        loop {
+            let key = self.expect_ident()?;
+            self.expect_kind(TokenKind::Colon, ":")?;
+            let value = self.parse_expr()?;
+            fields.push((key, value));
+
+            if self.matches_kind(TokenKind::Comma) {
+                if self.matches_kind(TokenKind::RBrace) {
+                    return Ok(fields);
+                }
+                continue;
+            }
+
+            self.expect_kind(TokenKind::RBrace, "}")?;
+            break;
+        }
+        Ok(fields)
+    }
+
+    fn expect_ident(&mut self) -> Result<String, ParseError> {
+        match self.peek_kind() {
+            Some(TokenKind::Ident(name)) => {
+                let name = name.clone();
+                self.pos += 1;
+                Ok(name)
+            }
+            Some(_) => Err(ParseError::Expected {
+                expected: "identifier",
+                offset: self.current_offset(),
+            }),
+            None => Err(ParseError::UnexpectedEof),
+        }
+    }
+
+    fn expect_kind(&mut self, kind: TokenKind, expected: &'static str) -> Result<(), ParseError> {
+        if self.matches_kind(kind) {
+            Ok(())
+        } else {
+            Err(ParseError::Expected {
+                expected,
+                offset: self.current_offset(),
+            })
+        }
+    }
+
+    fn matches_kind(&mut self, kind: TokenKind) -> bool {
+        if let Some(current) = self.peek_kind()
+            && std::mem::discriminant(current) == std::mem::discriminant(&kind)
+        {
+            self.pos += 1;
+            return true;
+        }
+        false
+    }
+
+    fn peek_kind(&self) -> Option<&TokenKind> {
+        self.tokens.get(self.pos).map(|t| &t.kind)
+    }
+
+    fn matches_ident_literal(&mut self, expected: &str) -> bool {
+        match self.peek_kind() {
+            Some(TokenKind::Ident(name)) if name == expected => {
+                self.pos += 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn current_offset(&self) -> usize {
+        self.tokens
+            .get(self.pos)
+            .map_or_else(|| self.tokens.last().map_or(0, |t| t.start), |t| t.start)
+    }
+
+    fn is_eof(&self) -> bool {
+        self.pos >= self.tokens.len()
+    }
+}

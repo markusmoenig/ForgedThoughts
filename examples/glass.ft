@@ -1,0 +1,81 @@
+let camera = Camera {
+  origin: vec3(0.0, 1.0, 6.8),
+  target: vec3(0.0, 0.8, 0.0),
+  fov_y: 33.0
+};
+
+let key = PointLight {
+  position: vec3(3.4, 4.0, 4.8),
+  intensity: vec3(120.0, 118.0, 112.0)
+};
+
+let rim = PointLight {
+  position: vec3(-4.0, 2.8, -2.2),
+  intensity: vec3(30.0, 34.0, 42.0)
+};
+
+let sky = EnvLight {
+  radiance: vec3(0.3, 0.34, 0.42)
+};
+
+let glass = Dielectric {
+  color: vec3(0.96, 0.99, 1.0),
+  ior: 1.52,
+  roughness: 0.02,
+  thin_walled: 0.0
+};
+
+let red = Lambert {
+  color: vec3(0.85, 0.1, 0.08)
+};
+
+let floor_mat = Lambert {
+  color: vec3(0.78, 0.8, 0.86)
+};
+
+let backdrop_mat = Lambert {
+  color: vec3(0.08, 0.1, 0.12),
+  emission_color: vec3(1.0, 0.92, 0.85),
+  emission_strength: 2.5
+};
+
+let render = RenderSettings {
+  width: 800,
+  height: 800,
+  max_steps: 360,
+  max_dist: 70.0,
+  epsilon: 0.00015,
+  accel: Bvh{},
+  spp: 160,
+  min_spp: 20,
+  bounces: 8,
+  noise_threshold: 0.02
+};
+
+var floor = Box {
+  size: vec3(8.0, 0.5, 8.0),
+  material: floor_mat
+};
+floor.pos.y = -1.15;
+
+var back_sphere = Sphere {
+  radius: 0.85,
+  material: red
+};
+back_sphere.pos.z = -2.9;
+back_sphere.pos.y = 0.65;
+
+var glass_sphere = Sphere {
+  radius: 1.1,
+  material: glass
+};
+glass_sphere.pos.y = 0.8;
+
+var backdrop = Box {
+  size: vec3(3.6, 2.2, 0.2),
+  material: backdrop_mat
+};
+backdrop.pos.z = -4.2;
+backdrop.pos.y = 0.9;
+
+let scene = ((floor + back_sphere) + glass_sphere) + backdrop;

@@ -1,0 +1,2 @@
+let v = vec3(1.0, 2.0, 3.0);
+let a = mix(0.0, Sphere{}, 0.5);

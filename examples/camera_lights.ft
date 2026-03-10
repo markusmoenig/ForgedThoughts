@@ -1,0 +1,45 @@
+let camera = Camera {
+  origin: vec3(0.0, 1.2, 8.0),
+  target: vec3(0.0, 0.4, 0.0),
+  fov_y: 42.0
+};
+
+let key = PointLight {
+  position: vec3(3.0, 4.0, 6.0),
+  intensity: vec3(160.0, 160.0, 160.0)
+};
+
+let fill = PointLight {
+  position: vec3(-3.0, 2.0, 4.0),
+  intensity: vec3(50.0, 50.0, 50.0)
+};
+
+let sky = EnvLight {
+  radiance: vec3(0.55, 0.55, 0.65)
+};
+
+let mat = Material {
+  base_color: vec3(0.9, 0.45, 0.2),
+  roughness: 0.45,
+  metallic: 0.05
+};
+
+let render = RenderSettings {
+  width: 640,
+  height: 640,
+  max_steps: 320,
+  max_dist: 55.0,
+  epsilon: 0.0003,
+  accel: Bvh{}
+};
+
+var s = Sphere{};
+s.pos.y = 0.3;
+s.material = mat;
+
+var d = Box {
+  size: vec3(1.4, 1.4, 1.4)
+};
+d.pos.x = 0.8;
+
+let b = (s-d).smooth(0.2);

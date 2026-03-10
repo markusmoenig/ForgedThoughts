@@ -1,0 +1,23 @@
+{
+  "id": "limitations",
+  "title": "Limitations",
+  "description": "Current limitations:",
+  "source": "@site/docs/limitations.md",
+  "sourceDirName": ".",
+  "slug": "/limitations",
+  "permalink": "/docs/limitations",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 6,
+  "frontMatter": {
+    "sidebar_position": 6,
+    "title": "Limitations"
+  },
+  "sidebar": "mainSidebar",
+  "previous": {
+    "title": "Materials",
+    "permalink": "/docs/materials"
+  }
+}

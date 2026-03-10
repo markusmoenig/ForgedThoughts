@@ -1,0 +1,62 @@
+let camera = Camera {
+  origin: vec3(0.0, 1.6, 6.2),
+  target: vec3(0.0, 0.4, 0.0),
+  fov_y: 38.0
+};
+
+let key = PointLight {
+  position: vec3(3.0, 4.0, 5.0),
+  intensity: vec3(140.0, 136.0, 130.0)
+};
+
+let fill = PointLight {
+  position: vec3(-3.2, 2.4, 2.5),
+  intensity: vec3(26.0, 28.0, 32.0)
+};
+
+let sky = EnvLight {
+  radiance: vec3(0.34, 0.37, 0.45)
+};
+
+let red = Lambert {
+  color: vec3(0.86, 0.22, 0.14)
+};
+
+let blue = Lambert {
+  color: vec3(0.2, 0.35, 0.88)
+};
+
+let floor_mat = Lambert {
+  color: vec3(0.74, 0.76, 0.8)
+};
+
+let render = RenderSettings {
+  width: 800,
+  height: 800,
+  max_steps: 320,
+  max_dist: 70.0,
+  epsilon: 0.0002,
+  accel: Bvh{}
+};
+
+var floor = Box {
+  size: vec3(8.0, 0.5, 8.0),
+  material: floor_mat
+};
+floor.pos.y = -1.2;
+
+var s1 = Sphere {
+  radius: 1.0,
+  material: red
+};
+s1.pos.x = -1.1;
+s1.pos.y = 0.65;
+
+var s2 = Sphere {
+  radius: 1.0,
+  material: blue
+};
+s2.pos.x = 1.1;
+s2.pos.y = 0.65;
+
+let scene = (floor + s1) + s2;

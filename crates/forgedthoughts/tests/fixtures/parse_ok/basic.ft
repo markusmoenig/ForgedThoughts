@@ -1,0 +1,2 @@
+var s = Sphere{};
+s.x = 1;

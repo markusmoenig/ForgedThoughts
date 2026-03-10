@@ -1,0 +1,91 @@
+material WaxedGlass {
+  model: Dielectric;
+  color = vec3(1.0);
+  ior = 1.5;
+  roughness = 0.03;
+  medium = Medium {
+    ior: 1.33,
+    absorption_color: vec3(0.86, 0.93, 1.0),
+    density: 0.08
+  };
+  subsurface = Subsurface {
+    color: vec3(1.0, 0.62, 0.48),
+    radius: vec3(0.45, 0.28, 0.16),
+    anisotropy: 0.0,
+    scale: 0.35
+  };
+
+  fn color(ctx) {
+    let wave = sin(ctx.local_position.x * 7.0 + ctx.local_position.y * 3.0);
+    let mask = smoothstep(-0.3, 0.3, wave);
+    return mix(vec3(0.96, 0.98, 1.0), vec3(1.0, 0.94, 0.88), mask);
+  }
+
+  fn medium(ctx) {
+    let wave = sin(ctx.local_position.x * 6.0);
+    let mask = step(0.0, wave);
+    return Medium {
+      ior: mix(1.33, 1.45, mask),
+      absorption_color: vec3(0.84, 0.92, 1.0),
+      density: mix(0.08, 0.42, mask)
+    };
+  }
+
+  fn subsurface(ctx) {
+    let band = sin(ctx.local_position.y * 8.0);
+    let mask = smoothstep(-0.2, 0.2, band);
+    return Subsurface {
+      color: mix(vec3(1.0, 0.62, 0.48), vec3(0.92, 0.42, 0.32), mask),
+      radius: mix(vec3(0.3), vec3(0.9, 0.55, 0.24), mask),
+      anisotropy: mix(0.0, 0.25, mask),
+      scale: mix(0.2, 1.1, mask)
+    };
+  }
+};
+
+let floor_mat = Lambert {
+  color: vec3(0.8, 0.82, 0.86)
+};
+
+let camera = Camera {
+  origin: vec3(0.0, 1.35, 6.2),
+  target: vec3(0.0, 0.65, 0.0),
+  fov_y: 34.0
+};
+
+let key = PointLight {
+  position: vec3(3.2, 4.4, 5.4),
+  intensity: vec3(160.0, 154.0, 146.0)
+};
+
+let fill = PointLight {
+  position: vec3(-2.6, 2.2, -1.6),
+  intensity: vec3(34.0, 38.0, 45.0)
+};
+
+let sky = EnvLight {
+  radiance: vec3(0.26, 0.28, 0.32)
+};
+
+let render = RenderSettings {
+  width: 800,
+  height: 800,
+  max_steps: 320,
+  max_dist: 70.0,
+  epsilon: 0.00018,
+  accel: Bvh{}
+};
+
+var floor = Box {
+  size: vec3(8.0, 0.5, 8.0),
+  material: floor_mat
+};
+floor.pos.y = -1.15;
+
+var sphere = Sphere {
+  radius: 1.0,
+  material: WaxedGlass {}
+};
+sphere.pos.y = 0.62;
+
+let scene = floor + sphere;

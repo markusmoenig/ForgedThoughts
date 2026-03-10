@@ -1,0 +1,10 @@
+let a = clamp(1.7, 0.0, 1.0);
+let b = clamp(-0.5, 2.0, -1.0);
+let c = mix(2.0, 10.0, 0.25);
+let d = step(0.4, 0.1);
+let e = step(0.4, 0.9);
+let f = smoothstep(0.0, 1.0, 0.5);
+let g = smoothstep(0.2, 0.2, 0.1);
+let h = saturate(1.5);
+let i = saturate(-0.2);
+let j = vec3(0.0);

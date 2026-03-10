@@ -1,0 +1,60 @@
+let warm = vec3(0.92, 0.72, 0.32);
+let dark = vec3(0.14, 0.16, 0.18);
+let floor_color = mix(vec3(0.7, 0.72, 0.75), vec3(0.84, 0.86, 0.9), 0.28);
+
+let camera = Camera {
+  origin: vec3(0.0, 1.4, 6.0),
+  target: vec3(0.0, 0.55, 0.0),
+  fov_y: 36.0
+};
+
+let key = PointLight {
+  position: vec3(2.8, 4.2, 5.0),
+  intensity: vec3(150.0, 142.0, 130.0)
+};
+
+let rim = PointLight {
+  position: vec3(-3.0, 2.6, -1.4),
+  intensity: vec3(38.0, 42.0, 50.0)
+};
+
+let sky = EnvLight {
+  radiance: vec3(0.24, 0.27, 0.31)
+};
+
+let patterned = Metal {
+  color: vec3(0.7),
+  roughness: clamp(0.08 + 0.03 * 2.0, 0.0, 1.0),
+  pattern: Checker3d {
+    color_a: warm,
+    color_b: dark,
+    scale: 4.0
+  }
+};
+
+let floor_mat = Lambert {
+  color: floor_color
+};
+
+let render = RenderSettings {
+  width: 800,
+  height: 800,
+  max_steps: 320,
+  max_dist: 70.0,
+  epsilon: 0.00018,
+  accel: Bvh{}
+};
+
+var floor = Box {
+  size: vec3(8.0, 0.5, 8.0),
+  material: floor_mat
+};
+floor.pos.y = -1.15;
+
+var sphere = Sphere {
+  radius: 1.0,
+  material: patterned
+};
+sphere.pos.y = 0.62;
+
+let scene = floor + sphere;

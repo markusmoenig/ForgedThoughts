@@ -1,0 +1,2 @@
+let a = Sphere{};
+a.x = 2;

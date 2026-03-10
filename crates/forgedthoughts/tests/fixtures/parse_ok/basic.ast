@@ -1,0 +1,21 @@
+Program {
+    statements: [
+        Binding {
+            name: "s",
+            mutable: true,
+            expr: ObjectLiteral {
+                type_name: "Sphere",
+                fields: [],
+            },
+        },
+        Assign {
+            path: [
+                "s",
+                "x",
+            ],
+            expr: Number(
+                1.0,
+            ),
+        },
+    ],
+}

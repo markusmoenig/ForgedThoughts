@@ -1,0 +1,10 @@
+[package]
+name = "forgedthoughts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+rayon = "1.10"
+thiserror = "1.0"

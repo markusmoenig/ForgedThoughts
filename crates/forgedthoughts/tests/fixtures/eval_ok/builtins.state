@@ -1,0 +1,10 @@
+a (let) = 1
+b (let) = -0.5
+c (let) = 4
+d (let) = 0
+e (let) = 1
+f (let) = 0.5
+g (let) = 0
+h (let) = 1
+i (let) = 0
+j (let) = Object(vec3) {x: 0, y: 0, z: 0}

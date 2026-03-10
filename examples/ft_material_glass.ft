@@ -1,0 +1,76 @@
+material RippleGlass {
+  model: Dielectric;
+  color = vec3(1.0);
+  ior = 1.52;
+  roughness = 0.02;
+  thin_walled = 0.0;
+
+  fn color(ctx) {
+    let tint_a = vec3(0.92, 0.97, 1.0);
+    let tint_b = vec3(1.0, 0.96, 0.9);
+    let wave = sin(ctx.local_position.y * 9.0 + ctx.local_position.x * 4.0);
+    let mask = smoothstep(-0.35, 0.35, wave);
+    return mix(tint_a, tint_b, mask);
+  }
+
+  fn roughness(ctx) {
+    let band = sin(ctx.local_position.y * 12.0);
+    let mask = smoothstep(-0.2, 0.2, band);
+    return mix(0.01, 0.08, mask);
+  }
+
+  fn ior(ctx) {
+    let wave = sin(ctx.local_position.x * 5.0);
+    let mask = smoothstep(-0.4, 0.4, wave);
+    return mix(1.48, 1.56, mask);
+  }
+};
+
+let floor_color = vec3(0.8, 0.82, 0.86);
+
+let camera = Camera {
+  origin: vec3(0.0, 1.35, 6.2),
+  target: vec3(0.0, 0.65, 0.0),
+  fov_y: 34.0
+};
+
+let key = PointLight {
+  position: vec3(3.2, 4.4, 5.4),
+  intensity: vec3(160.0, 154.0, 146.0)
+};
+
+let fill = PointLight {
+  position: vec3(-2.6, 2.2, -1.6),
+  intensity: vec3(34.0, 38.0, 45.0)
+};
+
+let sky = EnvLight {
+  radiance: vec3(0.26, 0.28, 0.32)
+};
+
+let floor_mat = Lambert {
+  color: floor_color
+};
+
+let render = RenderSettings {
+  width: 800,
+  height: 800,
+  max_steps: 320,
+  max_dist: 70.0,
+  epsilon: 0.00018,
+  accel: Bvh{}
+};
+
+var floor = Box {
+  size: vec3(8.0, 0.5, 8.0),
+  material: floor_mat
+};
+floor.pos.y = -1.15;
+
+var sphere = Sphere {
+  radius: 1.0,
+  material: RippleGlass {}
+};
+sphere.pos.y = 0.62;
+
+let scene = floor + sphere;

@@ -1,0 +1,14 @@
+var s = Sphere{};
+s.pos.x = 10;
+s.material.roughness = 0.5;
+
+let mat = Material {
+  metallic: 0.4
+};
+
+var d = Box {
+  size: vec3(1.0, 1.0, 1.0),
+  material: mat
+};
+
+let b = (s-d).smooth(0.2);

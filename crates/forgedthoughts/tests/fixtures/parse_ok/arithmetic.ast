@@ -1,0 +1,35 @@
+Program {
+    statements: [
+        Binding {
+            name: "a",
+            mutable: false,
+            expr: Binary {
+                lhs: Binary {
+                    lhs: Number(
+                        1.0,
+                    ),
+                    op: Add,
+                    rhs: Binary {
+                        lhs: Number(
+                            2.0,
+                        ),
+                        op: Mul,
+                        rhs: Number(
+                            3.0,
+                        ),
+                    },
+                },
+                op: Sub,
+                rhs: Binary {
+                    lhs: Number(
+                        4.0,
+                    ),
+                    op: Div,
+                    rhs: Number(
+                        2.0,
+                    ),
+                },
+            },
+        },
+    ],
+}

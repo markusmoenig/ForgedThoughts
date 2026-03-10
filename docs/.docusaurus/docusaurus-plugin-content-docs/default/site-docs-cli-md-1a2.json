@@ -1,0 +1,27 @@
+{
+  "id": "cli",
+  "title": "CLI",
+  "description": "Validate a scene:",
+  "source": "@site/docs/cli.md",
+  "sourceDirName": ".",
+  "slug": "/cli",
+  "permalink": "/docs/cli",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 3,
+  "frontMatter": {
+    "sidebar_position": 3,
+    "title": "CLI"
+  },
+  "sidebar": "mainSidebar",
+  "previous": {
+    "title": "Install",
+    "permalink": "/docs/install"
+  },
+  "next": {
+    "title": "Language",
+    "permalink": "/docs/language"
+  }
+}

@@ -1,0 +1,4 @@
+b (let) = Object(smooth) {base: Object(sub) {lhs: Object(Sphere) {material: Object(anonymous) {roughness: 0.5}, x: 10}, rhs: Object(Box) {material: Object(Material) {metallic: 0.4}, size: Object(vec3) {x: 1, y: 1, z: 1}}}, k: 0.2}
+d (var) = Object(Box) {material: Object(Material) {metallic: 0.4}, size: Object(vec3) {x: 1, y: 1, z: 1}}
+mat (let) = Object(Material) {metallic: 0.4}
+s (var) = Object(Sphere) {material: Object(anonymous) {roughness: 0.5}, x: 10}

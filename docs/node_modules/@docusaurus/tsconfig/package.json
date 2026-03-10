@@ -1,0 +1,21 @@
+{
+  "name": "@docusaurus/tsconfig",
+  "version": "3.9.2",
+  "description": "Docusaurus base TypeScript configuration.",
+  "main": "tsconfig.json",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "tsconfig",
+    "typescript",
+    "docusaurus"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/facebook/docusaurus.git",
+    "directory": "packages/docusaurus-tsconfig"
+  },
+  "license": "MIT",
+  "gitHead": "abfbe5621b08407bc3dcbe6111ff118d4c22f7a1"
+}

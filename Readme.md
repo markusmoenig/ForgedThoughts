@@ -1,215 +1,197 @@
+# ForgedThoughts
 
-# Shape-Z
+ForgedThoughts is a Rust workspace for a small scene language (`.ft`) and a CPU renderer focused on signed distance field scenes.
 
-[Shape-Z](https://Shape-Z.com) is the successor of Forged Thoughts. Please check it out instead of Forged Thoughts.
+Current state:
 
----
+- FT parser, evaluator, and scene loading
+- CPU SDF rendering from `.ft` files
+- Fast recursive `ray` renderer for lookdev
+- Progressive Monte Carlo `trace` renderer for path tracing
+- Acceleration backends: `naive`, `bvh`, `bricks`
+- Built-in material backends: `Lambert`, `Metal`, `Dielectric`
+- FT-defined material hooks for:
+  - `color`, `roughness`, `ior`, `thin_walled`
+  - `emission_color`, `emission_strength`
+  - `medium`, `subsurface`
+  - `eval`, `pdf`, `sample`
 
-Forged Thoughts is a modeling and rendering programming language. It is open source under the MIT license and currently in early development. The language utilizes 3D and 2D SDFs and is written in Rust and can be easily installed as a Rust subcommand.
+## Workspace
 
-For documentation and examples see the [Website](https://forgedthoughts.com).
+- `crates/forgedthoughts`: core language + renderer library
+- `crates/ftc`: CLI frontend
+- `examples/`: sample `.ft` scenes and their rendered `.png` outputs
 
-Forged Thoughts strives to create high-quality distance field models for rendering and poligonization. It utilizes multi-threaded CPU based rendering in 64-bit to prevent the limitations of SDFs on the GPU. The focus is on quality, rather than speed.
+## Quickstart
 
-## Features
+Build:
 
-* Easy to use programming language with special modeling functionality.
-* Inbuild renderer for Phong, PBR and a full featured BSDF pathtracer.
-* Polygonization of models (OBJ).
-* 64-bit heavily multi-threaded ray-marcher running on the CPU.
-* Access to all SDF modeling primitives, modifiers and tricks (In progress).
-
-## Goals
-
-The overall project goals are:
-
-* Create signed distance fields for rendering and poligonization.
-* Focus is on quality rather than speed (although all example render in just a few hundred ms on my machine).
-* CPU based rather than GPU based. All computation is done in 64-bit.
-* Provide an easy but powerful syntax to model and render SDFs without any limitations.
-* Animation( TODO)
-* Object hierarchies by including sub-class scripts (TODO)
-* Share objects and materials via an integrated database (TODO)
-* Model and work with 2D SDFs and Text as an overlay to the 3D layer (TODO)
-* Terrain (TODO)
-* Physics (TODO)
-
-## Example
-
-#### Wine Glass
-
-![Wine Glass](examples/wine_glass.png)
-
-The modeling of the glass, except the materials, is just 9 lines.
-
-```rust
-// Glass
-
-let glass = Cone(0.6, 0.7, 0.6);
-glass.rounding = 0.2;
-
-glass.material.rgb = F3(1.0, 1.0, 1.0);
-glass.material.roughness = 0.0;
-glass.material.transmission = 1.0;
-glass.material.ior = 1.50;
-
-let interior = glass.copy();
-interior.scale = 0.96;
-
-// Fluid
-
-let fluid = interior.copy();
-fluid.material.rgb = F3("722F37").to_linear();
-fluid.material.transmission = 1.0;
-fluid.material.roughness = 0.5;
-fluid.material.ior = 1.3443705; // Red Wine
-fluid.material.clearcoat_gloss = 1.0;
-fluid.material.sheen = 1.0;
-fluid.material.sheen_tint = 1.0;
-fluid.max.y = 0.0;
-
-glass -= interior;
-
-// Top: Smooth Cut Off & Gold Rim
-
-let box = Box();
-box.material.rgb = F3("d4af37");
-box.material.metallic = 1.0;
-box.material.roughness = 0.2;
-box.position.y = 1.5;
-
-// Smoothly subtract the box from the glass
-glass -= Smooth(box, 0.01);
-
-// Create a groove with the gold material of the box
-glass += Groove(box, 0.001, 0.07);
+```bash
+cargo build
 ```
 
-#### Helmet
+Validate a scene:
 
-![Helmet](examples/helmet.png)
-
-The above helmet was created with the following code:
-
-```rust
-// Main shape - We make a smooth blend between a sphere and a cone
-
-let sphere = Sphere(0.24);
-let cone = Cone(0.3, 0.25, 0.0);
-
-let helmet = smin(sphere, cone, 0.5);
-
-// Assign the material
-
-helmet.material.rgb = F3("9F6F4A");
-helmet.material.metallic = 0.7;
-helmet.material.roughness = 0.3;
-
-// Make it hollow by creating a copy, subtract it and move it down a bit
-// to open the bottom
-
-let cut_out = helmet.copy();
-cut_out.position.y -= 0.04;
-cut_out.scale = 0.98;
-helmet -= cut_out;
-
-// Eye holes - We mirror an Ellipsoid on the x-axis and subtract it.
-
-let eyes = Ellipsoid();
-eyes.size = F3(0.11, 0.03, 0.1);
-eyes.position = F3(0.06, -0.03, 0.3);
-eyes.mirror.x = true;
-helmet -= eyes;
-
-// Nose and mouth - We modify a box and subtract it.
-
-let cut = Box(F3(0.07, 0.2, 0.1));
-cut.position.y -= 0.25;
-cut.position.z = 0.2;
-
-let modifier = RayModifier("x", "*", "sin", "y");
-modifier.frequency = 10.0;
-modifier.amplitude = 0.7;
-modifier.addend = 1.0;
-cut.modifier = modifier;
-helmet -= cut;
-
-// Stripe - We add a positive groove in the intersection between
-// the helmet and a box.
-
-let stripe = Box(F3(0.011, 0.17, 0.2));
-stripe.position.y = 0.16;
-stripe.position.z = 0.2;
-helmet += Groove(stripe, 0.01, 0.02);
+```bash
+cargo run -p ftc -- check --scene examples/mvp.ft
 ```
 
-## Current 3D SDF Primitives
+Fast recursive ray render:
 
-<table>
-  <tr>
-    <td> <img src="examples/primitives/sphere.png"  alt="Sphere" width = 400px height = 300px ></td>
-    <td> <img src="examples/primitives/box.png"  alt="Box" width = 400px height = 300px ></td>
-   </tr>
-   <tr>
-    <td> <img src="examples/primitives/cone.png"  alt="Cone" width = 400px height = 300px ></td>
-    <td> <img src="examples/primitives/ellipsoid.png"  alt="Ellipsoid" width = 400px height = 300px ></td>
-  </tr>
-   <tr>
-    <td> <img src="examples/primitives/torus.png"  alt="Torus" width = 400px height = 300px ></td>
-    <td> <img src="examples/primitives/cylinder.png"  alt="Cylinder" width = 400px height = 300px ></td>
-  </tr>
-</table>
+```bash
+cargo run -p ftc -- ray --scene examples/glass.ft
+```
 
-## Current Booleans
+Path trace:
 
-<table>
-  <tr>
-    <td> <img src="examples/booleans/addition.png"  alt="Sphere" width = 400px height = 300px ></td>
-    <td> <img src="examples/booleans/addition_smooth.png"  alt="Box" width = 400px height = 300px ></td>
-   </tr>
-   <tr>
-    <td> <img src="examples/booleans/addition_groove.png"  alt="Box" width = 400px height = 300px ></td>
-    <td> <img src="examples/booleans/subtraction.png"  alt="Ellipsoid" width = 400px height = 300px ></td>
-  </tr>
-    <td> <img src="examples/booleans/subtraction_smooth.png"  alt="Cone" width = 400px height = 300px ></td>
-    <td> <img src="examples/booleans/subtraction_groove.png"  alt="Box" width = 400px height = 300px ></td>
-   </tr>
-  </tr>
-    <td> <img src="examples/booleans/intersection.png"  alt="Cone" width = 400px height = 300px ></td>
-    <td> <img src="examples/booleans/intersection_smooth.png"  alt="Box" width = 400px height = 300px ></td>
-   </tr>
-</table>
+```bash
+cargo run -p ftc -- trace --scene examples/glass.ft --spp 64 --bounces 8
+```
 
-## Current Merging Functions
+Depth render:
 
-<table>
-  <tr>
-    <td> <img src="examples/merging/smin.png"  alt="Smin" width = 400px height = 300px ></td>
-   </tr>
-</table>
+```bash
+cargo run -p ftc -- render --scene examples/mvp.ft
+```
 
-## Current Modifier
+Acceleration benchmark:
 
-<table>
-  <tr>
-    <td> <img src="examples/modifier/twist.png"  alt="Sphere" width = 400px height = 300px ></td>
-    <td> <img src="examples/modifier/mirror.png"  alt="Box" width = 400px height = 300px ></td>
-   </tr>
-    <td> <img src="examples/modifier/max.png"  alt="Max" width = 400px height = 300px ></td>
-    <td> <img src="examples/modifier/onion.png"  alt="Onion" width = 400px height = 300px ></td>
-   </tr>
-</table>
+```bash
+cargo run -p ftc -- bench --scene examples/mvp.ft --iterations 5 --warmup 1
+```
 
-## Supporting Forged Thoughts
+Outputs default to the scene path with `.png` extension, so `examples/glass.ft` renders to `examples/glass.png`.
 
-You can support the Forged Thoughts project by becoming a [GitHub Sponsor](https://github.com/sponsors/markusmoenig).
+## Renderers
 
-## License
+`ray`
 
-Forged Thoughts is licensed under the MIT.
+- Recursive CPU renderer for quick iteration
+- Progressive tiled updates
+- Supports debug AOVs with `--debug-aov`
+- Uses the shared material system, but still has some hardcoded reflection/refraction logic internally
 
-Unless explicitly stated otherwise, any contribution intentionally submitted for inclusion in Forged Thoughts, shall be MIT licensed as above, without any additional terms or conditions.
+`trace`
 
-## Sponsors
+- Path tracer
+- Supports adaptive controls: `--min-spp`, `--noise-threshold`
+- Overwrites the destination PNG during preview updates with `--preview-every`
+- This is the renderer that currently benefits most from FT-defined `eval/pdf/sample`
 
-None yet
+## Language Snapshot
+
+FT is object-like, incremental, and scriptable:
+
+```ft
+var sphere = Sphere {
+  radius: 1.0
+};
+sphere.pos.y = 0.3;
+
+let mat = Dielectric {
+  color: vec3(0.96, 0.99, 1.0),
+  ior: 1.52,
+  roughness: 0.02,
+  thin_walled: 0.0
+};
+
+sphere.material = mat;
+let scene = sphere;
+```
+
+Supported language pieces today include:
+
+- `let` / `var`
+- nested property assignment like `pos.x` and `rot.z`
+- object literals
+- scalar and `vec3` math
+- material definitions with local bindings and functions
+
+Example FT material:
+
+```ft
+material SoftGold {
+  model: Metal;
+  color = vec3(0.92, 0.78, 0.34);
+
+  fn eval(ctx) {
+    let ndotl = max(dot(ctx.normal, ctx.wi), 0.0);
+    return mix(vec3(0.08, 0.06, 0.03), color, ndotl) * (1.0 / 3.14159265);
+  }
+
+  fn pdf(ctx) {
+    return max(dot(ctx.normal, ctx.wi), 0.0) / 3.14159265;
+  }
+
+  fn sample(ctx) {
+    return BsdfSample {
+      wi: ctx.normal,
+      f: color * (1.0 / 3.14159265),
+      pdf: 1.0,
+      delta: 0.0,
+      apply_cos: 1.0,
+      transmission: 0.0,
+      thin_walled: 0.0,
+      next_ior: ctx.current_ior
+    };
+  }
+};
+```
+
+See:
+
+- `examples/lambert.ft`
+- `examples/metal.ft`
+- `examples/glass.ft`
+- `examples/ft_material.ft`
+- `examples/ft_material_glass.ft`
+- `examples/ft_material_wax.ft`
+- `examples/ft_bsdf.ft`
+
+## Material Model
+
+There are two layers right now:
+
+1. Built-in host BSDF backends: `Lambert`, `Metal`, `Dielectric`
+2. FT-side overrides on top of those backends
+
+An FT material can:
+
+- set static properties like `color = vec3(1.0)`
+- compute dynamic properties from hit context with `fn color(ctx) { ... }`
+- define custom `eval(ctx)`, `pdf(ctx)`, and `sample(ctx)` hooks
+
+Current hit/BSDF context includes values such as:
+
+- `ctx.position`
+- `ctx.local_position`
+- `ctx.normal`
+- `ctx.view_dir`
+- `ctx.wo`
+- `ctx.wi`
+- `ctx.current_ior`
+- `ctx.u1`, `ctx.u2`, `ctx.u3` for `sample(ctx)`
+
+## Current Limits
+
+- `subsurface` exists as material data, but true subsurface transport is not implemented yet
+- `medium` currently affects transmission through simple Beer-Lambert attenuation
+- FT-defined `eval/pdf/sample` are integrated in the path tracer first; the `ray` renderer still has some backend-specific recursion logic
+- FT material functions are still interpreted, not VM/JIT compiled
+
+## Development
+
+Run checks:
+
+```bash
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+## Direction
+
+The current direction is:
+
+- keep CPU rendering practical for complex SDF scenes
+- push FT materials from parameter scripting toward self-contained shareable shading code
+- stabilize the FT material/runtime contract before moving to a VM and later JIT
