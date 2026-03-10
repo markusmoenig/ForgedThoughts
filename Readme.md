@@ -7,7 +7,7 @@ Current state:
 - FT parser, evaluator, and scene loading
 - CPU SDF rendering from `.ft` files
 - Fast recursive `ray` renderer for lookdev
-- Progressive Monte Carlo `trace` renderer for path tracing
+- Progressive Monte Carlo `path` renderer for path tracing
 - Acceleration backends: `naive`, `bvh`, `bricks`
 - Built-in material backends: `Lambert`, `Metal`, `Dielectric`
 - FT-defined material hooks for:
@@ -45,7 +45,7 @@ cargo run -p ftc -- ray --scene examples/glass.ft
 Path trace:
 
 ```bash
-cargo run -p ftc -- trace --scene examples/glass.ft --spp 64 --bounces 8
+cargo run -p ftc -- path --scene examples/glass.ft --spp 64 --bounces 8
 ```
 
 Depth render:
@@ -71,7 +71,7 @@ Outputs default to the scene path with `.png` extension, so `examples/glass.ft` 
 - Supports debug AOVs with `--debug-aov`
 - Uses the shared material system, but still has some hardcoded reflection/refraction logic internally
 
-`trace`
+`path`
 
 - Path tracer
 - Supports adaptive controls: `--min-spp`, `--noise-threshold`

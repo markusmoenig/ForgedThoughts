@@ -16,7 +16,6 @@ ForgedThoughts is a CPU-first rendering project built around:
 Today the project is already usable for:
 
 - authoring `.ft` scene files
-- rendering SDF scenes with `ray`, `trace`, or `render`
 - rendering SDF scenes with `ray`, `path`, or `render`
 - testing material ideas with `Lambert`, `Metal`, and `Dielectric`
 - writing FT material hooks such as `color`, `roughness`, `ior`, `medium`, and custom `eval/pdf/sample`
