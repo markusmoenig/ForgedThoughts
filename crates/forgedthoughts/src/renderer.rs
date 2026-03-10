@@ -984,7 +984,7 @@ fn render_depth_image(
                         let _ = (hit.object_id, hit.material_id);
                         let t = (1.0 - (hit.t / options.max_dist)).clamp(0.0, 1.0);
                         let material =
-                            resolve_material_at_hit(&setup, hit, dir.mul(-1.0).normalize());
+                            resolve_material_at_hit(setup, hit, dir.mul(-1.0).normalize());
                         let local_position = to_local(
                             hit.position,
                             setup
@@ -1697,10 +1697,7 @@ fn resolve_bsdf_object_hook(
     eval_material_function(&setup.state, name, function_name, ctx).ok()
 }
 
-fn dynamic_material_name<'a>(
-    material: MaterialKindRt,
-    material_def_names: &'a [String],
-) -> Option<&'a str> {
+fn dynamic_material_name(material: MaterialKindRt, material_def_names: &[String]) -> Option<&str> {
     let dynamic_material_id = match material {
         MaterialKindRt::Lambert(params)
         | MaterialKindRt::Metal(params)
