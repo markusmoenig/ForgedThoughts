@@ -1,0 +1,27 @@
+{
+  "id": "objects",
+  "title": "Objects",
+  "description": "Forge scenes are built from object literals, transforms, CSG composition, and custom SDF definitions.",
+  "source": "@site/docs/objects.md",
+  "sourceDirName": ".",
+  "slug": "/objects",
+  "permalink": "/docs/objects",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "sidebarPosition": 5,
+  "frontMatter": {
+    "sidebar_position": 5,
+    "title": "Objects"
+  },
+  "sidebar": "mainSidebar",
+  "previous": {
+    "title": "Language",
+    "permalink": "/docs/language"
+  },
+  "next": {
+    "title": "Materials",
+    "permalink": "/docs/materials"
+  }
+}

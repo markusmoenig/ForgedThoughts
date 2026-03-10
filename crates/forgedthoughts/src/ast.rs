@@ -11,6 +11,19 @@ pub struct MaterialDef {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SdfDef {
+    pub name: String,
+    pub statements: Vec<SdfStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionDef {
+    pub name: String,
+    pub param: String,
+    pub body: Vec<MaterialFunctionStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum MaterialFunctionStatement {
     Binding { name: String, expr: Expr },
     Return { expr: Expr },
@@ -33,8 +46,28 @@ pub enum MaterialStatement {
     },
 }
 
+pub type SdfFunctionStatement = MaterialFunctionStatement;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SdfStatement {
+    Binding {
+        name: String,
+        expr: Expr,
+    },
+    Function {
+        name: String,
+        param: String,
+        body: Vec<SdfFunctionStatement>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
+    Import {
+        path: String,
+        alias: Option<String>,
+    },
+    Export(Vec<String>),
     Binding {
         name: String,
         mutable: bool,
@@ -44,7 +77,9 @@ pub enum Statement {
         path: Vec<String>,
         expr: Expr,
     },
+    FunctionDef(FunctionDef),
     MaterialDef(MaterialDef),
+    SdfDef(SdfDef),
 }
 
 #[derive(Debug, Clone, PartialEq)]

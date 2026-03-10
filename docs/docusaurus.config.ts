@@ -3,7 +3,7 @@ import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
   title: "ForgedThoughts",
-  tagline: "Programmable SDF rendering with FT",
+  tagline: "Programmable SDF rendering with Forge",
 
   future: {
     v4: true,

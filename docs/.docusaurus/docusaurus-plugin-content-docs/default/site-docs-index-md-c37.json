@@ -1,7 +1,7 @@
 {
   "id": "index",
   "title": "Overview",
-  "description": "ForgedThoughts is a CPU-first rendering project built around:",
+  "description": "ForgedThoughts is a CPU-first rendering project built around the Forge language, signed distance field scene construction, and programmable materials.",
   "source": "@site/docs/index.md",
   "sourceDirName": ".",
   "slug": "/",

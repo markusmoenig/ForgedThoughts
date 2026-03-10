@@ -12,7 +12,11 @@ pub enum TokenKind {
     Var,
     Fn,
     Return,
+    Import,
+    Export,
     Ident(String),
+    String(String),
+    HexColor(String),
     Number(f64),
     Equal,
     Semicolon,
@@ -35,6 +39,8 @@ pub enum LexError {
     UnexpectedChar { ch: char, offset: usize },
     #[error("invalid number '{lexeme}' at byte {offset}")]
     InvalidNumber { lexeme: String, offset: usize },
+    #[error("invalid hex color '{lexeme}' at byte {offset}")]
+    InvalidHexColor { lexeme: String, offset: usize },
 }
 
 pub fn tokenize(input: &str) -> Result<Vec<Token>, LexError> {
@@ -44,6 +50,59 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, LexError> {
     while let Some((offset, ch)) = chars.next() {
         match ch {
             ' ' | '\t' | '\r' | '\n' => {}
+            '"' => {
+                let mut value = String::new();
+                let mut closed = false;
+                while let Some((_, next)) = chars.next() {
+                    match next {
+                        '"' => {
+                            closed = true;
+                            break;
+                        }
+                        '\\' => {
+                            let Some((_, escaped)) = chars.next() else {
+                                break;
+                            };
+                            let mapped = match escaped {
+                                '"' => '"',
+                                '\\' => '\\',
+                                'n' => '\n',
+                                'r' => '\r',
+                                't' => '\t',
+                                other => other,
+                            };
+                            value.push(mapped);
+                        }
+                        other => value.push(other),
+                    }
+                }
+                if !closed {
+                    return Err(LexError::UnexpectedChar { ch, offset });
+                }
+                tokens.push(Token {
+                    kind: TokenKind::String(value),
+                    start: offset,
+                });
+            }
+            '#' => {
+                let mut lexeme = String::from("#");
+                while let Some((_, next)) = chars.peek() {
+                    if next.is_ascii_hexdigit() {
+                        lexeme.push(*next);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                let digits = &lexeme[1..];
+                if !(digits.len() == 3 || digits.len() == 6) {
+                    return Err(LexError::InvalidHexColor { lexeme, offset });
+                }
+                tokens.push(Token {
+                    kind: TokenKind::HexColor(digits.to_ascii_lowercase()),
+                    start: offset,
+                });
+            }
             '/' => {
                 if let Some((_, '/')) = chars.peek() {
                     for (_, c) in chars.by_ref() {
@@ -83,6 +142,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, LexError> {
                     "var" => TokenKind::Var,
                     "fn" => TokenKind::Fn,
                     "return" => TokenKind::Return,
+                    "import" => TokenKind::Import,
+                    "export" => TokenKind::Export,
                     _ => TokenKind::Ident(lexeme),
                 };
 

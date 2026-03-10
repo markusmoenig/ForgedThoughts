@@ -5,38 +5,47 @@ title: CLI
 
 # CLI
 
+List built-in library assets:
+
+```bash
+ftc list materials
+ftc list objects
+ftc list scenes
+```
+
 Validate a scene:
 
 ```bash
-cargo run -p ftc -- check --scene examples/mvp.ft
+ftc check --scene examples/mvp.ft
 ```
 
-Depth render:
+Shaded preview render:
 
 ```bash
-cargo run -p ftc -- render --scene examples/mvp.ft
+ftc render --scene examples/mvp.ft
 ```
 
-Fast recursive ray render:
+Ray tracer:
 
 ```bash
-cargo run -p ftc -- ray --scene examples/glass.ft
+ftc ray --scene examples/glass.ft
 ```
 
 Path trace:
 
 ```bash
-cargo run -p ftc -- path --scene examples/glass.ft --spp 64 --bounces 8
+ftc path --scene examples/glass.ft --spp 64 --bounces 8
 ```
 
 Benchmark acceleration backends:
 
 ```bash
-cargo run -p ftc -- bench --scene examples/mvp.ft --iterations 5 --warmup 1
+ftc bench --scene examples/mvp.ft --iterations 5 --warmup 1
 ```
 
 Notes:
 
 - Output defaults to the input scene path with `.png`
+- `render` is a fast shaded preview path with materials but without shadow tracing
 - `ray` supports progressive tile updates and debug AOVs
 - `path` supports adaptive sampling controls and preview overwrites

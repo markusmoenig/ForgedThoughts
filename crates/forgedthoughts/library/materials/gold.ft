@@ -1,0 +1,7 @@
+material Gold {
+  model: Metal;
+  color = #ebc757;
+  roughness = 0.18;
+};
+
+export { Gold };

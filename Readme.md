@@ -4,13 +4,13 @@ ForgedThoughts is a Rust workspace for a small scene language (`.ft`) and a CPU 
 
 Current state:
 
-- FT parser, evaluator, and scene loading
-- CPU SDF rendering from `.ft` files
-- Fast recursive `ray` renderer for lookdev
+- Forge parser, evaluator, and scene loading
+- Fast shaded preview rendering from `.ft` files
+- Classical Whitted-style `ray` rendering for lookdev
 - Progressive Monte Carlo `path` renderer for path tracing
 - Acceleration backends: `naive`, `bvh`, `bricks`
 - Built-in material backends: `Lambert`, `Metal`, `Dielectric`
-- FT-defined material hooks for:
+- Forge-defined material hooks for:
   - `color`, `roughness`, `ior`, `thin_walled`
   - `emission_color`, `emission_strength`
   - `medium`, `subsurface`
@@ -33,31 +33,31 @@ cargo build
 Validate a scene:
 
 ```bash
-cargo run -p ftc -- check --scene examples/mvp.ft
+ftc check --scene examples/mvp.ft
 ```
 
-Fast recursive ray render:
+Ray tracer:
 
 ```bash
-cargo run -p ftc -- ray --scene examples/glass.ft
+ftc ray --scene examples/glass.ft
 ```
 
 Path trace:
 
 ```bash
-cargo run -p ftc -- path --scene examples/glass.ft --spp 64 --bounces 8
+ftc path --scene examples/glass.ft --spp 64 --bounces 8
 ```
 
-Depth render:
+Shaded preview render:
 
 ```bash
-cargo run -p ftc -- render --scene examples/mvp.ft
+ftc render --scene examples/mvp.ft
 ```
 
 Acceleration benchmark:
 
 ```bash
-cargo run -p ftc -- bench --scene examples/mvp.ft --iterations 5 --warmup 1
+ftc bench --scene examples/mvp.ft --iterations 5 --warmup 1
 ```
 
 Outputs default to the scene path with `.png` extension, so `examples/glass.ft` renders to `examples/glass.png`.
@@ -66,21 +66,27 @@ Outputs default to the scene path with `.png` extension, so `examples/glass.ft` 
 
 `ray`
 
-- Recursive CPU renderer for quick iteration
+- Classical Whitted-style CPU ray tracer for quick iteration
 - Progressive tiled updates
 - Supports debug AOVs with `--debug-aov`
 - Uses the shared material system, but still has some hardcoded reflection/refraction logic internally
+
+`render`
+
+- Fast shaded preview renderer
+- Uses material shading and direct light response
+- Skips shadow tracing and recursive effects for speed
 
 `path`
 
 - Path tracer
 - Supports adaptive controls: `--min-spp`, `--noise-threshold`
 - Overwrites the destination PNG during preview updates with `--preview-every`
-- This is the renderer that currently benefits most from FT-defined `eval/pdf/sample`
+- This is the renderer that currently benefits most from Forge-defined `eval/pdf/sample`
 
 ## Language Snapshot
 
-FT is object-like, incremental, and scriptable:
+Forge is object-like, incremental, and scriptable:
 
 ```ft
 var sphere = Sphere {
@@ -89,7 +95,7 @@ var sphere = Sphere {
 sphere.pos.y = 0.3;
 
 let mat = Dielectric {
-  color: vec3(0.96, 0.99, 1.0),
+  color: #f5fcff,
   ior: 1.52,
   roughness: 0.02,
   thin_walled: 0.0
@@ -101,13 +107,18 @@ let scene = sphere;
 
 Supported language pieces today include:
 
+- top-level functions
+- top-level imports
+- top-level exports
 - `let` / `var`
 - nested property assignment like `pos.x` and `rot.z`
 - object literals
 - scalar and `vec3` math
+- hex color literals like `#ff0000` and `#f00`
 - material definitions with local bindings and functions
+- custom SDF definitions with `sdf Name { fn distance(p) { ... } }`
 
-Example FT material:
+Example Forge material:
 
 ```ft
 material SoftGold {
@@ -138,24 +149,107 @@ material SoftGold {
 };
 ```
 
+Example top-level helper functions:
+
+```ft
+fn accent() {
+  return #ebc757;
+}
+
+fn make_gold() {
+  return Metal {
+    color: accent(),
+    roughness: 0.18
+  };
+}
+```
+
 See:
 
 - `examples/lambert.ft`
 - `examples/metal.ft`
 - `examples/glass.ft`
+- `examples/ft_sdf.ft`
+- `examples/imports.ft`
 - `examples/ft_material.ft`
 - `examples/ft_material_glass.ft`
 - `examples/ft_material_wax.ft`
 - `examples/ft_bsdf.ft`
+
+Example custom SDF:
+
+```ft
+sdf SoftBlob {
+  let wave_scale = 0.16;
+
+  fn bounds() {
+    return vec3(1.2, 1.2, 1.1);
+  }
+
+  fn warp(p) {
+    return vec3(p.x, p.y + sin(p.x * 4.0) * wave_scale, p.z);
+  }
+
+  fn distance(p) {
+    let q = warp(p);
+    return length(q) - 1.0;
+  }
+};
+
+let scene = SoftBlob {};
+```
+
+`fn bounds()` is optional, but it matters for performance. Without it, custom SDFs fall back to a very conservative bound and acceleration quality drops sharply.
+
+## Imports
+
+Forge supports top-level imports:
+
+```ft
+import "./shared/materials.ft";
+import "Gold" as gold;
+import "SoftBlob" as blob;
+import "Studio";
+```
+
+Import rules:
+
+- `./...` and `../...` resolve relative to the current file on disk
+- `materials/...`, `objects/...`, and `scenes/...` resolve from the embedded built-in library
+- bare built-in names like `Glass`, `SoftBlob`, and `Studio` also resolve from the embedded built-in library
+- `as name` namespaces the imported top-level symbols under `name.`
+- each import is loaded only once
+- cyclic imports are rejected
+
+Files can also declare explicit exports:
+
+```ft
+let private_color = #ebc757;
+material Gold {
+  model: Metal;
+  color = private_color;
+  roughness = 0.18;
+};
+
+export { Gold };
+```
+
+List the built-in library from the CLI:
+
+```bash
+ftc list materials
+ftc list objects
+ftc list scenes
+```
 
 ## Material Model
 
 There are two layers right now:
 
 1. Built-in host BSDF backends: `Lambert`, `Metal`, `Dielectric`
-2. FT-side overrides on top of those backends
+2. Forge-side overrides on top of those backends
 
-An FT material can:
+A Forge material can:
 
 - set static properties like `color = vec3(1.0)`
 - compute dynamic properties from hit context with `fn color(ctx) { ... }`
@@ -176,8 +270,8 @@ Current hit/BSDF context includes values such as:
 
 - `subsurface` exists as material data, but true subsurface transport is not implemented yet
 - `medium` currently affects transmission through simple Beer-Lambert attenuation
-- FT-defined `eval/pdf/sample` are integrated in the path tracer first; the `ray` renderer still has some backend-specific recursion logic
-- FT material functions are still interpreted, not VM/JIT compiled
+- Forge-defined `eval/pdf/sample` are integrated in the path tracer first; the `ray` renderer still has some backend-specific recursion logic
+- Forge material functions are still interpreted, not VM/JIT compiled
 
 ## Development
 
@@ -193,5 +287,5 @@ cargo clippy --all-targets --all-features -- -D warnings
 The current direction is:
 
 - keep CPU rendering practical for complex SDF scenes
-- push FT materials from parameter scripting toward self-contained shareable shading code
-- stabilize the FT material/runtime contract before moving to a VM and later JIT
+- push Forge materials from parameter scripting toward self-contained shareable shading code
+- stabilize the Forge material/runtime contract before moving to a VM and later JIT

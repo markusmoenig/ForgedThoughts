@@ -17,8 +17,8 @@
   },
   "sidebar": "mainSidebar",
   "previous": {
-    "title": "Language",
-    "permalink": "/docs/language"
+    "title": "Objects",
+    "permalink": "/docs/objects"
   },
   "next": {
     "title": "Limitations",

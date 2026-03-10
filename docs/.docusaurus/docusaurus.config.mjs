@@ -5,7 +5,7 @@
  */
 export default {
   "title": "ForgedThoughts",
-  "tagline": "Programmable SDF rendering with FT",
+  "tagline": "Programmable SDF rendering with Forge",
   "future": {
     "v4": {
       "removeLegacyPostBuildHeadAttribute": true,

@@ -7,9 +7,10 @@ use std::{
 
 use clap::{Parser, Subcommand, ValueEnum};
 use forgedthoughts::{
-    AccelMode, AppConfig, CoreError, PathtraceSettings, RayDebugAov, RaySettings, RenderOptions,
-    SceneRenderSettings, extract_scene_render_settings, load_and_eval_scene,
-    render_depth_png_with_accel, render_pathtrace_progressive_with_accel,
+    AccelMode, AppConfig, BuiltinLibraryCategory, CoreError, PathtraceSettings, RayDebugAov,
+    RaySettings, RenderOptions, SceneRenderSettings, builtin_library_items,
+    extract_scene_render_settings, load_and_eval_scene, render_depth_png_with_accel,
+    render_pathtrace_progressive_with_accel, render_preview_progressive_with_accel,
     render_ray_progressive_with_accel, resolve_scene_path,
 };
 use indicatif::{ProgressBar, ProgressStyle};
@@ -70,7 +71,7 @@ enum Command {
         #[arg(long, value_enum)]
         debug_aov: Option<CliRayDebugAov>,
     },
-    /// Render an RGB preview PNG from a scene
+    /// Render a fast shaded preview PNG from a scene
     Render {
         /// Path to a .ft scene file
         #[arg(short, long)]
@@ -91,6 +92,10 @@ enum Command {
         /// Acceleration backend
         #[arg(long, value_enum)]
         accel: Option<CliAccelMode>,
+
+        /// Tile size for progressive preview updates
+        #[arg(long, default_value_t = 64)]
+        tile_size: u32,
     },
     /// Path trace a scene to PNG
     Path {
@@ -156,6 +161,18 @@ enum Command {
         #[arg(long, default_value_t = 1)]
         warmup: u32,
     },
+    /// List built-in library assets
+    List {
+        #[command(subcommand)]
+        kind: ListCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ListCommand {
+    Materials,
+    Objects,
+    Scenes,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -227,7 +244,16 @@ fn main() -> ExitCode {
             width,
             height,
             accel,
-        } => run_render(scene, output, width, height, accel.map(Into::into), &cfg),
+            tile_size,
+        } => run_render(
+            scene,
+            output,
+            width,
+            height,
+            accel.map(Into::into),
+            tile_size,
+            &cfg,
+        ),
         Command::Path {
             scene,
             output,
@@ -283,6 +309,7 @@ fn main() -> ExitCode {
             iterations,
             warmup,
         } => run_bench(scene, width, height, iterations, warmup, &cfg),
+        Command::List { kind } => run_list(kind),
     }
 }
 
@@ -320,6 +347,7 @@ fn run_render(
     width: Option<u32>,
     height: Option<u32>,
     accel: Option<AccelMode>,
+    tile_size: u32,
     cfg: &AppConfig,
 ) -> ExitCode {
     let total_start = Instant::now();
@@ -339,13 +367,43 @@ fn run_render(
                     );
 
                     let output_path = output.unwrap_or_else(|| default_output_path(&scene_path));
+                    let tile_size = tile_size.max(8);
+                    let tiles_x = options.width.div_ceil(tile_size);
+                    let tiles_y = options.height.div_ceil(tile_size);
+                    let tiles_total = u64::from(tiles_x) * u64::from(tiles_y);
+                    let progress = ProgressBar::new(tiles_total.max(1));
+                    let style = ProgressStyle::with_template(
+                        "[{elapsed_precise}] {wide_bar} {pos}/{len} tiles {msg}",
+                    )
+                    .unwrap_or_else(|_| ProgressStyle::default_bar())
+                    .progress_chars("=>-");
+                    progress.set_style(style);
                     let render_start = Instant::now();
-                    if let Err(err) =
-                        render_depth_png_with_accel(&state, &output_path, options, accel)
-                    {
+                    let image = match render_preview_progressive_with_accel(
+                        &state,
+                        options,
+                        accel,
+                        tile_size,
+                        |step, image| {
+                            progress.set_position(u64::from(step.tiles_done));
+                            progress.set_message(format!("{} ms", step.elapsed_ms));
+                            image.save(&output_path)?;
+                            Ok(())
+                        },
+                    ) {
+                        Ok(image) => image,
+                        Err(err) => {
+                            progress.abandon_with_message("failed");
+                            error!(output = %output_path.display(), "{err}");
+                            return ExitCode::from(4);
+                        }
+                    };
+                    if let Err(err) = image.save(&output_path) {
+                        progress.abandon_with_message("failed");
                         error!(output = %output_path.display(), "{err}");
                         return ExitCode::from(4);
                     }
+                    progress.finish_with_message("done");
                     let render_elapsed = render_start.elapsed();
                     let total_elapsed = total_start.elapsed();
                     let megapixels =
@@ -356,7 +414,8 @@ fn run_render(
                         width = options.width,
                         height = options.height,
                         accel = ?accel,
-                        "depth map rendered"
+                        tile_size,
+                        "preview rendered"
                     );
                     info!(
                         parse_eval_ms = parse_eval_elapsed.as_millis(),
@@ -492,6 +551,20 @@ fn run_bench(
             ExitCode::from(3)
         }
     }
+}
+
+fn run_list(kind: ListCommand) -> ExitCode {
+    let category = match kind {
+        ListCommand::Materials => BuiltinLibraryCategory::Materials,
+        ListCommand::Objects => BuiltinLibraryCategory::Objects,
+        ListCommand::Scenes => BuiltinLibraryCategory::Scenes,
+    };
+
+    for item in builtin_library_items(Some(category)) {
+        println!("{}\t{}", item.name, item.path);
+    }
+
+    ExitCode::SUCCESS
 }
 
 fn run_pathtrace(params: PathtraceParams, cfg: &AppConfig) -> ExitCode {

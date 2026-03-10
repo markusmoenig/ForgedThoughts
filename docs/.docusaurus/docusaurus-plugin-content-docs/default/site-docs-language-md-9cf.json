@@ -1,7 +1,7 @@
 {
   "id": "language",
   "title": "Language",
-  "description": "FT is object-like and incremental.",
+  "description": "Forge is object-like and incremental.",
   "source": "@site/docs/language.md",
   "sourceDirName": ".",
   "slug": "/language",
@@ -21,7 +21,7 @@
     "permalink": "/docs/cli"
   },
   "next": {
-    "title": "Materials",
-    "permalink": "/docs/materials"
+    "title": "Objects",
+    "permalink": "/docs/objects"
   }
 }

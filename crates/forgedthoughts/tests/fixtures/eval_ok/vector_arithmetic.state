@@ -1,0 +1,8 @@
+a (let) = Object(vec3) {x: 5, y: 7, z: 9}
+b (let) = Object(vec3) {x: 4, y: 5, z: 6}
+c (let) = Object(vec3) {x: 2, y: 4, z: 6}
+d (let) = Object(vec3) {x: 2, y: 4, z: 6}
+e (let) = Object(vec3) {x: 4, y: 5, z: 6}
+f (let) = Object(vec3) {x: -1, y: 2, z: -3}
+g (let) = Object(vec3) {x: 10, y: 18, z: 28}
+h (let) = Object(vec3) {x: 4, y: 3, z: 2}

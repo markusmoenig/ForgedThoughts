@@ -1,0 +1,20 @@
+import "Studio";
+import "Gold" as gold;
+import "SoftBlob" as blob;
+
+let floor_mat = Lambert {
+  color: vec3(0.76, 0.78, 0.82)
+};
+
+var floor = Box {
+  size: vec3(8.0, 0.5, 8.0),
+  material: floor_mat
+};
+floor.pos.y = -1.15;
+
+var blob_shape = blob.SoftBlob {
+  material: gold.Gold {}
+};
+blob_shape.pos.y = 0.6;
+
+let scene = floor + blob_shape;

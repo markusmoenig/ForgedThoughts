@@ -15,6 +15,7 @@ export default {
   "config---5-e-9-4f3": [() => import(/* webpackChunkName: "config---5-e-9-4f3" */ "@generated/docusaurus.config"), "@generated/docusaurus.config", require.resolveWeak("@generated/docusaurus.config")],
   "content---c-37-d02": [() => import(/* webpackChunkName: "content---c-37-d02" */ "@site/docs/index.md"), "@site/docs/index.md", require.resolveWeak("@site/docs/index.md")],
   "content---cli-1-a-2-3f0": [() => import(/* webpackChunkName: "content---cli-1-a-2-3f0" */ "@site/docs/cli.md"), "@site/docs/cli.md", require.resolveWeak("@site/docs/cli.md")],
+  "content---docs-objectsb-51-593": [() => import(/* webpackChunkName: "content---docs-objectsb-51-593" */ "@site/docs/objects.md"), "@site/docs/objects.md", require.resolveWeak("@site/docs/objects.md")],
   "content---installc-4-d-880": [() => import(/* webpackChunkName: "content---installc-4-d-880" */ "@site/docs/install.md"), "@site/docs/install.md", require.resolveWeak("@site/docs/install.md")],
   "content---language-9-cf-08c": [() => import(/* webpackChunkName: "content---language-9-cf-08c" */ "@site/docs/language.md"), "@site/docs/language.md", require.resolveWeak("@site/docs/language.md")],
   "content---limitations-147-eba": [() => import(/* webpackChunkName: "content---limitations-147-eba" */ "@site/docs/limitations.md"), "@site/docs/limitations.md", require.resolveWeak("@site/docs/limitations.md")],

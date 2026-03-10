@@ -6,9 +6,10 @@ const sidebars: SidebarsConfig = {
     "install",
     "cli",
     "language",
+    "objects",
     "materials",
-    "limitations"
-  ]
+    "limitations",
+  ],
 };
 
 export default sidebars;

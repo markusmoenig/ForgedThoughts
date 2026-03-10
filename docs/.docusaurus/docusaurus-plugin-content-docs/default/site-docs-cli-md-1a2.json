@@ -1,7 +1,7 @@
 {
   "id": "cli",
   "title": "CLI",
-  "description": "Validate a scene:",
+  "description": "List built-in library assets:",
   "source": "@site/docs/cli.md",
   "sourceDirName": ".",
   "slug": "/cli",

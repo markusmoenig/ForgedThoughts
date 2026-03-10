@@ -7,7 +7,7 @@ title: Limitations
 
 Current limitations:
 
-- FT material functions are interpreted, not VM/JIT compiled
+- Forge material functions are interpreted, not VM/JIT compiled
 - `subsurface` is not yet rendered as true subsurface transport
 - the `ray` renderer still contains backend-specific recursion logic
 - the path tracer is the more correct target for custom BSDF work
@@ -15,7 +15,7 @@ Current limitations:
 
 Near-term priorities:
 
-- stabilize the FT material runtime contract
+- stabilize the Forge material runtime contract
 - improve renderer correctness around custom BSDFs
 - document the language and material system as they evolve
-- move hot FT shading code toward a VM and then JIT
+- move hot Forge shading code toward a VM and then JIT

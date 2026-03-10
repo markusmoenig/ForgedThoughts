@@ -3,28 +3,25 @@ material BrickLike {
   let brick = vec3(0.68, 0.24, 0.16);
   let mortar = vec3(0.8, 0.77, 0.72);
 
-  fn color(ctx) {
+  fn mortar_mask(ctx) {
     let band_x = smoothstep(-0.12, 0.12, sin(ctx.local_position.x * 11.0));
     let band_y = smoothstep(-0.12, 0.12, sin(ctx.local_position.y * 7.0));
-    let mortar_mask = max(band_x, band_y);
-    return mix(brick, mortar, mortar_mask);
+    return max(band_x, band_y);
+  }
+
+  fn color(ctx) {
+    return mix(brick, mortar, mortar_mask(ctx));
   }
 
   fn roughness(ctx) {
-    let band_x = smoothstep(-0.12, 0.12, sin(ctx.local_position.x * 11.0));
-    let band_y = smoothstep(-0.12, 0.12, sin(ctx.local_position.y * 7.0));
-    let mortar_mask = max(band_x, band_y);
-    return mix(0.7, 0.95, mortar_mask);
+    return mix(0.7, 0.95, mortar_mask(ctx));
   }
 
   fn normal(ctx) {
+    let mortar = mortar_mask(ctx);
     let groove_x = cos(ctx.local_position.x * 11.0) * 0.18;
     let groove_y = cos(ctx.local_position.y * 7.0) * 0.12;
-    return normalize(vec3(
-      ctx.normal.x + groove_x,
-      ctx.normal.y + groove_y,
-      ctx.normal.z
-    ));
+    return normalize(ctx.normal + vec3(groove_x * mortar, groove_y * mortar, 0.0));
   }
 };
 

@@ -39,6 +39,11 @@
               "id": "materials",
               "path": "/docs/materials",
               "sidebar": "mainSidebar"
+            },
+            {
+              "id": "objects",
+              "path": "/docs/objects",
+              "sidebar": "mainSidebar"
             }
           ],
           "draftIds": [],

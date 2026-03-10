@@ -1,0 +1,16 @@
+sdf SoftBlob {
+  fn bounds() {
+    return vec3(1.2, 1.2, 1.1);
+  }
+
+  fn warp(p) {
+    return vec3(p.x, p.y + sin(p.x * 4.0) * 0.16, p.z);
+  }
+
+  fn distance(p) {
+    let q = warp(p);
+    return length(q) - 1.0;
+  }
+};
+
+export { SoftBlob };

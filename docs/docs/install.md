@@ -11,17 +11,8 @@ title: Install
 
 ## Install `ftc`
 
-The CLI will be distributed as a Cargo package.
-
 ```bash
 cargo install ftc
-```
-
-Until that is published, build and run from source:
-
-```bash
-cargo build
-cargo run -p ftc -- --help
 ```
 
 ## Validate the setup
@@ -30,12 +21,6 @@ Check that the CLI is available:
 
 ```bash
 ftc --help
-```
-
-Or from source:
-
-```bash
-cargo run -p ftc -- --help
 ```
 
 ## Build from source

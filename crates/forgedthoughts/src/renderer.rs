@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use image::{ImageError, RgbImage};
@@ -8,6 +9,7 @@ use thiserror::Error;
 use crate::{
     ColorPattern, EvalState, Material, MaterialParams, MaterialSampleInput, MediumParams,
     ObjectValue, SubsurfaceParams, Value, eval_material_function, eval_material_properties,
+    eval_sdf_function, eval_sdf_zero_arg_function,
     render_api::{
         Camera, CameraKind, EnvLight, Light, PinholeCamera, PointLight, Spectrum, Vec3 as ApiVec3,
     },
@@ -76,6 +78,13 @@ pub struct PathtraceProgress {
 
 #[derive(Debug, Clone, Copy)]
 pub struct RayProgress {
+    pub tiles_done: u32,
+    pub tiles_total: u32,
+    pub elapsed_ms: u128,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PreviewProgress {
     pub tiles_done: u32,
     pub tiles_total: u32,
     pub elapsed_ms: u128,
@@ -170,6 +179,13 @@ enum SdfNode {
         object_id: u32,
         material_id: u32,
     },
+    Custom {
+        transform: PrimitiveTransform,
+        runtime: Arc<CustomSdfRuntime>,
+        bounds_radius: f32,
+        object_id: u32,
+        material_id: u32,
+    },
     Union {
         lhs: Box<SdfNode>,
         rhs: Box<SdfNode>,
@@ -186,6 +202,11 @@ enum SdfNode {
         base: Box<SdfNode>,
         r: f32,
     },
+}
+
+struct CustomSdfRuntime {
+    state: Arc<EvalState>,
+    name: String,
 }
 
 #[derive(Clone, Copy)]
@@ -548,6 +569,43 @@ pub fn render_ray_progressive_with_accel(
     Ok(image)
 }
 
+pub fn render_preview_progressive_with_accel(
+    state: &EvalState,
+    options: RenderOptions,
+    accel_mode: AccelMode,
+    tile_size: u32,
+    mut on_tile: impl FnMut(PreviewProgress, &RgbImage) -> Result<(), RenderError>,
+) -> Result<RgbImage, RenderError> {
+    let root = find_scene_root(state).ok_or(RenderError::MissingSceneRoot)?;
+    let default_material = parse_material(state, root);
+    let scene = compile_scene(state, root, default_material)?;
+    let setup = build_render_setup(state, &scene, options);
+    let image = match accel_mode {
+        AccelMode::Naive => render_preview_with_accel_progressive::<NaiveAccel>(
+            scene,
+            setup,
+            options,
+            tile_size,
+            &mut on_tile,
+        )?,
+        AccelMode::Bvh => render_preview_with_accel_progressive::<BvhAccel>(
+            scene,
+            setup,
+            options,
+            tile_size,
+            &mut on_tile,
+        )?,
+        AccelMode::Bricks => render_preview_with_accel_progressive::<BricksAccel>(
+            scene,
+            setup,
+            options,
+            tile_size,
+            &mut on_tile,
+        )?,
+    };
+    Ok(image)
+}
+
 pub fn render_pathtrace_progressive_with_accel(
     state: &EvalState,
     options: RenderOptions,
@@ -638,7 +696,8 @@ fn compile_scene(
     default_material: MaterialKindRt,
 ) -> Result<CompiledScene, RenderError> {
     let mut ctx = CompileContext::new(default_material, state);
-    let root = compile_sdf(state, value, &mut ctx)?;
+    let shared_state = Arc::new(state.clone());
+    let root = compile_sdf(&shared_state, value, &mut ctx)?;
     let center = sdf_center(&root);
     let bounds = sdf_bounds(&root);
     Ok(CompiledScene {
@@ -651,7 +710,7 @@ fn compile_scene(
 }
 
 fn compile_sdf(
-    state: &EvalState,
+    state: &Arc<EvalState>,
     value: &Value,
     ctx: &mut CompileContext,
 ) -> Result<SdfNode, RenderError> {
@@ -717,6 +776,22 @@ fn compile_sdf(
                 material_id,
             })
         }
+        custom if state.sdf_defs.contains_key(custom) => {
+            let transform = read_transform(object);
+            let object_id = ctx.alloc_object_id();
+            ctx.register_object_transform(object_id, transform);
+            let material_id = primitive_material_id(state, object, ctx);
+            Ok(SdfNode::Custom {
+                transform,
+                runtime: Arc::new(CustomSdfRuntime {
+                    state: Arc::clone(state),
+                    name: custom.to_string(),
+                }),
+                bounds_radius: eval_custom_sdf_bounds_radius(state, custom),
+                object_id,
+                material_id,
+            })
+        }
         "add" => {
             let lhs = compile_sdf(state, required_field(object, "lhs")?, ctx)?;
             let rhs = compile_sdf(state, required_field(object, "rhs")?, ctx)?;
@@ -765,7 +840,11 @@ fn required_field<'a>(obj: &'a ObjectValue, name: &str) -> Result<&'a Value, Ren
     })
 }
 
-fn primitive_material_id(state: &EvalState, obj: &ObjectValue, ctx: &mut CompileContext) -> u32 {
+fn primitive_material_id(
+    state: &Arc<EvalState>,
+    obj: &ObjectValue,
+    ctx: &mut CompileContext,
+) -> u32 {
     if let Some(Value::Object(mat_obj)) = obj.fields.get("material") {
         return ctx.intern_material(material_from_object(state, mat_obj));
     }
@@ -867,7 +946,7 @@ fn render_with_accel<A: Accelerator + Sync>(
     options: RenderOptions,
 ) -> RgbImage {
     let accel = A::from_scene(scene);
-    render_depth_image(&accel, &setup, options)
+    render_preview_image(&accel, &setup, options, options.width.max(options.height))
 }
 
 fn render_ray_with_accel_progressive<A: Accelerator + Sync>(
@@ -957,50 +1036,103 @@ fn render_ray_with_accel_progressive<A: Accelerator + Sync>(
         .expect("pixel buffer length must match image dimensions"))
 }
 
-fn render_depth_image(
+fn render_preview_image(
     accel: &(impl Accelerator + Sync),
     setup: &RenderSetup,
     options: RenderOptions,
+    tile_size: u32,
 ) -> RgbImage {
+    render_preview_tiled(accel, setup, options, tile_size, &mut |_, _| Ok(()))
+        .expect("preview rendering without callback failure should succeed")
+}
+
+fn render_preview_with_accel_progressive<A: Accelerator + Sync>(
+    scene: CompiledScene,
+    setup: RenderSetup,
+    options: RenderOptions,
+    tile_size: u32,
+    on_tile: &mut impl FnMut(PreviewProgress, &RgbImage) -> Result<(), RenderError>,
+) -> Result<RgbImage, RenderError> {
+    let accel = A::from_scene(scene);
+    render_preview_tiled(&accel, &setup, options, tile_size, on_tile)
+}
+
+fn render_preview_tiled(
+    accel: &(impl Accelerator + Sync),
+    setup: &RenderSetup,
+    options: RenderOptions,
+    tile_size: u32,
+    on_tile: &mut impl FnMut(PreviewProgress, &RgbImage) -> Result<(), RenderError>,
+) -> Result<RgbImage, RenderError> {
     let aspect = options.width as f32 / options.height as f32;
-
     let width = options.width as usize;
-    let mut buffer = vec![0_u8; width * options.height as usize * 3];
-    buffer
-        .par_chunks_mut(width * 3)
-        .enumerate()
-        .for_each(|(y, row)| {
-            let y_u32 = y as u32;
-            for x in 0..width {
-                let x_u32 = x as u32;
-                let px = ((x_u32 as f32 + 0.5) / options.width as f32) * 2.0 - 1.0;
-                let py = 1.0 - ((y_u32 as f32 + 0.5) / options.height as f32) * 2.0;
-                let ray = setup.camera.generate_ray(px * aspect, py);
-                let origin = from_api_vec3(ray.origin);
-                let dir = from_api_vec3(ray.direction).normalize();
-                let hit = raymarch_hit(accel, origin, dir, options, 0.0, options.max_dist);
-                let rgb = match hit {
-                    Some(hit) => {
-                        let _ = (hit.object_id, hit.material_id);
-                        let t = (1.0 - (hit.t / options.max_dist)).clamp(0.0, 1.0);
-                        let material =
-                            resolve_material_at_hit(setup, hit, dir.mul(-1.0).normalize());
-                        let bsdf_ctx = build_bsdf_context(setup, hit, dir.mul(-1.0), 1.0);
-                        let lit =
-                            shade_color(accel, setup, options, &setup.lights, material, bsdf_ctx);
-                        spectrum_to_rgb8(lit.scale(t))
-                    }
-                    None => [0, 0, 0],
-                };
-                let i = x * 3;
-                row[i] = rgb[0];
-                row[i + 1] = rgb[1];
-                row[i + 2] = rgb[2];
-            }
-        });
+    let height = options.height as usize;
+    let mut buffer = vec![0_u8; width * height * 3];
+    let tile_size = tile_size.max(1) as usize;
+    let tiles_x = width.div_ceil(tile_size);
+    let tiles_y = height.div_ceil(tile_size);
+    let tiles_total = (tiles_x * tiles_y) as u32;
+    let start = Instant::now();
+    let mut tiles_done = 0_u32;
 
-    RgbImage::from_vec(options.width, options.height, buffer)
-        .expect("pixel buffer length must match image dimensions")
+    for ty in (0..height).step_by(tile_size) {
+        for tx in (0..width).step_by(tile_size) {
+            let tile_w = (width - tx).min(tile_size);
+            let tile_h = (height - ty).min(tile_size);
+            let mut tile = vec![0_u8; tile_w * tile_h * 3];
+            tile.par_chunks_mut(tile_w * 3)
+                .enumerate()
+                .for_each(|(ly, row)| {
+                    let y = ty + ly;
+                    let y_u32 = y as u32;
+                    for lx in 0..tile_w {
+                        let x = tx + lx;
+                        let x_u32 = x as u32;
+                        let px = ((x_u32 as f32 + 0.5) / options.width as f32) * 2.0 - 1.0;
+                        let py = 1.0 - ((y_u32 as f32 + 0.5) / options.height as f32) * 2.0;
+                        let ray = setup.camera.generate_ray(px * aspect, py);
+                        let origin = from_api_vec3(ray.origin);
+                        let dir = from_api_vec3(ray.direction).normalize();
+                        let hit = raymarch_hit(accel, origin, dir, options, 0.0, options.max_dist);
+                        let rgb = match hit {
+                            Some(hit) => {
+                                let material =
+                                    resolve_material_at_hit(setup, hit, dir.mul(-1.0).normalize());
+                                let bsdf_ctx = build_bsdf_context(setup, hit, dir.mul(-1.0), 1.0);
+                                let lit =
+                                    shade_preview_color(setup, &setup.lights, material, bsdf_ctx);
+                                spectrum_to_rgb8_reinhard(lit)
+                            }
+                            None => [0, 0, 0],
+                        };
+                        let i = lx * 3;
+                        row[i] = rgb[0];
+                        row[i + 1] = rgb[1];
+                        row[i + 2] = rgb[2];
+                    }
+                });
+            for ly in 0..tile_h {
+                let dst = ((ty + ly) * width + tx) * 3;
+                let src = (ly * tile_w) * 3;
+                let len = tile_w * 3;
+                buffer[dst..dst + len].copy_from_slice(&tile[src..src + len]);
+            }
+            tiles_done += 1;
+            let image = RgbImage::from_vec(options.width, options.height, buffer.clone())
+                .expect("pixel buffer length must match image dimensions");
+            on_tile(
+                PreviewProgress {
+                    tiles_done,
+                    tiles_total,
+                    elapsed_ms: start.elapsed().as_millis(),
+                },
+                &image,
+            )?;
+        }
+    }
+
+    Ok(RgbImage::from_vec(options.width, options.height, buffer)
+        .expect("pixel buffer length must match image dimensions"))
 }
 
 fn render_pathtrace_with_accel_progressive<A: Accelerator + Sync>(
@@ -1082,6 +1214,7 @@ fn sdf_center(node: &SdfNode) -> Vec3 {
         SdfNode::Box { transform, .. } => transform.center,
         SdfNode::Cylinder { transform, .. } => transform.center,
         SdfNode::Torus { transform, .. } => transform.center,
+        SdfNode::Custom { transform, .. } => transform.center,
         SdfNode::Union { lhs, rhs } => {
             let l = sdf_center(lhs);
             let r = sdf_center(rhs);
@@ -1217,6 +1350,32 @@ fn shade_color(
         }
         let f = eval_bsdf(setup, material, bsdf_ctx, from_api_vec3(wi));
         color = color + (f * sample.radiance).scale(ndotl * shadow);
+    }
+    color
+}
+
+fn shade_preview_color(
+    setup: &RenderSetup,
+    lights: &[Box<dyn Light>],
+    material: MaterialKindRt,
+    bsdf_ctx: BsdfContextBase,
+) -> Spectrum {
+    if lights.is_empty() {
+        return Spectrum::rgb(1.0, 1.0, 1.0);
+    }
+
+    let p = to_api_vec3(bsdf_ctx.hit.position);
+    let n = bsdf_ctx.normal.normalize();
+    let mut color = Spectrum::black();
+    for light in lights {
+        let sample = light.sample_li(p);
+        let wi = sample.wi.normalize();
+        let ndotl = n.x * wi.x + n.y * wi.y + n.z * wi.z;
+        if ndotl <= 0.0 {
+            continue;
+        }
+        let f = eval_bsdf(setup, material, bsdf_ctx, from_api_vec3(wi));
+        color = color + (f * sample.radiance).scale(ndotl);
     }
     color
 }
@@ -1991,6 +2150,18 @@ fn sdf_bounds(node: &SdfNode) -> Aabb {
                 max: transform.center.add(rv),
             }
         }
+        SdfNode::Custom {
+            transform,
+            bounds_radius,
+            ..
+        } => {
+            let r = (*bounds_radius).max(1.0e-3);
+            let rv = Vec3::new(r, r, r);
+            Aabb {
+                min: transform.center.sub(rv),
+                max: transform.center.add(rv),
+            }
+        }
         SdfNode::Union { lhs, rhs } => sdf_bounds(lhs).union(sdf_bounds(rhs)),
         SdfNode::Subtract { lhs, .. } => sdf_bounds(lhs),
         SdfNode::Smooth { base, k } => sdf_bounds(base).expand(*k * 0.1),
@@ -2062,6 +2233,20 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
                 material_id: *material_id,
             }
         }
+        SdfNode::Custom {
+            transform,
+            runtime,
+            object_id,
+            material_id,
+            ..
+        } => {
+            let q = to_local(p, *transform);
+            DistanceInfo {
+                distance: eval_custom_sdf_distance(runtime, q),
+                object_id: *object_id,
+                material_id: *material_id,
+            }
+        }
         SdfNode::Union { lhs, rhs } => {
             let l = sdf_distance_info(lhs, p);
             let r = sdf_distance_info(rhs, p);
@@ -2091,6 +2276,33 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             info.distance -= *r;
             info
         }
+    }
+}
+
+fn eval_custom_sdf_distance(runtime: &CustomSdfRuntime, p: Vec3) -> f32 {
+    let value = eval_sdf_function(
+        &runtime.state,
+        &runtime.name,
+        "distance",
+        vec3_value_value(p),
+    );
+    match value {
+        Ok(Value::Number(v)) => v as f32,
+        _ => 1.0e6,
+    }
+}
+
+fn eval_custom_sdf_bounds_radius(state: &EvalState, name: &str) -> f32 {
+    let value = eval_sdf_zero_arg_function(state, name, "bounds");
+    match value {
+        Ok(Value::Object(obj)) => {
+            let x = read_number_field(&obj, &["x"]).unwrap_or(0.0);
+            let y = read_number_field(&obj, &["y"]).unwrap_or(0.0);
+            let z = read_number_field(&obj, &["z"]).unwrap_or(0.0);
+            Vec3::new(x, y, z).length().max(1.0e-3)
+        }
+        Ok(Value::Number(radius)) => (radius as f32).abs().max(1.0e-3),
+        _ => 10_000.0,
     }
 }
 
@@ -2938,7 +3150,9 @@ mod tests {
     fn empty_state(bindings: HashMap<String, Binding>) -> EvalState {
         EvalState {
             bindings,
+            function_defs: HashMap::new(),
             material_defs: HashMap::new(),
+            sdf_defs: HashMap::new(),
         }
     }
 
@@ -3978,6 +4192,73 @@ mod tests {
     }
 
     #[test]
+    fn resolves_material_local_helper_functions_across_hooks() {
+        let source = r#"
+            material Brick {
+              model: Lambert;
+              let brick = vec3(0.68, 0.24, 0.16);
+              let mortar = vec3(0.8, 0.77, 0.72);
+
+              fn mortar_mask(ctx) {
+                let band_x = smoothstep(-0.12, 0.12, sin(ctx.local_position.x * 11.0));
+                let band_y = smoothstep(-0.12, 0.12, sin(ctx.local_position.y * 7.0));
+                return max(band_x, band_y);
+              }
+
+              fn color(ctx) {
+                return mix(brick, mortar, mortar_mask(ctx));
+              }
+
+              fn roughness(ctx) {
+                return mix(0.7, 0.95, mortar_mask(ctx));
+              }
+
+              fn normal(ctx) {
+                let m = mortar_mask(ctx);
+                return normalize(ctx.normal + vec3(m * 0.2, 0.0, 0.0));
+              }
+            };
+
+            let scene = Sphere {
+              material: Brick {}
+            };
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let scene = super::compile_scene(
+            &state,
+            state
+                .bindings
+                .get("scene")
+                .map(|b| &b.value)
+                .expect("scene binding"),
+            super::default_material(),
+        )
+        .expect("scene should compile");
+        let setup = super::build_render_setup(&state, &scene, RenderOptions::default());
+        let hit = super::RayHit {
+            t: 1.0,
+            position: super::Vec3::new(0.1, 0.1, 1.0),
+            normal: super::Vec3::new(0.0, 0.0, 1.0),
+            front_face: true,
+            object_id: 1,
+            material_id: 1,
+        };
+
+        let super::MaterialKindRt::Lambert(mat) =
+            super::resolve_material_at_hit(&setup, hit, super::Vec3::new(0.0, 0.0, 1.0))
+        else {
+            panic!("expected Lambert material");
+        };
+        let ctx = super::build_bsdf_context(&setup, hit, super::Vec3::new(0.0, 0.0, 1.0), 1.0);
+
+        assert!(mat.color.r > 0.7);
+        assert!(mat.roughness > 0.8);
+        assert!(ctx.normal.x > 0.05);
+    }
+
+    #[test]
     fn renders_cylinder_and_torus_with_rotation() {
         let mut cyl_fields = HashMap::new();
         cyl_fields.insert("radius".to_string(), Value::Number(0.7));
@@ -4039,6 +4320,55 @@ mod tests {
         .expect("render should succeed");
         assert!(std::fs::metadata(&output).is_ok());
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn compiles_and_evaluates_custom_ft_sdf() {
+        let source = r#"
+            sdf SoftBlob {
+              let wave_scale = 0.15;
+
+              fn bounds() {
+                return vec3(1.2, 1.2, 1.0);
+              }
+
+              fn warp(p) {
+                return vec3(p.x, p.y + sin(p.x * 4.0) * wave_scale, p.z);
+              }
+
+              fn distance(p) {
+                let q = warp(p);
+                return length(q) - 1.0;
+              }
+            };
+
+            let scene = SoftBlob {
+              material: Lambert {
+                color: vec3(0.7, 0.45, 0.3)
+              }
+            };
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let scene = super::compile_scene(
+            &state,
+            state
+                .bindings
+                .get("scene")
+                .map(|b| &b.value)
+                .expect("scene binding"),
+            super::default_material(),
+        )
+        .expect("scene should compile");
+
+        let center = super::sdf_distance_info(&scene.root, super::Vec3::new(0.0, 0.0, 0.0));
+        let surface = super::sdf_distance_info(&scene.root, super::Vec3::new(0.0, 1.0, 0.0));
+        let bounds = super::sdf_bounds(&scene.root);
+
+        assert!(center.distance < -0.9);
+        assert!(surface.distance.abs() < 1.0e-4);
+        assert!(bounds.max.x < 3.0);
     }
 
     fn vec3_value(x: f64, y: f64, z: f64) -> Value {

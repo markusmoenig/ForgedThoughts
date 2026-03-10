@@ -1,0 +1,9 @@
+material Glass {
+  model: Dielectric;
+  color = #f5fcff;
+  ior = 1.52;
+  roughness = 0.02;
+  thin_walled = 0.0;
+};
+
+export { Glass };

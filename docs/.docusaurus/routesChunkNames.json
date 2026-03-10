@@ -42,17 +42,17 @@
       "plugin": "plugin---docusaurus-debugb-38-ad3"
     }
   },
-  "/docs-367": {
+  "/docs-755": {
     "__comp": "__comp---theme-docs-root-5-e-9-0b6",
     "__context": {
       "plugin": "plugin---aba-d70"
     }
   },
-  "/docs-b2d": {
+  "/docs-23d": {
     "__comp": "__comp---theme-doc-version-roota-7-b-5de",
     "__props": "__props---docs-005-788"
   },
-  "/docs-323": {
+  "/docs-c79": {
     "__comp": "__comp---theme-doc-roota-94-67a"
   },
   "/docs/-b43": {
@@ -78,6 +78,10 @@
   "/docs/materials-730": {
     "__comp": "__comp---theme-doc-item-178-a40",
     "content": "content---materials-272-597"
+  },
+  "/docs/objects-5b3": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-objectsb-51-593"
   },
   "/-e5f": {
     "__comp": "__comp---site-src-pages-index-tsx-1-df-d3e",
