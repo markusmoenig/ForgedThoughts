@@ -7,18 +7,21 @@ pub struct Program {
 pub struct MaterialDef {
     pub name: String,
     pub model: String,
+    pub metadata: Vec<(String, Expr)>,
     pub statements: Vec<MaterialStatement>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SdfDef {
     pub name: String,
+    pub metadata: Vec<(String, Expr)>,
     pub statements: Vec<SdfStatement>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnvironmentDef {
     pub name: String,
+    pub metadata: Vec<(String, Expr)>,
     pub statements: Vec<MaterialStatement>,
 }
 
@@ -92,6 +95,8 @@ pub enum Statement {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Number(f64),
+    String(String),
+    Array(Vec<Expr>),
     Ident(String),
     ObjectLiteral {
         type_name: String,

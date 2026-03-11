@@ -121,6 +121,7 @@ impl Parser {
         let name = self.expect_ident()?;
         self.expect_kind(TokenKind::LBrace, "{")?;
         let mut model = None;
+        let mut metadata = Vec::new();
         let mut statements = Vec::new();
 
         while !self.matches_kind(TokenKind::RBrace) {
@@ -167,6 +168,13 @@ impl Parser {
                 self.expect_kind(TokenKind::Semicolon, ";")?;
                 continue;
             }
+            if matches!(field.as_str(), "name" | "description" | "tags") {
+                self.expect_kind(TokenKind::Colon, ":")?;
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                metadata.push((field, expr));
+                continue;
+            }
             return Err(ParseError::Expected {
                 expected: "let, fn, property assignment, or model",
                 offset: self.current_offset(),
@@ -180,6 +188,7 @@ impl Parser {
                 expected: "model",
                 offset: self.current_offset(),
             })?,
+            metadata,
             statements,
         }))
     }
@@ -187,6 +196,7 @@ impl Parser {
     fn parse_sdf_def(&mut self) -> Result<Statement, ParseError> {
         let name = self.expect_ident()?;
         self.expect_kind(TokenKind::LBrace, "{")?;
+        let mut metadata = Vec::new();
         let mut statements = Vec::new();
 
         while !self.matches_kind(TokenKind::RBrace) {
@@ -220,19 +230,33 @@ impl Parser {
                 continue;
             }
 
+            let field = self.expect_ident()?;
+            if matches!(field.as_str(), "name" | "description" | "tags") {
+                self.expect_kind(TokenKind::Colon, ":")?;
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                metadata.push((field, expr));
+                continue;
+            }
+
             return Err(ParseError::Expected {
-                expected: "let or fn",
+                expected: "let, fn, or metadata field",
                 offset: self.current_offset(),
             });
         }
 
         self.expect_kind(TokenKind::Semicolon, ";")?;
-        Ok(Statement::SdfDef(SdfDef { name, statements }))
+        Ok(Statement::SdfDef(SdfDef {
+            name,
+            metadata,
+            statements,
+        }))
     }
 
     fn parse_environment_def(&mut self) -> Result<Statement, ParseError> {
         let name = self.expect_ident()?;
         self.expect_kind(TokenKind::LBrace, "{")?;
+        let mut metadata = Vec::new();
         let mut statements = Vec::new();
 
         while !self.matches_kind(TokenKind::RBrace) {
@@ -266,8 +290,17 @@ impl Parser {
                 continue;
             }
 
+            let field = self.expect_ident()?;
+            if matches!(field.as_str(), "name" | "description" | "tags") {
+                self.expect_kind(TokenKind::Colon, ":")?;
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                metadata.push((field, expr));
+                continue;
+            }
+
             return Err(ParseError::Expected {
-                expected: "let or fn",
+                expected: "let, fn, or metadata field",
                 offset: self.current_offset(),
             });
         }
@@ -275,6 +308,7 @@ impl Parser {
         self.expect_kind(TokenKind::Semicolon, ";")?;
         Ok(Statement::EnvironmentDef(EnvironmentDef {
             name,
+            metadata,
             statements,
         }))
     }
@@ -455,8 +489,27 @@ impl Parser {
             self.expect_kind(TokenKind::RParen, ")")?;
             return Ok(expr);
         }
+        if self.matches_kind(TokenKind::LBracket) {
+            let mut items = Vec::new();
+            if !self.matches_kind(TokenKind::RBracket) {
+                loop {
+                    items.push(self.parse_expr()?);
+                    if self.matches_kind(TokenKind::Comma) {
+                        continue;
+                    }
+                    self.expect_kind(TokenKind::RBracket, "]")?;
+                    break;
+                }
+            }
+            return Ok(Expr::Array(items));
+        }
 
         match self.peek_kind() {
+            Some(TokenKind::String(value)) => {
+                let value = value.clone();
+                self.pos += 1;
+                Ok(Expr::String(value))
+            }
             Some(TokenKind::HexColor(hex)) => {
                 let hex = hex.clone();
                 self.pos += 1;

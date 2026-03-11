@@ -10,6 +10,8 @@ use crate::ast::{
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Number(f64),
+    String(String),
+    Array(Vec<Value>),
     Object(ObjectValue),
 }
 
@@ -73,6 +75,8 @@ pub enum EvalError {
     BinaryTypeMismatch,
     #[error("material call depth exceeded")]
     MaterialCallDepthExceeded,
+    #[error("layout operation requires bounded object values")]
+    UnsupportedLayoutObject,
 }
 
 #[derive(Clone, Copy)]
@@ -205,9 +209,26 @@ fn eval_expr_in_material_scope(
 ) -> Result<Value, EvalError> {
     match expr {
         Expr::Number(n) => Ok(Value::Number(*n)),
+        Expr::String(value) => Ok(Value::String(value.clone())),
+        Expr::Array(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            for item in items {
+                values.push(eval_expr_in_material_scope(
+                    item,
+                    state,
+                    locals,
+                    material_runtime,
+                    top_level_depth,
+                )?);
+            }
+            Ok(Value::Array(values))
+        }
         Expr::Ident(name) => {
             if let Some(value) = locals.get(name) {
                 return Ok(value.clone());
+            }
+            if let Some(value) = builtin_symbol_value(name) {
+                return Ok(value);
             }
             let binding = state
                 .bindings
@@ -330,6 +351,25 @@ fn eval_binary(lhs: Value, op: BinaryOp, rhs: Value) -> Result<Value, EvalError>
             BinaryOp::Intersect => return Err(EvalError::BinaryTypeMismatch),
         };
         return Ok(vec3_value(out));
+    }
+
+    if matches!(op, BinaryOp::Add | BinaryOp::Sub) {
+        if let Some(anchor) = anchor_spec(&lhs)
+            && let Value::Number(offset) = rhs
+        {
+            return Ok(anchor_value(
+                &anchor.name,
+                anchor.offset + anchor_sign(op) * offset,
+            ));
+        }
+        if let Some(anchor) = anchor_spec(&rhs)
+            && let Value::Number(offset) = lhs
+        {
+            return Ok(anchor_value(
+                &anchor.name,
+                anchor_sign(op) * offset + anchor.offset,
+            ));
+        }
     }
 
     match op {
@@ -533,6 +573,110 @@ fn build_sdf_member_value(
     })))
 }
 
+fn build_layout_member_value(
+    field: &str,
+    base: Value,
+    args: Vec<Value>,
+) -> Result<Option<Value>, EvalError> {
+    let value = match field {
+        "attach" => {
+            if args.len() != 2 && args.len() != 3 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let gap = if args.len() == 3 {
+                numeric_arg(&args[2])?
+            } else {
+                0.0
+            };
+            attach_object(base, args[0].clone(), &args[1], gap)?
+        }
+        "align_x" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            align_object_axis(base, args[0].clone(), 0, &args[1])?
+        }
+        "align_y" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            align_object_axis(base, args[0].clone(), 1, &args[1])?
+        }
+        "align_z" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            align_object_axis(base, args[0].clone(), 2, &args[1])?
+        }
+        "right_of" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            place_object_relative(base, args[0].clone(), 0, 1.0, numeric_arg(&args[1])?)?
+        }
+        "left_of" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            place_object_relative(base, args[0].clone(), 0, -1.0, numeric_arg(&args[1])?)?
+        }
+        "on_top_of" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            place_object_relative(base, args[0].clone(), 1, 1.0, numeric_arg(&args[1])?)?
+        }
+        "below" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            place_object_relative(base, args[0].clone(), 1, -1.0, numeric_arg(&args[1])?)?
+        }
+        "in_front_of" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            place_object_relative(base, args[0].clone(), 2, 1.0, numeric_arg(&args[1])?)?
+        }
+        "behind" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            place_object_relative(base, args[0].clone(), 2, -1.0, numeric_arg(&args[1])?)?
+        }
+        "rotate_x" => rotate_object_axis(base, 0, unary_numeric_args(&args)?)?,
+        "rotate_y" => rotate_object_axis(base, 1, unary_numeric_args(&args)?)?,
+        "rotate_z" => rotate_object_axis(base, 2, unary_numeric_args(&args)?)?,
+        "offset_x" => offset_object_axis(base, 0, unary_numeric_args(&args)?)?,
+        "offset_y" => offset_object_axis(base, 1, unary_numeric_args(&args)?)?,
+        "offset_z" => offset_object_axis(base, 2, unary_numeric_args(&args)?)?,
+        _ => return Ok(None),
+    };
+    Ok(Some(value))
+}
+
+fn is_layout_member_operator(field: &str) -> bool {
+    matches!(
+        field,
+        "attach"
+            | "align_x"
+            | "align_y"
+            | "align_z"
+            | "right_of"
+            | "left_of"
+            | "on_top_of"
+            | "below"
+            | "in_front_of"
+            | "behind"
+            | "rotate_x"
+            | "rotate_y"
+            | "rotate_z"
+            | "offset_x"
+            | "offset_y"
+            | "offset_z"
+    )
+}
+
 fn is_sdf_member_operator(field: &str) -> bool {
     matches!(
         field,
@@ -633,6 +777,20 @@ fn eval_call(
                 let arg_values =
                     eval_arg_values(args, state, locals, material_runtime, top_level_depth)?;
                 if let Some(value) = build_sdf_member_value(field, base, arg_values)? {
+                    return Ok(value);
+                }
+            }
+            if is_layout_member_operator(field) {
+                let base = eval_expr_in_material_scope(
+                    target,
+                    state,
+                    locals,
+                    material_runtime,
+                    top_level_depth,
+                )?;
+                let arg_values =
+                    eval_arg_values(args, state, locals, material_runtime, top_level_depth)?;
+                if let Some(value) = build_layout_member_value(field, base, arg_values)? {
                     return Ok(value);
                 }
             }
@@ -1106,9 +1264,20 @@ fn eval_sdf_expr(
 ) -> Result<Value, EvalError> {
     match expr {
         Expr::Number(n) => Ok(Value::Number(*n)),
+        Expr::String(value) => Ok(Value::String(value.clone())),
+        Expr::Array(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            for item in items {
+                values.push(eval_sdf_expr(item, state, locals, sdf_runtime)?);
+            }
+            Ok(Value::Array(values))
+        }
         Expr::Ident(name) => {
             if let Some(value) = locals.get(name) {
                 return Ok(value.clone());
+            }
+            if let Some(value) = builtin_symbol_value(name) {
+                return Ok(value);
             }
             let binding = state
                 .bindings
@@ -1206,6 +1375,13 @@ fn eval_sdf_call(
                 let base = eval_sdf_expr(target, state, locals, sdf_runtime)?;
                 let arg_values = eval_sdf_arg_values(args, state, locals, sdf_runtime)?;
                 if let Some(value) = build_sdf_member_value(field, base, arg_values)? {
+                    return Ok(value);
+                }
+            }
+            if is_layout_member_operator(field) {
+                let base = eval_sdf_expr(target, state, locals, sdf_runtime)?;
+                let arg_values = eval_sdf_arg_values(args, state, locals, sdf_runtime)?;
+                if let Some(value) = build_layout_member_value(field, base, arg_values)? {
                     return Ok(value);
                 }
             }
@@ -1508,6 +1684,379 @@ fn as_broadcastable_vec3(value: &Value) -> Option<[f64; 3]> {
         Value::Number(x) => Some([*x, *x, *x]),
         _ => as_vec3(value),
     }
+}
+
+#[derive(Clone, Copy)]
+struct Bounds3 {
+    min: [f64; 3],
+    max: [f64; 3],
+}
+
+struct AnchorSpec {
+    name: String,
+    offset: f64,
+}
+
+impl Bounds3 {
+    fn center(&self) -> [f64; 3] {
+        [
+            (self.min[0] + self.max[0]) * 0.5,
+            (self.min[1] + self.max[1]) * 0.5,
+            (self.min[2] + self.max[2]) * 0.5,
+        ]
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            min: [
+                self.min[0].min(other.min[0]),
+                self.min[1].min(other.min[1]),
+                self.min[2].min(other.min[2]),
+            ],
+            max: [
+                self.max[0].max(other.max[0]),
+                self.max[1].max(other.max[1]),
+                self.max[2].max(other.max[2]),
+            ],
+        }
+    }
+
+    fn expand(self, amount: f64) -> Self {
+        Self {
+            min: [
+                self.min[0] - amount,
+                self.min[1] - amount,
+                self.min[2] - amount,
+            ],
+            max: [
+                self.max[0] + amount,
+                self.max[1] + amount,
+                self.max[2] + amount,
+            ],
+        }
+    }
+}
+
+fn builtin_symbol_value(name: &str) -> Option<Value> {
+    match name {
+        "Top" | "Bottom" | "Left" | "Right" | "Front" | "Back" | "Center" => {
+            Some(anchor_value(name, 0.0))
+        }
+        _ => None,
+    }
+}
+
+fn anchor_spec(value: &Value) -> Option<AnchorSpec> {
+    let obj = as_object(value).ok()?;
+    if obj.type_name.as_deref() != Some("symbol") {
+        return None;
+    }
+    let Value::Object(name_obj) = obj.fields.get("name")? else {
+        return None;
+    };
+    Some(AnchorSpec {
+        name: name_obj.type_name.clone()?,
+        offset: match obj.fields.get("offset") {
+            Some(Value::Number(v)) => *v,
+            _ => 0.0,
+        },
+    })
+}
+
+fn anchor_value(name: &str, offset: f64) -> Value {
+    Value::Object(ObjectValue {
+        type_name: Some("symbol".to_string()),
+        fields: HashMap::from([
+            (
+                "name".to_string(),
+                Value::Object(ObjectValue {
+                    type_name: Some(name.to_string()),
+                    fields: HashMap::new(),
+                }),
+            ),
+            ("offset".to_string(), Value::Number(offset)),
+        ]),
+    })
+}
+
+fn anchor_sign(op: BinaryOp) -> f64 {
+    match op {
+        BinaryOp::Add => 1.0,
+        BinaryOp::Sub => -1.0,
+        BinaryOp::Intersect | BinaryOp::Mul | BinaryOp::Div => unreachable!(),
+    }
+}
+
+fn numeric_arg(value: &Value) -> Result<f64, EvalError> {
+    match value {
+        Value::Number(v) => Ok(*v),
+        _ => Err(EvalError::UnsupportedCall),
+    }
+}
+
+fn unary_numeric_args(args: &[Value]) -> Result<f64, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::UnsupportedCall);
+    }
+    numeric_arg(&args[0])
+}
+
+fn object_position(value: &Value) -> [f64; 3] {
+    let Value::Object(obj) = value else {
+        return [0.0, 0.0, 0.0];
+    };
+    let nested = obj.fields.get("pos").and_then(|value| match value {
+        Value::Object(pos) => Some(pos),
+        _ => None,
+    });
+    let num = |nested_name: &str, flat_name: &str| {
+        if let Some(pos) = nested
+            && let Some(Value::Number(v)) = pos.fields.get(nested_name)
+        {
+            return *v;
+        }
+        match obj.fields.get(flat_name) {
+            Some(Value::Number(v)) => *v,
+            _ => 0.0,
+        }
+    };
+    [num("x", "x"), num("y", "y"), num("z", "z")]
+}
+
+fn object_rotation(value: &Value) -> [f64; 3] {
+    let Value::Object(obj) = value else {
+        return [0.0, 0.0, 0.0];
+    };
+    let nested = obj.fields.get("rot").and_then(|value| match value {
+        Value::Object(rot) => Some(rot),
+        _ => None,
+    });
+    let num = |nested_name: &str, flat_name: &str| {
+        if let Some(rot) = nested
+            && let Some(Value::Number(v)) = rot.fields.get(nested_name)
+        {
+            return *v;
+        }
+        match obj.fields.get(flat_name) {
+            Some(Value::Number(v)) => *v,
+            _ => 0.0,
+        }
+    };
+    [num("x", "rot_x"), num("y", "rot_y"), num("z", "rot_z")]
+}
+
+fn set_object_position(value: &mut Value, pos: [f64; 3]) -> Result<(), EvalError> {
+    let obj = as_object_mut(value)?;
+    obj.fields.insert("pos".to_string(), vec3_value(pos));
+    Ok(())
+}
+
+fn rotate_object_axis(mut value: Value, axis: usize, angle: f64) -> Result<Value, EvalError> {
+    let obj = as_object_mut(&mut value)?;
+    let mut rot = obj
+        .fields
+        .get("rot")
+        .and_then(as_vec3)
+        .unwrap_or([0.0, 0.0, 0.0]);
+    rot[axis] = angle;
+    obj.fields.insert("rot".to_string(), vec3_value(rot));
+    Ok(value)
+}
+
+fn offset_object_axis(mut value: Value, axis: usize, delta: f64) -> Result<Value, EvalError> {
+    let mut pos = object_position(&value);
+    pos[axis] += delta;
+    set_object_position(&mut value, pos)?;
+    Ok(value)
+}
+
+fn rotate_xyz(p: [f64; 3], rot_deg: [f64; 3]) -> [f64; 3] {
+    let (sx, cx) = rot_deg[0].to_radians().sin_cos();
+    let (sy, cy) = rot_deg[1].to_radians().sin_cos();
+    let (sz, cz) = rot_deg[2].to_radians().sin_cos();
+
+    let py = p[1] * cx - p[2] * sx;
+    let pz = p[1] * sx + p[2] * cx;
+    let px = p[0];
+
+    let px2 = px * cy + pz * sy;
+    let pz2 = -px * sy + pz * cy;
+    let py2 = py;
+
+    let px3 = px2 * cz - py2 * sz;
+    let py3 = px2 * sz + py2 * cz;
+    [px3, py3, pz2]
+}
+
+fn transformed_bounds(center: [f64; 3], rot_deg: [f64; 3], corners: &[[f64; 3]]) -> Bounds3 {
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for corner in corners {
+        let p = rotate_xyz(*corner, rot_deg);
+        for axis in 0..3 {
+            let v = center[axis] + p[axis];
+            min[axis] = min[axis].min(v);
+            max[axis] = max[axis].max(v);
+        }
+    }
+    Bounds3 { min, max }
+}
+
+fn numeric_field(obj: &ObjectValue, names: &[&str]) -> Option<f64> {
+    names.iter().find_map(|name| match obj.fields.get(*name) {
+        Some(Value::Number(v)) => Some(*v),
+        _ => None,
+    })
+}
+
+fn object_bounds(value: &Value) -> Option<Bounds3> {
+    let obj = as_object(value).ok()?;
+    match obj.type_name.as_deref()? {
+        "Sphere" => {
+            let r = numeric_field(obj, &["radius", "r"])?;
+            let c = object_position(value);
+            Some(Bounds3 {
+                min: [c[0] - r, c[1] - r, c[2] - r],
+                max: [c[0] + r, c[1] + r, c[2] + r],
+            })
+        }
+        "Box" => {
+            let size = obj.fields.get("size").and_then(as_broadcastable_vec3)?;
+            let half = [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5];
+            let corners = [
+                [-half[0], -half[1], -half[2]],
+                [-half[0], -half[1], half[2]],
+                [-half[0], half[1], -half[2]],
+                [-half[0], half[1], half[2]],
+                [half[0], -half[1], -half[2]],
+                [half[0], -half[1], half[2]],
+                [half[0], half[1], -half[2]],
+                [half[0], half[1], half[2]],
+            ];
+            Some(transformed_bounds(
+                object_position(value),
+                object_rotation(value),
+                &corners,
+            ))
+        }
+        "Cylinder" => {
+            let radius = numeric_field(obj, &["radius", "r"])?;
+            let half_height = numeric_field(obj, &["height", "h"])? * 0.5;
+            let c = object_position(value);
+            Some(Bounds3 {
+                min: [c[0] - radius, c[1] - half_height, c[2] - radius],
+                max: [c[0] + radius, c[1] + half_height, c[2] + radius],
+            })
+        }
+        "Torus" => {
+            let major = numeric_field(obj, &["major_radius", "R"])?;
+            let minor = numeric_field(obj, &["minor_radius", "r"])?;
+            let c = object_position(value);
+            let ring = major + minor;
+            Some(Bounds3 {
+                min: [c[0] - ring, c[1] - minor, c[2] - ring],
+                max: [c[0] + ring, c[1] + minor, c[2] + ring],
+            })
+        }
+        "ExtrudePolygon" => {
+            let radius = numeric_field(obj, &["radius", "r"])?;
+            let half_height = numeric_field(obj, &["height", "h"])? * 0.5;
+            let c = object_position(value);
+            Some(Bounds3 {
+                min: [c[0] - radius, c[1] - half_height, c[2] - radius],
+                max: [c[0] + radius, c[1] + half_height, c[2] + radius],
+            })
+        }
+        "add" | "intersect" => Some(
+            object_bounds(obj.fields.get("lhs")?)?.union(object_bounds(obj.fields.get("rhs")?)?),
+        ),
+        "sub" => object_bounds(obj.fields.get("lhs")?),
+        "union_round" | "union_chamfer" | "union_columns" | "union_stairs" | "union_soft"
+        | "intersect_round" | "intersect_chamfer" | "intersect_columns" | "intersect_stairs"
+        | "diff_round" | "diff_chamfer" | "diff_columns" | "diff_stairs" | "pipe" | "engrave"
+        | "groove" | "tongue" => Some(
+            object_bounds(obj.fields.get("lhs")?)?.union(object_bounds(obj.fields.get("rhs")?)?),
+        ),
+        "smooth" => Some(
+            object_bounds(obj.fields.get("base")?)?
+                .expand(numeric_field(obj, &["k"]).unwrap_or(0.0) * 0.1),
+        ),
+        "round" => Some(
+            object_bounds(obj.fields.get("base")?)?
+                .expand(numeric_field(obj, &["r"]).unwrap_or(0.0).abs()),
+        ),
+        _ => None,
+    }
+}
+
+fn attach_object(
+    mut value: Value,
+    other: Value,
+    face: &Value,
+    gap: f64,
+) -> Result<Value, EvalError> {
+    let self_bounds = object_bounds(&value).ok_or(EvalError::UnsupportedLayoutObject)?;
+    let other_bounds = object_bounds(&other).ok_or(EvalError::UnsupportedLayoutObject)?;
+    let anchor = anchor_spec(face).ok_or(EvalError::UnsupportedCall)?;
+    let mut pos = object_position(&value);
+    match anchor.name.as_str() {
+        "Top" => pos[1] += other_bounds.max[1] + gap + anchor.offset - self_bounds.min[1],
+        "Bottom" => pos[1] += other_bounds.min[1] - gap - anchor.offset - self_bounds.max[1],
+        "Left" => pos[0] += other_bounds.min[0] - gap - anchor.offset - self_bounds.max[0],
+        "Right" => pos[0] += other_bounds.max[0] + gap + anchor.offset - self_bounds.min[0],
+        "Front" => pos[2] += other_bounds.max[2] + gap + anchor.offset - self_bounds.min[2],
+        "Back" => pos[2] += other_bounds.min[2] - gap - anchor.offset - self_bounds.max[2],
+        _ => return Err(EvalError::UnsupportedCall),
+    }
+    set_object_position(&mut value, pos)?;
+    Ok(value)
+}
+
+fn align_object_axis(
+    mut value: Value,
+    other: Value,
+    axis: usize,
+    anchor: &Value,
+) -> Result<Value, EvalError> {
+    let self_bounds = object_bounds(&value).ok_or(EvalError::UnsupportedLayoutObject)?;
+    let other_bounds = object_bounds(&other).ok_or(EvalError::UnsupportedLayoutObject)?;
+    let anchor = anchor_spec(anchor).ok_or(EvalError::UnsupportedCall)?;
+    let self_center = self_bounds.center();
+    let other_center = other_bounds.center();
+    let mut pos = object_position(&value);
+    let delta = match anchor.name.as_str() {
+        "Center" => other_center[axis] - self_center[axis] + anchor.offset,
+        "Left" if axis == 0 => other_bounds.min[0] - self_bounds.min[0] + anchor.offset,
+        "Right" if axis == 0 => other_bounds.max[0] - self_bounds.max[0] + anchor.offset,
+        "Bottom" if axis == 1 => other_bounds.min[1] - self_bounds.min[1] + anchor.offset,
+        "Top" if axis == 1 => other_bounds.max[1] - self_bounds.max[1] + anchor.offset,
+        "Back" if axis == 2 => other_bounds.min[2] - self_bounds.min[2] + anchor.offset,
+        "Front" if axis == 2 => other_bounds.max[2] - self_bounds.max[2] + anchor.offset,
+        _ => return Err(EvalError::UnsupportedCall),
+    };
+    pos[axis] += delta;
+    set_object_position(&mut value, pos)?;
+    Ok(value)
+}
+
+fn place_object_relative(
+    mut value: Value,
+    other: Value,
+    axis: usize,
+    sign: f64,
+    gap: f64,
+) -> Result<Value, EvalError> {
+    let self_bounds = object_bounds(&value).ok_or(EvalError::UnsupportedLayoutObject)?;
+    let other_bounds = object_bounds(&other).ok_or(EvalError::UnsupportedLayoutObject)?;
+    let mut pos = object_position(&value);
+    let delta = if sign > 0.0 {
+        other_bounds.max[axis] + gap - self_bounds.min[axis]
+    } else {
+        other_bounds.min[axis] - gap - self_bounds.max[axis]
+    };
+    pos[axis] += delta;
+    set_object_position(&mut value, pos)?;
+    Ok(value)
 }
 
 fn as_vec3(value: &Value) -> Option<[f64; 3]> {

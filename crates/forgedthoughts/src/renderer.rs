@@ -1115,6 +1115,7 @@ fn read_accel_field(obj: &ObjectValue, name: &str) -> Option<AccelMode> {
             2 => Some(AccelMode::Bricks),
             _ => None,
         },
+        Value::String(_) | Value::Array(_) => None,
     }
 }
 
@@ -1426,46 +1427,48 @@ fn render_ray_tile(
     job: &TileJob,
 ) -> Vec<u8> {
     let mut tile = vec![0_u8; job.tile_w * job.tile_h * 3];
-    for ly in 0..job.tile_h {
-        let y = job.ty + ly;
-        let y_u32 = y as u32;
-        for lx in 0..job.tile_w {
-            let x = job.tx + lx;
-            let x_u32 = x as u32;
-            let mut sum = Spectrum::black();
-            for &(sx, sy) in sample_offsets {
-                let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
-                let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
-                let ray = setup.camera.generate_ray(px * aspect, py);
-                let origin = from_api_vec3(ray.origin);
-                let dir = from_api_vec3(ray.direction).normalize();
-                let c = if let Some(aov) = debug_aov {
-                    ray::trace_ray_debug_aov(accel, setup, ray_ctx, origin, dir, aov)
+    tile.par_chunks_mut(job.tile_w * 3)
+        .enumerate()
+        .for_each(|(ly, row)| {
+            let y = job.ty + ly;
+            let y_u32 = y as u32;
+            for lx in 0..job.tile_w {
+                let x = job.tx + lx;
+                let x_u32 = x as u32;
+                let mut sum = Spectrum::black();
+                for &(sx, sy) in sample_offsets {
+                    let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
+                    let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
+                    let ray = setup.camera.generate_ray(px * aspect, py);
+                    let origin = from_api_vec3(ray.origin);
+                    let dir = from_api_vec3(ray.direction).normalize();
+                    let c = if let Some(aov) = debug_aov {
+                        ray::trace_ray_debug_aov(accel, setup, ray_ctx, origin, dir, aov)
+                    } else {
+                        ray::trace_ray_recursive(
+                            accel,
+                            setup,
+                            ray_ctx,
+                            origin,
+                            dir,
+                            MediumState::air(),
+                            0,
+                        )
+                    };
+                    sum = sum + c;
+                }
+                let avg = sum.scale(1.0 / aa_samples as f32);
+                let rgb = if debug_aov.is_some() {
+                    spectrum_to_rgb8(avg)
                 } else {
-                    ray::trace_ray_recursive(
-                        accel,
-                        setup,
-                        ray_ctx,
-                        origin,
-                        dir,
-                        MediumState::air(),
-                        0,
-                    )
+                    spectrum_to_rgb8_reinhard(avg)
                 };
-                sum = sum + c;
+                let i = lx * 3;
+                row[i] = rgb[0];
+                row[i + 1] = rgb[1];
+                row[i + 2] = rgb[2];
             }
-            let avg = sum.scale(1.0 / aa_samples as f32);
-            let rgb = if debug_aov.is_some() {
-                spectrum_to_rgb8(avg)
-            } else {
-                spectrum_to_rgb8_reinhard(avg)
-            };
-            let i = (ly * job.tile_w + lx) * 3;
-            tile[i] = rgb[0];
-            tile[i + 1] = rgb[1];
-            tile[i + 2] = rgb[2];
-        }
-    }
+        });
     tile
 }
 
@@ -1479,33 +1482,35 @@ fn render_depth_tile(
     job: &TileJob,
 ) -> Vec<u8> {
     let mut tile = vec![0_u8; job.tile_w * job.tile_h * 3];
-    for ly in 0..job.tile_h {
-        let y = job.ty + ly;
-        let y_u32 = y as u32;
-        for lx in 0..job.tile_w {
-            let x = job.tx + lx;
-            let x_u32 = x as u32;
-            let mut sum = Spectrum::black();
-            for &(sx, sy) in sample_offsets {
-                let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
-                let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
-                let ray = setup.camera.generate_ray(px * aspect, py);
-                let origin = from_api_vec3(ray.origin);
-                let dir = from_api_vec3(ray.direction).normalize();
-                let hit = raymarch_hit(accel, origin, dir, options, 0.0, options.max_dist);
-                let depth = match hit {
-                    Some(hit) => depth_preview_value(hit.t, options.max_dist),
-                    None => 0.0,
-                };
-                sum = sum + Spectrum::rgb(depth, depth, depth);
+    tile.par_chunks_mut(job.tile_w * 3)
+        .enumerate()
+        .for_each(|(ly, row)| {
+            let y = job.ty + ly;
+            let y_u32 = y as u32;
+            for lx in 0..job.tile_w {
+                let x = job.tx + lx;
+                let x_u32 = x as u32;
+                let mut sum = Spectrum::black();
+                for &(sx, sy) in sample_offsets {
+                    let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
+                    let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
+                    let ray = setup.camera.generate_ray(px * aspect, py);
+                    let origin = from_api_vec3(ray.origin);
+                    let dir = from_api_vec3(ray.direction).normalize();
+                    let hit = raymarch_hit(accel, origin, dir, options, 0.0, options.max_dist);
+                    let depth = match hit {
+                        Some(hit) => depth_preview_value(hit.t, options.max_dist),
+                        None => 0.0,
+                    };
+                    sum = sum + Spectrum::rgb(depth, depth, depth);
+                }
+                let rgb = spectrum_to_rgb8(sum.scale(1.0 / aa_samples as f32));
+                let i = lx * 3;
+                row[i] = rgb[0];
+                row[i + 1] = rgb[1];
+                row[i + 2] = rgb[2];
             }
-            let rgb = spectrum_to_rgb8(sum.scale(1.0 / aa_samples as f32));
-            let i = (ly * job.tile_w + lx) * 3;
-            tile[i] = rgb[0];
-            tile[i + 1] = rgb[1];
-            tile[i + 2] = rgb[2];
-        }
-    }
+        });
     tile
 }
 
@@ -2483,6 +2488,7 @@ fn bsdf_context_value(
     {
         Value::Object(obj) => obj.fields,
         Value::Number(_) => unreachable!(),
+        Value::String(_) | Value::Array(_) => unreachable!(),
     };
     fields.insert("normal".to_string(), vec3_value_value(bsdf_ctx.normal));
     fields.insert("wo".to_string(), vec3_value_value(bsdf_ctx.wo));
@@ -3687,6 +3693,7 @@ fn read_spectrum_field(obj: &ObjectValue, name: &str) -> Option<Spectrum> {
             let b = read_number_field(v, &["b", "z"])?;
             Some(Spectrum::rgb(r, g, b))
         }
+        Value::String(_) | Value::Array(_) => None,
     }
 }
 
@@ -3787,6 +3794,7 @@ fn vec3_from_value(value: &Value) -> Option<Vec3> {
             let z = read_number_field(obj, &["z", "b"])?;
             Some(Vec3::new(x, y, z))
         }
+        Value::String(_) | Value::Array(_) => None,
     }
 }
 
@@ -4497,6 +4505,7 @@ fn spectrum_from_value(value: &Value) -> Option<Spectrum> {
             let b = read_number_field(obj, &["b", "z"])?;
             Some(Spectrum::rgb(r, g, b))
         }
+        Value::String(_) | Value::Array(_) => None,
     }
 }
 

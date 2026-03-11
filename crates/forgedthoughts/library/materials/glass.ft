@@ -1,4 +1,7 @@
 material Glass {
+  name: "Glass";
+  description: "Clear dielectric glass material for transmissive and refractive surfaces.";
+  tags: ["material", "glass", "dielectric", "transmission", "refractive"];
   model: Dielectric;
   color = #f5fcff;
   ior = 1.52;

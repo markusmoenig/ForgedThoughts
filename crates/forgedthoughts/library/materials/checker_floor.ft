@@ -1,4 +1,7 @@
 material CheckerFloor {
+  name: "CheckerFloor";
+  description: "Diffuse procedural checker material for floors, stages, and reference scenes.";
+  tags: ["material", "checker", "floor", "diffuse", "procedural"];
   model: Lambert;
   roughness = 1.0;
 

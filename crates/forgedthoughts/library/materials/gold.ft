@@ -1,4 +1,7 @@
 material Gold {
+  name: "Gold";
+  description: "Polished gold metal with moderate roughness for reflective showcase materials.";
+  tags: ["material", "metal", "gold", "reflective", "warm"];
   model: Metal;
   color = #ebc757;
   roughness = 0.18;

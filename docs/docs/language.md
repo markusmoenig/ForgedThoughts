@@ -1,9 +1,9 @@
 ---
 sidebar_position: 4
-title: Language
+title: Overview
 ---
 
-# Forge Language
+# Forge Language Overview
 
 Forge is object-like and incremental.
 
@@ -41,6 +41,7 @@ Current supported pieces include:
 - material definitions with local bindings and functions
 - environment definitions with local bindings and functions
 - custom SDF definitions with `sdf Name { fn distance(p) { ... } }`
+- object layout methods for relative placement
 
 ## Booleans
 
@@ -94,6 +95,55 @@ fn make_highlight() {
 }
 ```
 
+## Layout
+
+Forge now has a small layout layer on top of raw `pos.*` edits. This is meant for scene assembly, not for replacing the underlying SDF model.
+
+Current layout methods include:
+
+- `attach(other, Top|Bottom|Left|Right|Front|Back[, gap])`
+- `align_x/y/z(other, Center|Top|Bottom|Left|Right|Front|Back)`
+- `right_of`, `left_of`, `on_top_of`, `below`, `in_front_of`, `behind`
+- `offset_x/y/z`
+- `rotate_x/y/z`
+
+Example:
+
+```ft
+var sphere = Sphere {
+  radius: 0.82,
+  material: sphere_mat
+}
+  .attach(floor, Top)
+  .align_z(floor, Center)
+  .offset_x(-0.28);
+
+var box = Box {
+  size: vec3(1.15, 1.15, 1.15),
+  material: box_mat
+}
+  .right_of(sphere, -0.8)
+  .align_z(sphere, Center)
+  .attach(floor, Top + 0.3)
+  .rotate_z(10.0);
+```
+
+Anchor values such as `Top` and `Center` support inline offsets:
+
+```ft
+.attach(floor, Top + 0.1)
+.align_z(floor, Center - 0.4)
+```
+
+Semantics:
+
+- `attach(...)` chooses the contacting face relationship
+- `align_*` only affects one axis at a time
+- `right_of` and similar helpers only define that one relative direction
+- extra offsets are still explicit
+
+So `right_of(a, -0.8)` does not silently imply matching `y` or `z`.
+
 ## Imports
 
 Imports are resolved before evaluation:
@@ -127,6 +177,50 @@ export { Gold };
 ```
 
 If a file contains `export { ... };`, imports treat that list as the intended public entry points.
+
+## Asset Metadata
+
+Reusable library assets can carry their own metadata directly in the definition block.
+
+For materials:
+
+```ft
+material Gold {
+  name: "Gold";
+  description: "Polished gold metal with moderate roughness.";
+  tags: ["material", "metal", "gold", "reflective", "warm"];
+
+  model: Metal;
+  color = #ebc757;
+  roughness = 0.18;
+};
+```
+
+For custom SDF objects:
+
+```ft
+sdf SoftBlob {
+  name: "SoftBlob";
+  description: "Warped blob SDF with a conservative bounds helper.";
+  tags: ["object", "sdf", "blob", "organic"];
+
+  fn bounds() {
+    return vec3(1.2, 1.2, 1.1);
+  }
+
+  fn distance(p) {
+    return length(p) - 1.0;
+  }
+};
+```
+
+Supported metadata fields today:
+
+- `name: "..." ;`
+- `description: "..." ;`
+- `tags: ["...", "..."] ;`
+
+These fields are intended for library discovery, tooling, and future AI-driven scene composition. They do not change rendering behavior directly.
 
 ## Environments
 

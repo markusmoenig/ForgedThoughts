@@ -1,7 +1,7 @@
 import "CheckerFloor";
 
 let camera = Camera {
-  origin: vec3(0.0, 1.9, 6.8),
+  origin: vec3(0.0, 1.0, 6.8),
   target: vec3(0.0, 0.3, 0.0),
   fov_y: 25.0
 };
@@ -67,14 +67,16 @@ floor.pos.y = -1.15;
 var a = Sphere {
   radius: 0.82,
   material: sphere_mat
-};
-a.pos.x = -0.28;
-a.pos.y = 0.25;
+}
+  .attach(floor, Top)
+  .align_z(floor, Center)
+  .offset_x(-0.28);
 
 var b = Box {
   size: vec3(1.15, 1.15, 1.15),
   material: box_mat
-};
-b.pos.x = 0.32;
-b.pos.y = 0.25;
-b.rot.z = 10.0;
+}
+  .right_of(a, -0.8)
+  .align_z(a, Center)
+  .attach(floor, Top + 0.3)
+  .rotate_z(10.0);

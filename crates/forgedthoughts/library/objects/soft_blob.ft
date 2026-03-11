@@ -1,4 +1,7 @@
 sdf SoftBlob {
+  name: "SoftBlob";
+  description: "Custom Forge SDF blob with warped silhouette and conservative bounds helper.";
+  tags: ["object", "sdf", "blob", "organic", "procedural"];
   fn bounds() {
     return vec3(1.2, 1.2, 1.1);
   }

@@ -49,6 +49,8 @@ pub struct BuiltinLibraryItem {
     pub category: BuiltinLibraryCategory,
     pub name: &'static str,
     pub path: &'static str,
+    pub description: &'static str,
+    pub tags: &'static [&'static str],
     pub source: &'static str,
 }
 
@@ -57,33 +59,56 @@ const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
         category: BuiltinLibraryCategory::Materials,
         name: "Gold",
         path: "materials/gold.ft",
+        description: "Polished gold metal with moderate roughness for reflective showcase materials.",
+        tags: &["material", "metal", "gold", "reflective", "warm"],
         source: include_str!("../library/materials/gold.ft"),
     },
     BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Materials,
         name: "Glass",
         path: "materials/glass.ft",
+        description: "Clear dielectric glass material for transmissive and refractive surfaces.",
+        tags: &[
+            "material",
+            "glass",
+            "dielectric",
+            "transmission",
+            "refractive",
+        ],
         source: include_str!("../library/materials/glass.ft"),
     },
     BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Materials,
         name: "CheckerFloor",
         path: "materials/checker_floor.ft",
+        description: "Diffuse procedural checker material for floors, stages, and reference scenes.",
+        tags: &["material", "checker", "floor", "diffuse", "procedural"],
         source: include_str!("../library/materials/checker_floor.ft"),
     },
     BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Objects,
         name: "SoftBlob",
         path: "objects/soft_blob.ft",
+        description: "Custom Forge SDF blob with warped silhouette and conservative bounds helper.",
+        tags: &["object", "sdf", "blob", "organic", "procedural"],
         source: include_str!("../library/objects/soft_blob.ft"),
     },
     BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Scenes,
         name: "Studio",
         path: "scenes/studio.ft",
+        description: "Reusable studio-style scene setup with camera and lighting defaults.",
+        tags: &["scene", "studio", "camera", "lights", "starter"],
         source: include_str!("../library/scenes/studio.ft"),
     },
 ];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltinLibraryMetadata {
+    pub name: String,
+    pub description: String,
+    pub tags: Vec<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -312,6 +337,103 @@ pub fn builtin_library_items(category: Option<BuiltinLibraryCategory>) -> Vec<Bu
         .collect()
 }
 
+pub fn builtin_library_item_metadata(item: &BuiltinLibraryItem) -> BuiltinLibraryMetadata {
+    extract_builtin_metadata(item).unwrap_or_else(|| BuiltinLibraryMetadata {
+        name: item.name.to_string(),
+        description: item.description.to_string(),
+        tags: item.tags.iter().map(|tag| (*tag).to_string()).collect(),
+    })
+}
+
+fn extract_builtin_metadata(item: &BuiltinLibraryItem) -> Option<BuiltinLibraryMetadata> {
+    let program = parse_program(item.source).ok()?;
+    for stmt in program.statements {
+        match stmt {
+            Statement::MaterialDef(def) if def.name == item.name => {
+                return Some(metadata_from_pairs(
+                    item.name,
+                    item.description,
+                    item.tags,
+                    &def.metadata,
+                ));
+            }
+            Statement::SdfDef(def) if def.name == item.name => {
+                return Some(metadata_from_pairs(
+                    item.name,
+                    item.description,
+                    item.tags,
+                    &def.metadata,
+                ));
+            }
+            Statement::EnvironmentDef(def) if def.name == item.name => {
+                return Some(metadata_from_pairs(
+                    item.name,
+                    item.description,
+                    item.tags,
+                    &def.metadata,
+                ));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn metadata_from_pairs(
+    fallback_name: &str,
+    fallback_description: &str,
+    fallback_tags: &[&str],
+    metadata: &[(String, Expr)],
+) -> BuiltinLibraryMetadata {
+    let mut name = fallback_name.to_string();
+    let mut description = fallback_description.to_string();
+    let mut tags = fallback_tags
+        .iter()
+        .map(|tag| (*tag).to_string())
+        .collect::<Vec<_>>();
+
+    for (key, expr) in metadata {
+        match key.as_str() {
+            "name" => {
+                if let Some(value) = metadata_string(expr) {
+                    name = value;
+                }
+            }
+            "description" => {
+                if let Some(value) = metadata_string(expr) {
+                    description = value;
+                }
+            }
+            "tags" => {
+                if let Some(values) = metadata_string_array(expr) {
+                    tags = values;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    BuiltinLibraryMetadata {
+        name,
+        description,
+        tags,
+    }
+}
+
+fn metadata_string(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::String(value) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+fn metadata_string_array(expr: &Expr) -> Option<Vec<String>> {
+    match expr {
+        Expr::Array(items) => items.iter().map(metadata_string).collect(),
+        _ => None,
+    }
+}
+
 fn namespace_statements(statements: Vec<Statement>, alias: &str) -> Vec<Statement> {
     let mut top_level_names = HashSet::new();
     for stmt in &statements {
@@ -388,6 +510,11 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                 }
             }
             def.name = qualify_name(alias, &def.name);
+            def.metadata = def
+                .metadata
+                .into_iter()
+                .map(|(name, expr)| (name, namespace_expr(expr, alias, names, &scope)))
+                .collect();
             def.statements = def
                 .statements
                 .into_iter()
@@ -442,6 +569,11 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                 }
             }
             def.name = qualify_name(alias, &def.name);
+            def.metadata = def
+                .metadata
+                .into_iter()
+                .map(|(name, expr)| (name, namespace_expr(expr, alias, names, &scope)))
+                .collect();
             def.statements = def
                 .statements
                 .into_iter()
@@ -488,6 +620,11 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                 }
             }
             def.name = qualify_name(alias, &def.name);
+            def.metadata = def
+                .metadata
+                .into_iter()
+                .map(|(name, expr)| (name, namespace_expr(expr, alias, names, &scope)))
+                .collect();
             def.statements = def
                 .statements
                 .into_iter()
@@ -638,6 +775,9 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
                     scope.insert(name.clone());
                 }
             }
+            for (_, expr) in &def.metadata {
+                deps.extend(expr_dependencies(expr, &scope));
+            }
             for stmt in &def.statements {
                 match stmt {
                     ast::MaterialStatement::Binding { expr, .. }
@@ -673,6 +813,9 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
                     scope.insert(name.clone());
                 }
             }
+            for (_, expr) in &def.metadata {
+                deps.extend(expr_dependencies(expr, &scope));
+            }
             for stmt in &def.statements {
                 match stmt {
                     ast::SdfStatement::Binding { expr, .. } => {
@@ -706,6 +849,9 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
                 if let ast::MaterialStatement::Binding { name, .. } = stmt {
                     scope.insert(name.clone());
                 }
+            }
+            for (_, expr) in &def.metadata {
+                deps.extend(expr_dependencies(expr, &scope));
             }
             for stmt in &def.statements {
                 match stmt {
@@ -741,6 +887,12 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
 fn expr_dependencies(expr: &Expr, local_scope: &HashSet<String>) -> HashSet<String> {
     let mut deps = HashSet::new();
     match expr {
+        Expr::String(_) => {}
+        Expr::Array(items) => {
+            for item in items {
+                deps.extend(expr_dependencies(item, local_scope));
+            }
+        }
         Expr::Ident(name) => {
             if !local_scope.contains(name) {
                 deps.insert(name.clone());
@@ -792,6 +944,13 @@ fn namespace_expr(
     local_scope: &HashSet<String>,
 ) -> Expr {
     match expr {
+        Expr::String(_) => expr,
+        Expr::Array(items) => Expr::Array(
+            items
+                .into_iter()
+                .map(|item| namespace_expr(item, alias, top_level_names, local_scope))
+                .collect(),
+        ),
         Expr::Ident(name) => {
             if top_level_names.contains(&name) && !local_scope.contains(&name) {
                 Expr::Ident(qualify_name(alias, &name))
@@ -1046,6 +1205,75 @@ mod tests {
         assert_eq!(pos.fields.get("x"), Some(&Value::Number(1.5)));
         assert_eq!(pos.fields.get("y"), Some(&Value::Number(-0.25)));
         assert_eq!(rot.fields.get("z"), Some(&Value::Number(30.0)));
+    }
+
+    #[test]
+    fn supports_layout_attach_align_and_offset_calls() {
+        let source = r#"
+            let floor = Box { size: vec3(10.0, 0.5, 10.0) };
+            var placed = Sphere { radius: 1.0 }
+              .attach(floor, Top)
+              .align_x(floor, Center)
+              .align_z(floor, Center)
+              .offset_x(0.75);
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let value = &state.bindings.get("placed").expect("placed binding").value;
+        let Value::Object(obj) = value else {
+            panic!("placed should be an object");
+        };
+        let Value::Object(pos) = obj.fields.get("pos").expect("pos object") else {
+            panic!("pos should be an object");
+        };
+        assert_eq!(pos.fields.get("x"), Some(&Value::Number(0.75)));
+        assert_eq!(pos.fields.get("y"), Some(&Value::Number(1.25)));
+        assert_eq!(pos.fields.get("z"), Some(&Value::Number(0.0)));
+    }
+
+    #[test]
+    fn supports_layout_relative_and_rotate_calls() {
+        let source = r#"
+            let anchor = Sphere { radius: 0.5 };
+            var cube = Box { size: vec3(1.0) }
+              .right_of(anchor, 0.25)
+              .rotate_z(15.0);
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let value = &state.bindings.get("cube").expect("cube binding").value;
+        let Value::Object(obj) = value else {
+            panic!("cube should be an object");
+        };
+        let Value::Object(pos) = obj.fields.get("pos").expect("pos object") else {
+            panic!("pos should be an object");
+        };
+        let Value::Object(rot) = obj.fields.get("rot").expect("rot object") else {
+            panic!("rot should be an object");
+        };
+        assert_eq!(pos.fields.get("x"), Some(&Value::Number(1.25)));
+        assert_eq!(rot.fields.get("z"), Some(&Value::Number(15.0)));
+    }
+
+    #[test]
+    fn supports_layout_anchor_offsets_inside_attach_and_align_calls() {
+        let source = r#"
+            let floor = Box { size: vec3(10.0, 0.5, 10.0) };
+            var placed = Sphere { radius: 1.0 }
+              .attach(floor, Top + 0.1)
+              .align_z(floor, Center - 0.4);
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let value = &state.bindings.get("placed").expect("placed binding").value;
+        let Value::Object(obj) = value else {
+            panic!("placed should be an object");
+        };
+        let Value::Object(pos) = obj.fields.get("pos").expect("pos object") else {
+            panic!("pos should be an object");
+        };
+        assert_eq!(pos.fields.get("y"), Some(&Value::Number(1.35)));
+        assert_eq!(pos.fields.get("z"), Some(&Value::Number(-0.4)));
     }
 
     #[test]

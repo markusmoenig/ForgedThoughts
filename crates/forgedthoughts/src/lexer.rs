@@ -30,6 +30,8 @@ pub enum TokenKind {
     Slash,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     LBrace,
     RBrace,
 }
@@ -126,6 +128,8 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, LexError> {
             '*' => tokens.push(simple(TokenKind::Star, offset)),
             '(' => tokens.push(simple(TokenKind::LParen, offset)),
             ')' => tokens.push(simple(TokenKind::RParen, offset)),
+            '[' => tokens.push(simple(TokenKind::LBracket, offset)),
+            ']' => tokens.push(simple(TokenKind::RBracket, offset)),
             '{' => tokens.push(simple(TokenKind::LBrace, offset)),
             '}' => tokens.push(simple(TokenKind::RBrace, offset)),
             c if is_ident_start(c) => {

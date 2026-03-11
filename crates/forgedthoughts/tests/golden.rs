@@ -101,6 +101,15 @@ fn render_eval_state(state: &EvalState) -> String {
 fn render_value(value: &Value) -> String {
     match value {
         Value::Number(n) => format!("{n}"),
+        Value::String(value) => format!("{value:?}"),
+        Value::Array(items) => {
+            let rendered = items
+                .iter()
+                .map(render_value)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{rendered}]")
+        }
         Value::Object(obj) => {
             let mut out = String::new();
             out.push_str("Object(");

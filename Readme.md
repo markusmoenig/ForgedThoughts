@@ -272,6 +272,8 @@ ftc list objects
 ftc list scenes
 ```
 
+Each entry includes its path, a short description, and semantic tags.
+
 ## Material Model
 
 There are two layers right now:

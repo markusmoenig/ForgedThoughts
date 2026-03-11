@@ -24,7 +24,7 @@ let sky = EnvLight {
 let glass = Dielectric {
   color: vec3(0.96, 0.99, 1.0),
   ior: 1.52,
-  roughness: 0.0,
+  roughness: 0.00,
   thin_walled: 0.0
 };
 

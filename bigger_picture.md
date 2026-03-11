@@ -1,0 +1,1 @@
+Bigger picture. I want to have a language for scene definitons which is easy to use. I want reusable materials and objjects (with helpers like skeletons etc). I want to create a library of all this. Than i want to have an AI interface which creates scenes for all this from human language.

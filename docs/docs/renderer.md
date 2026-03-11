@@ -1,9 +1,9 @@
 ---
 sidebar_position: 4
-title: Renderer
+title: Overview
 ---
 
-# Renderer
+# Renderer Overview
 
 ForgedThoughts is built around a CPU-first SDF renderer. The main production path today is `trace`, a classical Whitted-style recursive renderer tuned for fast iteration on signed distance field scenes.
 

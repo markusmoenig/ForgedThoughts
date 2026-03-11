@@ -5,7 +5,7 @@ title: CLI
 
 # CLI
 
-List built-in library assets:
+List built-in library assets with descriptions and tags:
 
 ```bash
 ftc list materials

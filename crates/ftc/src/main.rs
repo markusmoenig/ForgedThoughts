@@ -10,9 +10,9 @@ use std::{
 use clap::{Parser, Subcommand, ValueEnum};
 use forgedthoughts::{
     AccelMode, AppConfig, BuiltinLibraryCategory, CoreError, RayDebugAov, RaySettings,
-    RenderOptions, SceneRenderSettings, builtin_library_items, extract_scene_render_settings,
-    load_and_eval_scene, render_depth_png_with_accel, render_preview_progressive_with_accel,
-    render_ray_progressive_with_accel, resolve_scene_path,
+    RenderOptions, SceneRenderSettings, builtin_library_item_metadata, builtin_library_items,
+    extract_scene_render_settings, load_and_eval_scene, render_depth_png_with_accel,
+    render_preview_progressive_with_accel, render_ray_progressive_with_accel, resolve_scene_path,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use tracing::{error, info, level_filters::LevelFilter};
@@ -373,8 +373,6 @@ fn run_render(params: RenderParams, cfg: &AppConfig) -> ExitCode {
 }
 
 fn run_render_once(scene_path: &Path, params: &RenderParams) -> ExitCode {
-    let total_start = Instant::now();
-    let parse_eval_start = Instant::now();
     match load_and_eval_scene(scene_path) {
         Ok(state) => {
             let scene_settings = extract_scene_render_settings(&state);
@@ -383,7 +381,6 @@ fn run_render_once(scene_path: &Path, params: &RenderParams) -> ExitCode {
                 .accel
                 .or(scene_settings.accel)
                 .unwrap_or(AccelMode::Naive);
-            let parse_eval_elapsed = parse_eval_start.elapsed();
             info!(
                 scene = %scene_path.display(),
                 bindings = state.bindings.len(),
@@ -434,9 +431,11 @@ fn run_render_once(scene_path: &Path, params: &RenderParams) -> ExitCode {
             }
             progress.finish_with_message("done");
             let render_elapsed = render_start.elapsed();
-            let total_elapsed = total_start.elapsed();
+            let render_secs = render_elapsed.as_secs_f64();
+            let render_secs_display = format!("{render_secs:.3}s");
             let megapixels = (f64::from(options.width) * f64::from(options.height)) / 1_000_000.0;
-            let mpix_per_sec = megapixels / render_elapsed.as_secs_f64().max(f64::EPSILON);
+            let mpix_per_sec = megapixels / render_secs.max(f64::EPSILON);
+            let mpix_per_sec_display = format!("{mpix_per_sec:.3}");
             info!(
                 output = %output_path.display(),
                 width = options.width,
@@ -447,10 +446,8 @@ fn run_render_once(scene_path: &Path, params: &RenderParams) -> ExitCode {
                 "depth preview rendered"
             );
             info!(
-                parse_eval_ms = parse_eval_elapsed.as_millis(),
-                render_ms = render_elapsed.as_millis(),
-                total_ms = total_elapsed.as_millis(),
-                mpix_per_sec,
+                render_secs = %render_secs_display,
+                mpix_per_sec = %mpix_per_sec_display,
                 "benchmark"
             );
             ExitCode::SUCCESS
@@ -580,7 +577,14 @@ fn run_list(kind: ListCommand) -> ExitCode {
     };
 
     for item in builtin_library_items(Some(category)) {
-        println!("{}\t{}", item.name, item.path);
+        let metadata = builtin_library_item_metadata(&item);
+        let tags = if metadata.tags.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", metadata.tags.join(", "))
+        };
+        println!("{}\t{}", metadata.name, item.path);
+        println!("  {}{}", metadata.description, tags);
     }
 
     ExitCode::SUCCESS
@@ -593,8 +597,6 @@ fn run_ray(params: RayParams, cfg: &AppConfig) -> ExitCode {
 }
 
 fn run_ray_once(scene_path: &Path, params: &RayParams) -> ExitCode {
-    let total_start = Instant::now();
-    let parse_eval_start = Instant::now();
     match load_and_eval_scene(scene_path) {
         Ok(state) => {
             let scene_settings = extract_scene_render_settings(&state);
@@ -603,7 +605,6 @@ fn run_ray_once(scene_path: &Path, params: &RayParams) -> ExitCode {
                 .accel
                 .or(scene_settings.accel)
                 .unwrap_or(AccelMode::Naive);
-            let parse_eval_elapsed = parse_eval_start.elapsed();
             let output_path = params
                 .output
                 .as_deref()
@@ -653,9 +654,11 @@ fn run_ray_once(scene_path: &Path, params: &RayParams) -> ExitCode {
             }
             progress.finish_with_message("done");
             let render_elapsed = render_start.elapsed();
-            let total_elapsed = total_start.elapsed();
+            let render_secs = render_elapsed.as_secs_f64();
+            let render_secs_display = format!("{render_secs:.3}s");
             let megapixels = (f64::from(options.width) * f64::from(options.height)) / 1_000_000.0;
-            let mpix_per_sec = megapixels / render_elapsed.as_secs_f64().max(f64::EPSILON);
+            let mpix_per_sec = megapixels / render_secs.max(f64::EPSILON);
+            let mpix_per_sec_display = format!("{mpix_per_sec:.3}");
             info!(
                 output = %output_path.display(),
                 width = options.width,
@@ -668,10 +671,8 @@ fn run_ray_once(scene_path: &Path, params: &RayParams) -> ExitCode {
                 "trace rendered"
             );
             info!(
-                parse_eval_ms = parse_eval_elapsed.as_millis(),
-                render_ms = render_elapsed.as_millis(),
-                total_ms = total_elapsed.as_millis(),
-                mpix_per_sec,
+                render_secs = %render_secs_display,
+                mpix_per_sec = %mpix_per_sec_display,
                 "benchmark"
             );
             ExitCode::SUCCESS

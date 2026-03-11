@@ -111,7 +111,7 @@ sphere.rot.z = 12.0;
 let scene = sphere;
 ```
 
-Transforms are currently driven with nested properties like `pos.x`, `pos.y`, `rot.x`, and `rot.z`.
+Transforms are currently driven with nested properties like `pos.x`, `pos.y`, `rot.x`, and `rot.z`. For relational placement like “on top of floor” or “right of sphere”, see the layout section in [Language](./language.md#layout).
 
 Rounding is not yet a native primitive field like `Box { rounding: 0.2 }`. Right now rounded or beveled shapes are created with shape operators such as `.round(r)`.
 
