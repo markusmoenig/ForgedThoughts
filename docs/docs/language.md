@@ -102,6 +102,8 @@ Forge now has a small layout layer on top of raw `pos.*` edits. This is meant fo
 Current layout methods include:
 
 - `attach(other, Top|Bottom|Left|Right|Front|Back[, gap])`
+- `attach(other, BackRightCorner)` and other built-in corner anchors
+- `attach(other, "OtherAnchor", "SelfAnchor")` for explicit anchor-to-anchor placement
 - `align_x/y/z(other, Center|Top|Bottom|Left|Right|Front|Back)`
 - `right_of`, `left_of`, `on_top_of`, `below`, `in_front_of`, `behind`
 - `offset_x/y/z`
@@ -135,9 +137,37 @@ Anchor values such as `Top` and `Center` support inline offsets:
 .align_z(floor, Center - 0.4)
 ```
 
+Built-in corner anchors work well for semantic room/object placement:
+
+```forge
+var cupboard = Box { size: vec3(2.0, 3.0, 1.5) }
+  .attach(room, BackRightCorner);
+```
+
+For asset-specific placement, objects can expose custom local anchors and attach to them by name:
+
+```forge
+let character = Box {
+  size: vec3(2.0, 4.0, 1.0),
+  anchors: {
+    FootLeft: vec3(-0.4, -2.0, 0.0)
+  }
+};
+
+var shoe = Box {
+  size: vec3(0.8, 0.4, 1.0),
+  anchors: {
+    Mount: vec3(0.0, -0.2, 0.0)
+  }
+}
+  .attach(character, "FootLeft", "Mount");
+```
+
 Semantics:
 
 - `attach(...)` chooses the contacting face relationship
+- corner anchors align matching bottom/top/back/front/left/right corners
+- explicit string anchors align named local anchor points between assets
 - `align_*` only affects one axis at a time
 - `right_of` and similar helpers only define that one relative direction
 - extra offsets are still explicit

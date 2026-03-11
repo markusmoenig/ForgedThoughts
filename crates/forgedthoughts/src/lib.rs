@@ -1347,6 +1347,62 @@ mod tests {
     }
 
     #[test]
+    fn supports_layout_corner_anchors() {
+        let source = r#"
+            let room = Box { size: vec3(10.0, 4.0, 8.0) };
+            var cupboard = Box { size: vec3(2.0, 3.0, 1.5) }
+              .attach(room, BackRightCorner);
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let value = &state
+            .bindings
+            .get("cupboard")
+            .expect("cupboard binding")
+            .value;
+        let Value::Object(obj) = value else {
+            panic!("cupboard should be an object");
+        };
+        let Value::Object(pos) = obj.fields.get("pos").expect("pos object") else {
+            panic!("pos should be an object");
+        };
+        assert_eq!(pos.fields.get("x"), Some(&Value::Number(4.0)));
+        assert_eq!(pos.fields.get("y"), Some(&Value::Number(-0.5)));
+        assert_eq!(pos.fields.get("z"), Some(&Value::Number(-3.25)));
+    }
+
+    #[test]
+    fn supports_layout_custom_anchor_names() {
+        let source = r#"
+            let character = Box {
+              size: vec3(2.0, 4.0, 1.0),
+              anchors: {
+                FootLeft: vec3(-0.4, -2.0, 0.0)
+              }
+            };
+            var shoe = Box {
+              size: vec3(0.8, 0.4, 1.0),
+              anchors: {
+                Mount: vec3(0.0, -0.2, 0.0)
+              }
+            }
+              .attach(character, "FootLeft", "Mount");
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let value = &state.bindings.get("shoe").expect("shoe binding").value;
+        let Value::Object(obj) = value else {
+            panic!("shoe should be an object");
+        };
+        let Value::Object(pos) = obj.fields.get("pos").expect("pos object") else {
+            panic!("pos should be an object");
+        };
+        assert_eq!(pos.fields.get("x"), Some(&Value::Number(-0.4)));
+        assert_eq!(pos.fields.get("y"), Some(&Value::Number(-1.8)));
+        assert_eq!(pos.fields.get("z"), Some(&Value::Number(0.0)));
+    }
+
+    #[test]
     fn evaluates_custom_sdf_distance_with_helper_functions() {
         let source = r#"
             sdf SoftBlob {

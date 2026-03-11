@@ -584,12 +584,15 @@ fn build_layout_member_value(
             if args.len() != 2 && args.len() != 3 {
                 return Err(EvalError::UnsupportedCall);
             }
-            let gap = if args.len() == 3 {
-                numeric_arg(&args[2])?
+            let (self_anchor, gap) = if args.len() == 3 {
+                match &args[2] {
+                    Value::Number(v) => (None, *v),
+                    _ => (Some(&args[2]), 0.0),
+                }
             } else {
-                0.0
+                (None, 0.0)
             };
-            attach_object(base, args[0].clone(), &args[1], gap)?
+            attach_object(base, args[0].clone(), &args[1], self_anchor, gap)?
         }
         "align_x" => {
             if args.len() != 2 {
@@ -1805,14 +1808,21 @@ impl Bounds3 {
 
 fn builtin_symbol_value(name: &str) -> Option<Value> {
     match name {
-        "Top" | "Bottom" | "Left" | "Right" | "Front" | "Back" | "Center" => {
-            Some(anchor_value(name, 0.0))
-        }
+        "Top" | "Bottom" | "Left" | "Right" | "Front" | "Back" | "Center" | "FrontLeftCorner"
+        | "FrontRightCorner" | "BackLeftCorner" | "BackRightCorner" | "BottomFrontLeft"
+        | "BottomFrontRight" | "BottomBackLeft" | "BottomBackRight" | "TopFrontLeft"
+        | "TopFrontRight" | "TopBackLeft" | "TopBackRight" => Some(anchor_value(name, 0.0)),
         _ => None,
     }
 }
 
 fn anchor_spec(value: &Value) -> Option<AnchorSpec> {
+    if let Value::String(name) = value {
+        return Some(AnchorSpec {
+            name: name.clone(),
+            offset: 0.0,
+        });
+    }
     let obj = as_object(value).ok()?;
     if obj.type_name.as_deref() != Some("symbol") {
         return None;
@@ -1842,6 +1852,138 @@ fn anchor_value(name: &str, offset: f64) -> Value {
             ),
             ("offset".to_string(), Value::Number(offset)),
         ]),
+    })
+}
+
+#[derive(Clone, Copy)]
+struct AnchorPoint {
+    point: [f64; 3],
+}
+
+#[derive(Clone, Copy)]
+enum AxisAnchorMode {
+    Min,
+    Max,
+    Center,
+}
+
+fn builtin_anchor_modes(name: &str) -> Option<[AxisAnchorMode; 3]> {
+    let modes = match name {
+        "Center" => [
+            AxisAnchorMode::Center,
+            AxisAnchorMode::Center,
+            AxisAnchorMode::Center,
+        ],
+        "Top" => [
+            AxisAnchorMode::Center,
+            AxisAnchorMode::Max,
+            AxisAnchorMode::Center,
+        ],
+        "Bottom" => [
+            AxisAnchorMode::Center,
+            AxisAnchorMode::Min,
+            AxisAnchorMode::Center,
+        ],
+        "Left" => [
+            AxisAnchorMode::Min,
+            AxisAnchorMode::Center,
+            AxisAnchorMode::Center,
+        ],
+        "Right" => [
+            AxisAnchorMode::Max,
+            AxisAnchorMode::Center,
+            AxisAnchorMode::Center,
+        ],
+        "Front" => [
+            AxisAnchorMode::Center,
+            AxisAnchorMode::Center,
+            AxisAnchorMode::Max,
+        ],
+        "Back" => [
+            AxisAnchorMode::Center,
+            AxisAnchorMode::Center,
+            AxisAnchorMode::Min,
+        ],
+        "FrontLeftCorner" | "BottomFrontLeft" => [
+            AxisAnchorMode::Min,
+            AxisAnchorMode::Min,
+            AxisAnchorMode::Max,
+        ],
+        "FrontRightCorner" | "BottomFrontRight" => [
+            AxisAnchorMode::Max,
+            AxisAnchorMode::Min,
+            AxisAnchorMode::Max,
+        ],
+        "BackLeftCorner" | "BottomBackLeft" => [
+            AxisAnchorMode::Min,
+            AxisAnchorMode::Min,
+            AxisAnchorMode::Min,
+        ],
+        "BackRightCorner" | "BottomBackRight" => [
+            AxisAnchorMode::Max,
+            AxisAnchorMode::Min,
+            AxisAnchorMode::Min,
+        ],
+        "TopFrontLeft" => [
+            AxisAnchorMode::Min,
+            AxisAnchorMode::Max,
+            AxisAnchorMode::Max,
+        ],
+        "TopFrontRight" => [
+            AxisAnchorMode::Max,
+            AxisAnchorMode::Max,
+            AxisAnchorMode::Max,
+        ],
+        "TopBackLeft" => [
+            AxisAnchorMode::Min,
+            AxisAnchorMode::Max,
+            AxisAnchorMode::Min,
+        ],
+        "TopBackRight" => [
+            AxisAnchorMode::Max,
+            AxisAnchorMode::Max,
+            AxisAnchorMode::Min,
+        ],
+        _ => return None,
+    };
+    Some(modes)
+}
+
+fn point_from_modes(bounds: Bounds3, modes: [AxisAnchorMode; 3]) -> [f64; 3] {
+    let center = bounds.center();
+    [
+        axis_anchor_value(bounds, center, 0, modes[0]),
+        axis_anchor_value(bounds, center, 1, modes[1]),
+        axis_anchor_value(bounds, center, 2, modes[2]),
+    ]
+}
+
+fn axis_anchor_value(bounds: Bounds3, center: [f64; 3], axis: usize, mode: AxisAnchorMode) -> f64 {
+    match mode {
+        AxisAnchorMode::Min => bounds.min[axis],
+        AxisAnchorMode::Max => bounds.max[axis],
+        AxisAnchorMode::Center => center[axis],
+    }
+}
+
+fn object_anchor_point(value: &Value, name: &str) -> Option<AnchorPoint> {
+    let bounds = object_bounds(value)?;
+    if let Some(modes) = builtin_anchor_modes(name) {
+        return Some(AnchorPoint {
+            point: point_from_modes(bounds, modes),
+        });
+    }
+
+    let Value::Object(obj) = value else {
+        return None;
+    };
+    let Value::Object(anchors) = obj.fields.get("anchors")? else {
+        return None;
+    };
+    let point = as_vec3(anchors.fields.get(name)?)?;
+    let pos = object_position(value);
+    Some(AnchorPoint {
+        point: [point[0] + pos[0], point[1] + pos[1], point[2] + pos[2]],
     })
 }
 
@@ -2059,11 +2201,42 @@ fn attach_object(
     mut value: Value,
     other: Value,
     face: &Value,
+    self_face: Option<&Value>,
     gap: f64,
 ) -> Result<Value, EvalError> {
     let self_bounds = object_bounds(&value).ok_or(EvalError::UnsupportedLayoutObject)?;
     let other_bounds = object_bounds(&other).ok_or(EvalError::UnsupportedLayoutObject)?;
     let anchor = anchor_spec(face).ok_or(EvalError::UnsupportedCall)?;
+    if let Some(self_anchor_value) = self_face {
+        let other_anchor =
+            object_anchor_point(&other, &anchor.name).ok_or(EvalError::UnsupportedCall)?;
+        let self_anchor_name = anchor_spec(self_anchor_value).ok_or(EvalError::UnsupportedCall)?;
+        let self_anchor = object_anchor_point(&value, &self_anchor_name.name)
+            .ok_or(EvalError::UnsupportedCall)?;
+        let mut pos = object_position(&value);
+        pos[0] += other_anchor.point[0] - self_anchor.point[0];
+        pos[1] += other_anchor.point[1] - self_anchor.point[1];
+        pos[2] += other_anchor.point[2] - self_anchor.point[2];
+        set_object_position(&mut value, pos)?;
+        return Ok(value);
+    }
+
+    if !matches!(
+        anchor.name.as_str(),
+        "Top" | "Bottom" | "Left" | "Right" | "Front" | "Back"
+    ) {
+        let other_anchor =
+            object_anchor_point(&other, &anchor.name).ok_or(EvalError::UnsupportedCall)?;
+        let self_anchor =
+            object_anchor_point(&value, &anchor.name).ok_or(EvalError::UnsupportedCall)?;
+        let mut pos = object_position(&value);
+        pos[0] += other_anchor.point[0] - self_anchor.point[0];
+        pos[1] += other_anchor.point[1] - self_anchor.point[1];
+        pos[2] += other_anchor.point[2] - self_anchor.point[2];
+        set_object_position(&mut value, pos)?;
+        return Ok(value);
+    }
+
     let mut pos = object_position(&value);
     match anchor.name.as_str() {
         "Top" => pos[1] += other_bounds.max[1] + gap + anchor.offset - self_bounds.min[1],
@@ -2084,21 +2257,27 @@ fn align_object_axis(
     axis: usize,
     anchor: &Value,
 ) -> Result<Value, EvalError> {
+    let anchor = anchor_spec(anchor).ok_or(EvalError::UnsupportedCall)?;
     let self_bounds = object_bounds(&value).ok_or(EvalError::UnsupportedLayoutObject)?;
     let other_bounds = object_bounds(&other).ok_or(EvalError::UnsupportedLayoutObject)?;
-    let anchor = anchor_spec(anchor).ok_or(EvalError::UnsupportedCall)?;
     let self_center = self_bounds.center();
     let other_center = other_bounds.center();
     let mut pos = object_position(&value);
-    let delta = match anchor.name.as_str() {
-        "Center" => other_center[axis] - self_center[axis] + anchor.offset,
-        "Left" if axis == 0 => other_bounds.min[0] - self_bounds.min[0] + anchor.offset,
-        "Right" if axis == 0 => other_bounds.max[0] - self_bounds.max[0] + anchor.offset,
-        "Bottom" if axis == 1 => other_bounds.min[1] - self_bounds.min[1] + anchor.offset,
-        "Top" if axis == 1 => other_bounds.max[1] - self_bounds.max[1] + anchor.offset,
-        "Back" if axis == 2 => other_bounds.min[2] - self_bounds.min[2] + anchor.offset,
-        "Front" if axis == 2 => other_bounds.max[2] - self_bounds.max[2] + anchor.offset,
-        _ => return Err(EvalError::UnsupportedCall),
+    let delta = if let Some(other_anchor) = object_anchor_point(&other, &anchor.name) {
+        let self_anchor =
+            object_anchor_point(&value, &anchor.name).ok_or(EvalError::UnsupportedCall)?;
+        other_anchor.point[axis] - self_anchor.point[axis] + anchor.offset
+    } else {
+        match anchor.name.as_str() {
+            "Center" => other_center[axis] - self_center[axis] + anchor.offset,
+            "Left" if axis == 0 => other_bounds.min[0] - self_bounds.min[0] + anchor.offset,
+            "Right" if axis == 0 => other_bounds.max[0] - self_bounds.max[0] + anchor.offset,
+            "Bottom" if axis == 1 => other_bounds.min[1] - self_bounds.min[1] + anchor.offset,
+            "Top" if axis == 1 => other_bounds.max[1] - self_bounds.max[1] + anchor.offset,
+            "Back" if axis == 2 => other_bounds.min[2] - self_bounds.min[2] + anchor.offset,
+            "Front" if axis == 2 => other_bounds.max[2] - self_bounds.max[2] + anchor.offset,
+            _ => return Err(EvalError::UnsupportedCall),
+        }
     };
     pos[axis] += delta;
     set_object_position(&mut value, pos)?;
