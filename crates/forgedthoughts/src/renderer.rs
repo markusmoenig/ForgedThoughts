@@ -16,6 +16,7 @@ use crate::{
     },
 };
 
+#[allow(dead_code)]
 #[path = "renderer/path.rs"]
 mod path;
 #[path = "renderer/ray.rs"]
@@ -72,6 +73,7 @@ pub struct SceneRenderSettings {
     pub trace_noise_threshold: Option<f32>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct PathtraceProgress {
     pub samples_done: u32,
@@ -94,6 +96,7 @@ pub struct PreviewProgress {
     pub elapsed_ms: u128,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct PathtraceSettings {
     pub spp: u32,
@@ -103,6 +106,7 @@ pub struct PathtraceSettings {
     pub noise_threshold: f32,
 }
 
+#[allow(dead_code)]
 impl Default for PathtraceSettings {
     fn default() -> Self {
         Self {
@@ -368,6 +372,7 @@ impl Vec3 {
         self.x * rhs.x + self.y * rhs.y + self.z * rhs.z
     }
 
+    #[allow(dead_code)]
     fn cross(self, rhs: Self) -> Self {
         Self::new(
             self.y * rhs.z - self.z * rhs.y,
@@ -602,6 +607,7 @@ pub fn render_depth_png_with_accel(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn render_pathtrace_png_with_accel(
     state: &EvalState,
     output_path: &Path,
@@ -722,6 +728,7 @@ pub fn render_preview_progressive_with_accel(
     Ok(image)
 }
 
+#[allow(dead_code)]
 pub fn render_pathtrace_progressive_with_accel(
     state: &EvalState,
     options: RenderOptions,
@@ -1155,12 +1162,12 @@ fn render_with_accel<A: Accelerator + Sync>(
     options: RenderOptions,
 ) -> RgbImage {
     let accel = A::from_scene(scene);
-    render_preview_image(
+    render_depth_image(
         &accel,
         &setup,
         options,
         options.width.max(options.height),
-        4,
+        1,
     )
 }
 
@@ -1260,7 +1267,7 @@ fn render_ray_with_accel_progressive<A: Accelerator + Sync>(
         .expect("pixel buffer length must match image dimensions"))
 }
 
-fn render_preview_image(
+fn render_depth_image(
     accel: &(impl Accelerator + Sync),
     setup: &RenderSetup,
     options: RenderOptions,
@@ -1328,36 +1335,13 @@ fn render_preview_tiled(
                             let dir = from_api_vec3(ray.direction).normalize();
                             let hit =
                                 raymarch_hit(accel, origin, dir, options, 0.0, options.max_dist);
-                            let c = match hit {
-                                Some(hit) => {
-                                    let view_dir = dir.mul(-1.0).normalize();
-                                    let bsdf_ctx =
-                                        build_bsdf_context(setup, hit, dir.mul(-1.0), 1.0);
-                                    if let Some((a, b, t)) =
-                                        resolve_split_material_at_hit(setup, hit, view_dir)
-                                    {
-                                        let ca =
-                                            shade_preview_color(setup, &setup.lights, a, bsdf_ctx);
-                                        let cb =
-                                            shade_preview_color(setup, &setup.lights, b, bsdf_ctx);
-                                        lerp_spectrum(ca, cb, t)
-                                    } else {
-                                        let material =
-                                            resolve_material_at_hit(setup, hit, view_dir);
-                                        shade_preview_color(
-                                            setup,
-                                            &setup.lights,
-                                            material,
-                                            bsdf_ctx,
-                                        )
-                                    }
-                                }
-                                None => environment_color(setup, dir)
-                                    .unwrap_or_else(|| env_radiance(&setup.path_lights)),
+                            let depth = match hit {
+                                Some(hit) => depth_preview_value(hit.t, options.max_dist),
+                                None => 0.0,
                             };
-                            sum = sum + c;
+                            sum = sum + Spectrum::rgb(depth, depth, depth);
                         }
-                        let rgb = spectrum_to_rgb8_reinhard(sum.scale(1.0 / aa_samples as f32));
+                        let rgb = spectrum_to_rgb8(sum.scale(1.0 / aa_samples as f32));
                         let i = lx * 3;
                         row[i] = rgb[0];
                         row[i + 1] = rgb[1];
@@ -1388,6 +1372,7 @@ fn render_preview_tiled(
         .expect("pixel buffer length must match image dimensions"))
 }
 
+#[allow(dead_code)]
 fn render_pathtrace_with_accel_progressive<A: Accelerator + Sync>(
     scene: CompiledScene,
     setup: RenderSetup,
@@ -1649,6 +1634,7 @@ fn shade_color(
     color
 }
 
+#[allow(dead_code)]
 fn shade_preview_color(
     setup: &RenderSetup,
     lights: &[Box<dyn Light>],
@@ -1705,6 +1691,7 @@ fn environment_color(setup: &RenderSetup, dir: Vec3) -> Option<Spectrum> {
     spectrum_from_value(&value)
 }
 
+#[allow(dead_code)]
 fn env_light_pdf_for_dir(
     lights: &[PathLight],
     setup: &RenderSetup,
@@ -1726,6 +1713,7 @@ fn env_light_pdf_for_dir(
     select_pdf * pdf_bsdf(setup, mat, bsdf_ctx, wi).max(1.0e-6)
 }
 
+#[allow(dead_code)]
 struct DirectLightingCtx<'a, A: Accelerator + Sync> {
     accel: &'a A,
     setup: &'a RenderSetup,
@@ -1926,6 +1914,7 @@ fn estimate_node_normal(node: &SdfNode, p: Vec3, epsilon: f32) -> Vec3 {
     }
 }
 
+#[allow(dead_code)]
 fn estimate_direct_mis<A: Accelerator + Sync>(
     ctx: &DirectLightingCtx<'_, A>,
     mat: MaterialKindRt,
@@ -1981,6 +1970,7 @@ fn estimate_direct_mis<A: Accelerator + Sync>(
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct DirectLightSample {
     wi: Vec3,
     radiance: Spectrum,
@@ -1989,6 +1979,7 @@ struct DirectLightSample {
     delta: bool,
 }
 
+#[allow(dead_code)]
 fn sample_one_light(
     lights: &[PathLight],
     _mat: MaterialKindRt,
@@ -2031,6 +2022,7 @@ fn sample_one_light(
     }
 }
 
+#[allow(dead_code)]
 fn cosine_sample_hemisphere(normal: Vec3, rng: &mut XorShift64) -> Vec3 {
     let u1 = rng.next_f32().clamp(1.0e-6, 1.0 - 1.0e-6);
     let u2 = rng.next_f32().clamp(1.0e-6, 1.0 - 1.0e-6);
@@ -2051,6 +2043,7 @@ fn cosine_sample_hemisphere(normal: Vec3, rng: &mut XorShift64) -> Vec3 {
     t.mul(x).add(b.mul(y)).add(n.mul(z)).normalize()
 }
 
+#[allow(dead_code)]
 fn cosine_pdf(normal: Vec3, wi: Vec3) -> f32 {
     normal.dot(wi).max(0.0) / std::f32::consts::PI
 }
@@ -2079,10 +2072,12 @@ fn shadow_visibility(
     visibility.clamp(0.0, 1.0)
 }
 
+#[allow(dead_code)]
 struct XorShift64 {
     state: u64,
 }
 
+#[allow(dead_code)]
 impl XorShift64 {
     fn new(seed: u64) -> Self {
         let state = if seed == 0 { 0x9E3779B97F4A7C15 } else { seed };
@@ -2104,12 +2099,14 @@ impl XorShift64 {
     }
 }
 
+#[allow(dead_code)]
 fn seed_pixel(x: u32, y: u32, width: u32) -> u64 {
     let idx = u64::from(y) * u64::from(width) + u64::from(x);
     idx.wrapping_mul(0x9E3779B97F4A7C15)
         .wrapping_add(0xBF58476D1CE4E5B9)
 }
 
+#[allow(dead_code)]
 fn seed_pixel_sample(x: u32, y: u32, width: u32, sample: u32) -> u64 {
     let base = seed_pixel(x, y, width);
     let s = u64::from(sample).wrapping_mul(0x94D0_49BB_1331_11EB);
@@ -2117,6 +2114,7 @@ fn seed_pixel_sample(x: u32, y: u32, width: u32, sample: u32) -> u64 {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct PixelAccumulator {
     sum: Spectrum,
     count: u32,
@@ -2125,6 +2123,7 @@ struct PixelAccumulator {
     active: bool,
 }
 
+#[allow(dead_code)]
 impl PixelAccumulator {
     fn new() -> Self {
         Self {
@@ -2157,6 +2156,7 @@ impl PixelAccumulator {
     }
 }
 
+#[allow(dead_code)]
 fn image_from_pixels(pixels: &[PixelAccumulator], width: u32, height: u32) -> RgbImage {
     let mut buffer = vec![0_u8; width as usize * height as usize * 3];
     for (idx, pixel) in pixels.iter().enumerate() {
@@ -2194,6 +2194,7 @@ fn pixel_sample_offsets(samples: u32) -> Vec<(f32, f32)> {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct BsdfSample {
     wi: Vec3,
     f: Spectrum,
@@ -2205,6 +2206,7 @@ struct BsdfSample {
     next_ior: f32,
 }
 
+#[allow(dead_code)]
 fn sample_bsdf_lobe(
     setup: &RenderSetup,
     mat: MaterialKindRt,
@@ -2256,6 +2258,7 @@ fn eval_bsdf(
         })
 }
 
+#[allow(dead_code)]
 fn pdf_bsdf(setup: &RenderSetup, mat: MaterialKindRt, bsdf_ctx: BsdfContextBase, wi: Vec3) -> f32 {
     resolve_bsdf_number_hook(setup, mat, "pdf", bsdf_context_value(bsdf_ctx, wi, None))
         .map(|v| v.max(0.0) as f32)
@@ -2268,6 +2271,7 @@ fn pdf_bsdf(setup: &RenderSetup, mat: MaterialKindRt, bsdf_ctx: BsdfContextBase,
         })
 }
 
+#[allow(dead_code)]
 fn sample_bsdf_ft(
     setup: &RenderSetup,
     mat: MaterialKindRt,
@@ -2296,6 +2300,7 @@ fn resolve_bsdf_spectrum_hook(
     spectrum_from_value(&value)
 }
 
+#[allow(dead_code)]
 fn resolve_bsdf_number_hook(
     setup: &RenderSetup,
     material: MaterialKindRt,
@@ -2310,6 +2315,7 @@ fn resolve_bsdf_number_hook(
     Some(v)
 }
 
+#[allow(dead_code)]
 fn resolve_bsdf_object_hook(
     setup: &RenderSetup,
     material: MaterialKindRt,
@@ -2355,6 +2361,7 @@ fn bsdf_context_value(
     })
 }
 
+#[allow(dead_code)]
 fn bsdf_sample_from_value(value: &Value) -> Option<BsdfSample> {
     let Value::Object(obj) = value else {
         return None;
@@ -2419,12 +2426,14 @@ fn refract(incident: Vec3, normal: Vec3, eta: f32) -> Option<Vec3> {
     Some(i.mul(eta).add(n.mul(eta * cosi - cost)).normalize())
 }
 
+#[allow(dead_code)]
 fn power_heuristic(pa: f32, pb: f32) -> f32 {
     let a2 = pa * pa;
     let b2 = pb * pb;
     a2 / (a2 + b2).max(1.0e-6)
 }
 
+#[allow(dead_code)]
 fn spectrum_luminance(s: Spectrum) -> f32 {
     0.2126 * s.r + 0.7152 * s.g + 0.0722 * s.b
 }
@@ -2483,6 +2492,7 @@ fn transition_medium(
     }
 }
 
+#[allow(dead_code)]
 fn clamp_spectrum(s: Spectrum, max_luma: f32) -> Spectrum {
     let l = spectrum_luminance(s);
     if l <= max_luma || l <= 1.0e-6 {
@@ -2528,6 +2538,12 @@ fn lerp_spectrum(a: Spectrum, b: Spectrum, t: f32) -> Spectrum {
         a.g * (1.0 - tt) + b.g * tt,
         a.b * (1.0 - tt) + b.b * tt,
     )
+}
+
+fn depth_preview_value(t: f32, max_dist: f32) -> f32 {
+    let d = (t / max_dist.max(1.0e-6)).clamp(0.0, 1.0);
+    let shaped = 1.0 - d;
+    shaped * shaped
 }
 
 fn spectrum_to_rgb8(s: Spectrum) -> [u8; 3] {

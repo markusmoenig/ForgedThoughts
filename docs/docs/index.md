@@ -7,11 +7,10 @@ title: Overview
 
 ForgedThoughts is a CPU-first rendering project built around the `Forge` language, signed distance field scene construction, and programmable materials.
 
-Today it has three distinct rendering paths:
+Today it has two distinct rendering paths:
 
-- `ray`: a classical Whitted-style ray tracer for fast lookdev
-- `path`: a progressive Monte Carlo path tracer for lighting and material validation
-- `render`: a fast shaded preview renderer for quick material and shape iteration
+- `trace`: a classical Whitted-style ray tracer for fast lookdev
+- `depth`: a fast depth preview for quick shape iteration
 
 What you can do with it right now:
 

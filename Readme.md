@@ -5,9 +5,8 @@ ForgedThoughts is a Rust workspace for a small scene language (`.ft`) and a CPU 
 Current state:
 
 - Forge parser, evaluator, and scene loading
-- Fast shaded preview rendering from `.ft` files
-- Classical Whitted-style `ray` rendering for lookdev
-- Progressive Monte Carlo `path` renderer for path tracing
+- Fast depth preview rendering from `.ft` files
+- Classical Whitted-style `trace` rendering for lookdev
 - Acceleration backends: `naive`, `bvh`, `bricks`
 - Built-in material backends: `Lambert`, `Metal`, `Dielectric`
 - Forge-defined material hooks for:
@@ -36,40 +35,34 @@ Validate a scene:
 ftc check --scene examples/mvp.ft
 ```
 
-Ray tracer:
+Trace renderer:
 
 ```bash
-ftc ray --scene examples/glass.ft
+ftc --scene examples/glass.ft
 ```
 
-Ray tracer with supersampling:
+Trace renderer with supersampling:
 
 ```bash
-ftc ray --scene examples/glass.ft --aa 4
+ftc --scene examples/glass.ft --aa 4
 ```
 
-Path trace:
+Depth preview:
 
 ```bash
-ftc path --scene examples/glass.ft --spp 64 --bounces 8
+ftc depth --scene examples/mvp.ft
 ```
 
-Shaded preview render:
+Depth preview with smoother edges:
 
 ```bash
-ftc render --scene examples/mvp.ft
-```
-
-Preview with smoother edges:
-
-```bash
-ftc render --scene examples/mvp.ft --aa 4
+ftc depth --scene examples/mvp.ft --aa 4
 ```
 
 Watch and re-render on save:
 
 ```bash
-ftc render --scene examples/mvp.ft --watch
+ftc depth --scene examples/mvp.ft --watch
 ```
 
 Acceleration benchmark:
@@ -82,7 +75,7 @@ Outputs default to the scene path with `.png` extension, so `examples/glass.ft` 
 
 ## Renderers
 
-`ray`
+`trace`
 
 - Classical Whitted-style CPU ray tracer for quick iteration
 - Progressive tiled updates
@@ -90,20 +83,12 @@ Outputs default to the scene path with `.png` extension, so `examples/glass.ft` 
 - Supports debug AOVs with `--debug-aov`
 - Uses the shared material system, but still has some hardcoded reflection/refraction logic internally
 
-`render`
+`depth`
 
-- Fast shaded preview renderer
-- Uses material shading and direct light response
-- Skips shadow tracing and recursive effects for speed
-- Supports `--aa` for camera supersampling
+- Fast depth preview renderer
+- Intended for quick shape iteration
+- Supports `--aa` for smoother depth edges
 - Supports `--watch` for iterative modeling loops
-
-`path`
-
-- Path tracer
-- Supports adaptive controls: `--min-spp`, `--noise-threshold`
-- Overwrites the destination PNG during preview updates with `--preview-every`
-- This is the renderer that currently benefits most from Forge-defined `eval/pdf/sample`
 
 ## Language Snapshot
 
@@ -243,7 +228,7 @@ environment Sky {
 };
 ```
 
-`color(dir)` is used as the visible background on misses in `render`, `ray`, and `path`.
+`color(dir)` is used as the visible background on misses in `depth` and `trace`.
 
 ## Imports
 
@@ -314,7 +299,7 @@ Current hit/BSDF context includes values such as:
 
 - `subsurface` exists as material data, but true subsurface transport is not implemented yet
 - `medium` currently affects transmission through simple Beer-Lambert attenuation
-- Forge-defined `eval/pdf/sample` are integrated in the path tracer first; the `ray` renderer still has some backend-specific recursion logic
+- Forge-defined `eval/pdf/sample` are currently most useful through the shared material system, but the `trace` renderer still has some backend-specific recursion logic
 - Forge material functions are still interpreted, not VM/JIT compiled
 
 ## Development

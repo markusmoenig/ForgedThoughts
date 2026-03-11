@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.9.2">
 <title data-rh="true">Materials | ForgedThoughts</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:url" content="https://forgedthoughts.com/docs/materials"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Materials | ForgedThoughts"><meta data-rh="true" name="description" content="ForgedThoughts currently has two layers:"><meta data-rh="true" property="og:description" content="ForgedThoughts currently has two layers:"><link data-rh="true" rel="canonical" href="https://forgedthoughts.com/docs/materials"><link data-rh="true" rel="alternate" href="https://forgedthoughts.com/docs/materials" hreflang="en"><link data-rh="true" rel="alternate" href="https://forgedthoughts.com/docs/materials" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Materials","item":"https://forgedthoughts.com/docs/materials"}]}</script><link rel="stylesheet" href="/assets/css/styles.f0b74a76.css">
-<script src="/assets/js/runtime~main.26572800.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.3c846fe4.js" defer="defer"></script>
 <script src="/assets/js/main.8d26fb33.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
@@ -63,8 +63,7 @@
 <div class="language-ft codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-ft codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#bfc7d5"><span class="token plain">let gold = Metal {</span><br></span><span class="token-line" style="color:#bfc7d5"><span class="token plain">  color: #ebc757,</span><br></span><span class="token-line" style="color:#bfc7d5"><span class="token plain">  roughness: 0.18</span><br></span><span class="token-line" style="color:#bfc7d5"><span class="token plain">};</span><br></span></code></pre></div></div>
 <p>Current reality:</p>
 <ul>
-<li class=""><code>eval/pdf/sample</code> are integrated most cleanly in the path tracer</li>
-<li class="">the recursive <code>ray</code> renderer still has some built-in material branching</li>
+<li class="">the recursive <code>trace</code> renderer still has some built-in material branching</li>
 <li class=""><code>normal(ctx)</code> perturbs the shading normal only; it does not change SDF intersections or silhouettes</li>
 <li class="">material-local helper functions can be reused across hooks like <code>color</code>, <code>roughness</code>, and <code>normal</code></li>
 <li class=""><code>medium</code> already affects transmission through simple absorption</li>

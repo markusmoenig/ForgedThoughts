@@ -30,11 +30,10 @@ pub use render_api::{
     SurfaceHit, Vec3,
 };
 pub use renderer::{
-    AccelMode, PathtraceProgress, PathtraceSettings, PreviewProgress, RayDebugAov, RayProgress,
-    RaySettings, RenderError, RenderOptions, SceneRenderSettings, extract_scene_render_settings,
-    render_depth_png, render_depth_png_with_accel, render_pathtrace_png_with_accel,
-    render_pathtrace_progressive_with_accel, render_preview_progressive_with_accel,
-    render_ray_png_with_accel, render_ray_progressive_with_accel,
+    AccelMode, PreviewProgress, RayDebugAov, RayProgress, RaySettings, RenderError, RenderOptions,
+    SceneRenderSettings, extract_scene_render_settings, render_depth_png,
+    render_depth_png_with_accel, render_preview_progressive_with_accel, render_ray_png_with_accel,
+    render_ray_progressive_with_accel,
 };
 use thiserror::Error;
 

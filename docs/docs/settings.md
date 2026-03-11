@@ -17,11 +17,7 @@ let render = RenderSettings {
   max_dist: 60.0,
   epsilon: 0.0002,
   step_scale: 0.7,
-  accel: Bvh{},
-  spp: 128,
-  min_spp: 16,
-  bounces: 8,
-  noise_threshold: 0.02
+  accel: Bvh{}
 };
 ```
 
@@ -50,20 +46,6 @@ let render = RenderSettings {
   - `Naive{}`
   - `Bvh{}`
   - `Bricks{}`
-
-## Path Trace Settings
-
-- `spp`
-  Target samples per pixel for `ftc path`.
-
-- `min_spp`
-  Minimum samples before adaptive stopping can deactivate a pixel.
-
-- `bounces`
-  Maximum path depth for `ftc path`.
-
-- `noise_threshold`
-  Adaptive stopping threshold for the path tracer.
 
 ## Notes
 

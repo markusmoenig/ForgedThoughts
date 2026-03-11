@@ -19,40 +19,34 @@ Validate a scene:
 ftc check --scene examples/mvp.ft
 ```
 
-Shaded preview render:
+Depth preview:
 
 ```bash
-ftc render --scene examples/mvp.ft
+ftc depth --scene examples/mvp.ft
 ```
 
-Higher-quality preview edges:
+Smoother depth edges:
 
 ```bash
-ftc render --scene examples/mvp.ft --aa 4
+ftc depth --scene examples/mvp.ft --aa 4
 ```
 
-Watch and re-render on save:
+Watch and rerun on save:
 
 ```bash
-ftc render --scene examples/mvp.ft --watch
+ftc depth --scene examples/mvp.ft --watch
 ```
 
-Ray tracer:
+Default trace renderer:
 
 ```bash
-ftc ray --scene examples/glass.ft
+ftc --scene examples/glass.ft
 ```
 
-Ray tracer with supersampling:
+Default trace renderer with supersampling:
 
 ```bash
-ftc ray --scene examples/glass.ft --aa 4
-```
-
-Path trace:
-
-```bash
-ftc path --scene examples/glass.ft --spp 64 --bounces 8
+ftc --scene examples/glass.ft --aa 4
 ```
 
 Benchmark acceleration backends:
@@ -64,9 +58,9 @@ ftc bench --scene examples/mvp.ft --iterations 5 --warmup 1
 Notes:
 
 - Output defaults to the input scene path with `.png`
-- `render` is a fast shaded preview path with materials but without shadow tracing
-- `render` and `ray` support `--aa` for camera supersampling
-- `ray` supports progressive tile updates and debug AOVs
-- `path` supports adaptive sampling controls and preview overwrites
-- `check`, `render`, `ray`, and `path` support `--watch` to rerun when the scene file changes
+- `ftc` without a subcommand runs the trace renderer
+- `depth` is a fast depth preview for shape iteration
+- `depth` and the default trace path support `--aa` for camera supersampling
+- `trace` supports progressive tile updates and debug AOVs
+- `check`, `depth`, and the default trace path support `--watch` to rerun when the scene file changes
 - current `--watch` tracks the scene file itself, not imported files yet

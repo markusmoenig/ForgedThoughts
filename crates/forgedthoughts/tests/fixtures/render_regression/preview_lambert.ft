@@ -1,0 +1,43 @@
+let camera = Camera {
+  origin: vec3(0.0, 1.2, 5.2),
+  target: vec3(0.0, 0.4, 0.0),
+  fov_y: 35.0
+};
+
+let key = PointLight {
+  position: vec3(3.5, 4.5, 4.0),
+  color: #fff2da,
+  intensity: 110.0
+};
+
+environment Sky {
+  let zenith = #71a7ff;
+  let horizon = #deefff;
+
+  fn color(dir) {
+    let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    return mix(horizon, zenith, pow(t, 0.8));
+  }
+};
+
+let floor_mat = Lambert {
+  color: #d8dde6
+};
+
+let sphere_mat = Lambert {
+  color: #c77a68
+};
+
+var floor = Box {
+  size: vec3(10.0, 0.5, 10.0),
+  material: floor_mat
+};
+floor.pos.y = -1.15;
+
+var sphere = Sphere {
+  radius: 0.92,
+  material: sphere_mat
+};
+sphere.pos.y = 0.25;
+
+let scene = floor + sphere;
