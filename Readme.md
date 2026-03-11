@@ -8,6 +8,7 @@ Current state:
 - Fast depth preview rendering from `.ft` files
 - Classical Whitted-style `trace` rendering for lookdev
 - Acceleration backends: `naive`, `bvh`, `bricks`
+- Built-in lights: `PointLight`, `SphereLight`, `EnvLight`
 - Built-in material backends: `Lambert`, `Metal`, `Dielectric`
 - Forge-defined material hooks for:
   - `color`, `roughness`, `ior`, `thin_walled`

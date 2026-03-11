@@ -152,6 +152,17 @@ pub struct LightSample {
 
 pub trait Light: Send + Sync {
     fn sample_li(&self, point: Vec3) -> LightSample;
+    fn sample_li_indexed(
+        &self,
+        point: Vec3,
+        _sample_index: u32,
+        _sample_count: u32,
+    ) -> LightSample {
+        self.sample_li(point)
+    }
+    fn shadow_sample_count(&self) -> u32 {
+        1
+    }
     fn emitted_radiance(&self, _dir: Vec3) -> Spectrum {
         Spectrum::black()
     }
@@ -193,6 +204,88 @@ impl Light for EnvLight {
     fn emitted_radiance(&self, _dir: Vec3) -> Spectrum {
         self.radiance
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SphereLight {
+    pub position: Vec3,
+    pub radius: f32,
+    pub intensity: Spectrum,
+    pub samples: u32,
+}
+
+impl Light for SphereLight {
+    fn sample_li(&self, point: Vec3) -> LightSample {
+        self.sample_li_indexed(point, 0, self.shadow_sample_count())
+    }
+
+    fn sample_li_indexed(&self, point: Vec3, sample_index: u32, sample_count: u32) -> LightSample {
+        if self.radius <= 1.0e-5 {
+            let to_light = self.position - point;
+            let distance = to_light.length().max(1.0e-4);
+            let attenuation = 1.0 / (distance * distance);
+            return LightSample {
+                wi: to_light * (1.0 / distance),
+                radiance: self.intensity.scale(attenuation),
+                distance,
+            };
+        }
+
+        let normal = (point - self.position).normalize();
+        let up = if normal.y.abs() < 0.99 {
+            Vec3::new(0.0, 1.0, 0.0)
+        } else {
+            Vec3::new(1.0, 0.0, 0.0)
+        };
+        let tangent = normal.cross(up).normalize();
+        let bitangent = tangent.cross(normal).normalize();
+        let (u1, u2) = hammersley_2d(sample_index, sample_count.max(1));
+        let disk = concentric_disk_sample(u1, u2);
+        let sample_pos =
+            self.position + tangent * (disk.x * self.radius) + bitangent * (disk.y * self.radius);
+        let to_light = sample_pos - point;
+        let distance = to_light.length().max(1.0e-4);
+        let attenuation = 1.0 / (distance * distance);
+        LightSample {
+            wi: to_light * (1.0 / distance),
+            radiance: self.intensity.scale(attenuation),
+            distance,
+        }
+    }
+
+    fn shadow_sample_count(&self) -> u32 {
+        self.samples.max(1)
+    }
+}
+
+fn hammersley_2d(i: u32, n: u32) -> (f32, f32) {
+    let u = (i as f32 + 0.5) / n.max(1) as f32;
+    let mut bits = i;
+    bits = bits.rotate_right(16);
+    bits = ((bits & 0x5555_5555) << 1) | ((bits & 0xAAAA_AAAA) >> 1);
+    bits = ((bits & 0x3333_3333) << 2) | ((bits & 0xCCCC_CCCC) >> 2);
+    bits = ((bits & 0x0F0F_0F0F) << 4) | ((bits & 0xF0F0_F0F0) >> 4);
+    bits = ((bits & 0x00FF_00FF) << 8) | ((bits & 0xFF00_FF00) >> 8);
+    let v = bits as f32 * 2.328_306_4e-10;
+    (u, v)
+}
+
+fn concentric_disk_sample(u1: f32, u2: f32) -> Vec3 {
+    let sx = 2.0 * u1 - 1.0;
+    let sy = 2.0 * u2 - 1.0;
+    if sx.abs() <= f32::EPSILON && sy.abs() <= f32::EPSILON {
+        return Vec3::new(0.0, 0.0, 0.0);
+    }
+
+    let (r, theta) = if sx.abs() > sy.abs() {
+        (sx, std::f32::consts::FRAC_PI_4 * (sy / sx))
+    } else {
+        (
+            sy,
+            std::f32::consts::FRAC_PI_2 - std::f32::consts::FRAC_PI_4 * (sx / sy),
+        )
+    };
+    Vec3::new(r * theta.cos(), r * theta.sin(), 0.0)
 }
 
 #[derive(Debug, Clone, Copy)]

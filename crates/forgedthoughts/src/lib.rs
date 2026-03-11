@@ -27,7 +27,7 @@ pub use parser::{ParseError, parse_program};
 pub use render_api::{
     Bsdf, Camera, CameraKind, EnvLight, Integrator, Light, LightSample, MaterialKind,
     MaterialModel, OpenPbrMaterial, PinholeCamera, PointLight, PreviewIntegrator, Ray, Spectrum,
-    SurfaceHit, Vec3,
+    SphereLight, SurfaceHit, Vec3,
 };
 pub use renderer::{
     AccelMode, PreviewProgress, RayDebugAov, RayProgress, RaySettings, RenderError, RenderOptions,

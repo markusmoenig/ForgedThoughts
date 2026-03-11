@@ -12,7 +12,8 @@ use crate::{
     eval_environment_function, eval_material_function, eval_material_properties, eval_sdf_function,
     eval_sdf_zero_arg_function,
     render_api::{
-        Camera, CameraKind, EnvLight, Light, PinholeCamera, PointLight, Spectrum, Vec3 as ApiVec3,
+        Camera, CameraKind, EnvLight, Light, PinholeCamera, PointLight, Spectrum, SphereLight,
+        Vec3 as ApiVec3,
     },
 };
 
@@ -1598,38 +1599,42 @@ fn shade_color(
     };
     let mut color = Spectrum::black();
     for light in lights {
-        let sample = light.sample_li(p);
-        let wi = sample.wi.normalize();
-        let ndotl = n.x * wi.x + n.y * wi.y + n.z * wi.z;
-        if ndotl <= 0.0 {
-            continue;
+        let shadow_samples = light.shadow_sample_count().max(1);
+        let inv_samples = 1.0 / shadow_samples as f32;
+        for sample_index in 0..shadow_samples {
+            let sample = light.sample_li_indexed(p, sample_index, shadow_samples);
+            let wi = sample.wi.normalize();
+            let ndotl = n.x * wi.x + n.y * wi.y + n.z * wi.z;
+            if ndotl <= 0.0 {
+                continue;
+            }
+            let shadow_origin = offset_ray_origin(
+                bsdf_ctx.hit.position,
+                geometric_normal,
+                from_api_vec3(wi),
+                options.epsilon,
+            );
+            let max_t = if sample.distance.is_finite() {
+                (sample.distance - (options.epsilon * 8.0)).max(0.0)
+            } else {
+                options.max_dist
+            };
+            if max_t <= 0.0 {
+                continue;
+            }
+            let shadow = shadow_visibility(
+                accel,
+                shadow_origin,
+                from_api_vec3(wi),
+                max_t,
+                options.epsilon,
+            );
+            if shadow <= 0.0 {
+                continue;
+            }
+            let f = eval_bsdf(setup, material, bsdf_ctx, from_api_vec3(wi));
+            color = color + (f * sample.radiance).scale(ndotl * shadow * inv_samples);
         }
-        let shadow_origin = offset_ray_origin(
-            bsdf_ctx.hit.position,
-            geometric_normal,
-            from_api_vec3(wi),
-            options.epsilon,
-        );
-        let max_t = if sample.distance.is_finite() {
-            (sample.distance - (options.epsilon * 8.0)).max(0.0)
-        } else {
-            options.max_dist
-        };
-        if max_t <= 0.0 {
-            continue;
-        }
-        let shadow = shadow_visibility(
-            accel,
-            shadow_origin,
-            from_api_vec3(wi),
-            max_t,
-            options.epsilon,
-        );
-        if shadow <= 0.0 {
-            continue;
-        }
-        let f = eval_bsdf(setup, material, bsdf_ctx, from_api_vec3(wi));
-        color = color + (f * sample.radiance).scale(ndotl * shadow);
     }
     color
 }
@@ -3231,6 +3236,27 @@ fn parse_lights(state: &EvalState) -> (Vec<Box<dyn Light>>, Vec<PathLight>) {
                 lights.push(Box::new(EnvLight { radiance }));
                 path_lights.push(PathLight::Env { radiance });
             }
+            "SphereLight" => {
+                let position = read_vec3_field(obj, "position").unwrap_or_else(|| read_center(obj));
+                let radius = read_number_field(obj, &["radius", "r"])
+                    .unwrap_or(0.35)
+                    .max(0.0);
+                let intensity = read_light_spectrum(obj, "color", "intensity", &["intensity"])
+                    .unwrap_or(Spectrum::rgb(8.0, 8.0, 8.0));
+                let samples = read_number_field(obj, &["samples"])
+                    .map(|v| v.max(1.0) as u32)
+                    .unwrap_or(8);
+                lights.push(Box::new(SphereLight {
+                    position: to_api_vec3(position),
+                    radius,
+                    intensity,
+                    samples,
+                }));
+                path_lights.push(PathLight::Point {
+                    position: to_api_vec3(position),
+                    intensity,
+                });
+            }
             _ => {}
         }
     }
@@ -4356,7 +4382,8 @@ mod tests {
     };
 
     use super::{
-        AccelMode, RenderOptions, extract_scene_render_settings, render_depth_png_with_accel,
+        AccelMode, RaySettings, RenderOptions, extract_scene_render_settings,
+        render_depth_png_with_accel, render_ray_progressive_with_accel,
     };
 
     fn empty_state(bindings: HashMap<String, Binding>) -> EvalState {
@@ -4572,6 +4599,88 @@ mod tests {
         .expect("render with scene camera/lights should succeed");
         assert!(std::fs::metadata(&output).is_ok());
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn traces_with_sphere_light() {
+        let mut sphere_fields = HashMap::new();
+        sphere_fields.insert("radius".to_string(), Value::Number(0.9));
+        let sphere = Value::Object(crate::ObjectValue {
+            type_name: Some("Sphere".to_string()),
+            fields: sphere_fields,
+        });
+
+        let mut camera_fields = HashMap::new();
+        camera_fields.insert("origin".to_string(), vec3_value(0.0, 0.8, 5.0));
+        camera_fields.insert("target".to_string(), vec3_value(0.0, 0.2, 0.0));
+        camera_fields.insert("fov_y".to_string(), Value::Number(35.0));
+        let camera = Value::Object(crate::ObjectValue {
+            type_name: Some("Camera".to_string()),
+            fields: camera_fields,
+        });
+
+        let mut light_fields = HashMap::new();
+        light_fields.insert("position".to_string(), vec3_value(2.0, 3.0, 3.5));
+        light_fields.insert("radius".to_string(), Value::Number(0.7));
+        light_fields.insert("color".to_string(), vec3_value(1.0, 0.94, 0.86));
+        light_fields.insert("intensity".to_string(), Value::Number(40.0));
+        light_fields.insert("samples".to_string(), Value::Number(4.0));
+        let sphere_light = Value::Object(crate::ObjectValue {
+            type_name: Some("SphereLight".to_string()),
+            fields: light_fields,
+        });
+
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "scene".to_string(),
+            Binding {
+                mutable: false,
+                value: sphere,
+            },
+        );
+        bindings.insert(
+            "camera".to_string(),
+            Binding {
+                mutable: false,
+                value: camera,
+            },
+        );
+        bindings.insert(
+            "key".to_string(),
+            Binding {
+                mutable: false,
+                value: sphere_light,
+            },
+        );
+
+        let image = render_ray_progressive_with_accel(
+            &empty_state(bindings),
+            RenderOptions {
+                width: 48,
+                height: 48,
+                max_steps: 320,
+                max_dist: 30.0,
+                epsilon: 0.0002,
+                step_scale: 0.7,
+                camera_z: 6.0,
+                fov_y_degrees: 35.0,
+            },
+            AccelMode::Naive,
+            RaySettings {
+                max_depth: 2,
+                tile_size: 48,
+                aa_samples: 1,
+                debug_aov: None,
+            },
+            |_, _| Ok(()),
+        )
+        .expect("trace with sphere light should succeed");
+
+        let has_non_black = image.pixels().any(|pixel| pixel.0 != [0, 0, 0]);
+        assert!(
+            has_non_black,
+            "sphere light trace should produce visible output"
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 {
   "id": "lights",
   "title": "Lights",
-  "description": "Forge currently supports two built-in light types:",
+  "description": "Forge currently supports three built-in light types:",
   "source": "@site/docs/lights.md",
   "sourceDirName": ".",
   "slug": "/lights",

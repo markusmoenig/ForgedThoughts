@@ -5,9 +5,10 @@ title: Lights
 
 # Lights
 
-Forge currently supports two built-in light types:
+Forge currently supports three built-in light types:
 
 - `PointLight`
+- `SphereLight`
 - `EnvLight`
 
 ## PointLight
@@ -29,6 +30,35 @@ Supported fields:
 - `intensity`
 
 The emitted power is `color * intensity`, with inverse-square falloff from the light position.
+
+## SphereLight
+
+`SphereLight` is the first real area light for the `trace` renderer. It gives softer shadows than `PointLight` by sampling a spherical emitter.
+
+```ft
+let key = SphereLight {
+  position: vec3(2.6, 3.4, 3.8),
+  radius: 0.7,
+  color: #fff1da,
+  intensity: 48.0,
+  samples: 8
+};
+```
+
+Supported fields:
+
+- `position`
+- `radius` or `r`
+- `color`
+- `intensity`
+- `samples`
+
+Notes:
+
+- The emitted power is `color * intensity`.
+- Larger `radius` values produce softer shadows.
+- Higher `samples` values reduce shadow stepping/noise in `trace`, but cost more render time.
+- If `radius` is `0`, `SphereLight` behaves like a point light.
 
 ## EnvLight
 
