@@ -12,20 +12,23 @@ ForgedThoughts currently has two layers:
 
 Example:
 
-```ft
+```forge
 material SoftGold {
   model: Metal;
   color = #ebc757;
 
+  // Evaluate how much light this material reflects for a given incoming direction.
   fn eval(ctx) {
     let ndotl = max(dot(ctx.normal, ctx.wi), 0.0);
     return mix(vec3(0.08, 0.06, 0.03), color, ndotl) * (1.0 / 3.14159265);
   }
 
+  // Return the probability density for the direction chosen by the sampler.
   fn pdf(ctx) {
     return max(dot(ctx.normal, ctx.wi), 0.0) / 3.14159265;
   }
 
+  // Pick a new reflected or transmitted direction for the next ray bounce.
   fn sample(ctx) {
     return BsdfSample {
       wi: ctx.normal,
@@ -43,7 +46,7 @@ material SoftGold {
 
 Material-local helper functions can also be reused across hooks, and they may take multiple arguments:
 
-```ft
+```forge
 material BrickLike {
   model: Lambert;
   let brick = vec3(0.68, 0.24, 0.16);
@@ -78,18 +81,18 @@ material BrickLike {
 
 Current Forge material hooks:
 
-- `color`
-- `roughness`
-- `ior`
-- `thin_walled`
-- `emission_color`
-- `emission_strength`
-- `normal`
-- `medium`
-- `subsurface`
-- `eval`
-- `pdf`
-- `sample`
+- `color`: Returns the surface color at the current hit point.
+- `roughness`: Controls how sharp or broad the surface reflection looks.
+- `ior`: Sets the index of refraction for dielectric materials.
+- `thin_walled`: Treats the surface as a shell instead of a solid volume.
+- `emission_color`: Sets the emitted light color.
+- `emission_strength`: Scales how strongly the surface emits light.
+- `normal`: Perturbs the shading normal for bump-style surface detail.
+- `medium`: Describes the transmissive medium used inside the material.
+- `subsurface`: Carries structured subsurface parameters for later transport use.
+- `eval`: Evaluates how much light the material reflects for a given direction.
+- `pdf`: Returns the sampling probability for the chosen BSDF direction.
+- `sample`: Chooses the next ray direction and BSDF response for the bounce.
 
 Current context fields include:
 
@@ -104,18 +107,33 @@ Current context fields include:
 
 Materials can also be imported from disk or the built-in library:
 
-```ft
+```forge
 import "./shared/brick.ft";
 import "Gold" as gold;
 ```
 
 Then use the imported definitions explicitly:
 
-```ft
+```forge
 let scene = Sphere {
   material: gold.Gold {}
 };
 ```
+
+Built-in and user-defined materials can also be instantiated with per-instance overrides:
+
+```forge
+let floor = Box {
+  size: vec3(20.0, 0.5, 20.0),
+  material: CheckerFloor {
+    color_a: #f5f6f8,
+    color_b: #8b93a1,
+    scale: 4.2
+  }
+};
+```
+
+Those override values are visible to the material's default properties, helper bindings, and runtime hooks like `fn color(ctx)`.
 
 The built-in library currently exposes:
 
@@ -125,14 +143,14 @@ The built-in library currently exposes:
 
 Built-ins can be imported either by full path or by bare library name:
 
-```ft
+```forge
 import "Glass";
 import "materials/gold.ft";
 ```
 
 For color-valued material fields, Forge also accepts hex literals as a shorthand for `vec3(...)`:
 
-```ft
+```forge
 let gold = Metal {
   color: #ebc757,
   roughness: 0.18

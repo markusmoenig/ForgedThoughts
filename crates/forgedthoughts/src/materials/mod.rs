@@ -74,6 +74,7 @@ pub struct MaterialParams {
     pub subsurface: Option<SubsurfaceParams>,
     pub pattern: Option<ColorPattern>,
     pub dynamic_material_id: Option<u32>,
+    pub dynamic_override_id: Option<u32>,
 }
 
 impl MaterialParams {
@@ -90,6 +91,7 @@ impl MaterialParams {
             subsurface: None,
             pattern: None,
             dynamic_material_id: None,
+            dynamic_override_id: None,
         }
     }
 
@@ -111,6 +113,7 @@ impl MaterialParams {
             subsurface: None,
             pattern: None,
             dynamic_material_id: None,
+            dynamic_override_id: None,
         }
     }
 
@@ -134,6 +137,7 @@ impl MaterialParams {
             subsurface: None,
             pattern: None,
             dynamic_material_id: None,
+            dynamic_override_id: None,
         }
     }
 }

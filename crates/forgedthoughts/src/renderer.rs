@@ -12,8 +12,8 @@ use thiserror::Error;
 use crate::{
     BlendedMaterial, ColorPattern, EvalState, Material, MaterialKindTag, MaterialParams,
     MaterialSampleInput, MediumParams, ObjectValue, SubsurfaceParams, Value,
-    eval_environment_function, eval_material_function, eval_material_properties, eval_sdf_function,
-    eval_sdf_zero_arg_function,
+    eval_environment_function, eval_material_function_with_overrides,
+    eval_material_properties_with_overrides, eval_sdf_function, eval_sdf_zero_arg_function,
     render_api::{
         Camera, CameraKind, EnvLight, Light, PinholeCamera, PointLight, Spectrum, SphereLight,
         Vec3 as ApiVec3,
@@ -439,6 +439,7 @@ struct CompiledScene {
     center: Vec3,
     materials: Vec<MaterialKindRt>,
     object_transforms: Vec<PrimitiveTransform>,
+    dynamic_material_overrides: Vec<ObjectValue>,
 }
 
 struct RenderSetup {
@@ -450,6 +451,7 @@ struct RenderSetup {
     materials: Vec<MaterialKindRt>,
     object_transforms: Vec<PrimitiveTransform>,
     material_def_names: Vec<String>,
+    dynamic_material_overrides: Vec<ObjectValue>,
     environment_name: Option<String>,
 }
 
@@ -475,6 +477,7 @@ struct CompileContext {
     default_material: MaterialKindRt,
     materials: Vec<MaterialKindRt>,
     object_transforms: Vec<PrimitiveTransform>,
+    dynamic_material_overrides: Vec<ObjectValue>,
 }
 
 type MaterialKindRt = Material;
@@ -486,6 +489,7 @@ impl CompileContext {
             default_material,
             materials: vec![default_material],
             object_transforms: vec![PrimitiveTransform::identity()],
+            dynamic_material_overrides: Vec::new(),
         }
     }
 
@@ -515,6 +519,23 @@ impl CompileContext {
         } else {
             self.materials.push(mat);
             (self.materials.len() - 1) as u32
+        }
+    }
+
+    fn intern_dynamic_material_override(&mut self, overrides: &ObjectValue) -> Option<u32> {
+        if overrides.fields.is_empty() {
+            return None;
+        }
+        if let Some((idx, _)) = self
+            .dynamic_material_overrides
+            .iter()
+            .enumerate()
+            .find(|(_, existing)| *existing == overrides)
+        {
+            Some(idx as u32)
+        } else {
+            self.dynamic_material_overrides.push(overrides.clone());
+            Some((self.dynamic_material_overrides.len() - 1) as u32)
         }
     }
 }
@@ -832,6 +853,7 @@ fn compile_scene(
         center,
         materials: ctx.materials,
         object_transforms: ctx.object_transforms,
+        dynamic_material_overrides: ctx.dynamic_material_overrides,
     })
 }
 
@@ -1066,7 +1088,8 @@ fn primitive_material_id(
     ctx: &mut CompileContext,
 ) -> u32 {
     if let Some(Value::Object(mat_obj)) = obj.fields.get("material") {
-        return ctx.intern_material(material_from_object(state, mat_obj));
+        let material = material_from_object(state, mat_obj, Some(ctx));
+        return ctx.intern_material(material);
     }
     ctx.intern_material(ctx.default_material)
 }
@@ -1924,6 +1947,7 @@ fn build_bsdf_context(
     let normal = resolve_dynamic_normal(
         &setup.state,
         &setup.material_def_names,
+        &setup.dynamic_material_overrides,
         material,
         hit,
         local_position,
@@ -2442,7 +2466,10 @@ fn resolve_bsdf_spectrum_hook(
     ctx: Value,
 ) -> Option<Spectrum> {
     let name = dynamic_material_name(material, &setup.material_def_names)?;
-    let value = eval_material_function(&setup.state, name, function_name, ctx).ok()?;
+    let overrides = dynamic_material_override(material, &setup.dynamic_material_overrides);
+    let value =
+        eval_material_function_with_overrides(&setup.state, name, function_name, ctx, overrides)
+            .ok()?;
     spectrum_from_value(&value)
 }
 
@@ -2454,7 +2481,10 @@ fn resolve_bsdf_number_hook(
     ctx: Value,
 ) -> Option<f64> {
     let name = dynamic_material_name(material, &setup.material_def_names)?;
-    let value = eval_material_function(&setup.state, name, function_name, ctx).ok()?;
+    let overrides = dynamic_material_override(material, &setup.dynamic_material_overrides);
+    let value =
+        eval_material_function_with_overrides(&setup.state, name, function_name, ctx, overrides)
+            .ok()?;
     let Value::Number(v) = value else {
         return None;
     };
@@ -2469,7 +2499,8 @@ fn resolve_bsdf_object_hook(
     ctx: Value,
 ) -> Option<Value> {
     let name = dynamic_material_name(material, &setup.material_def_names)?;
-    eval_material_function(&setup.state, name, function_name, ctx).ok()
+    let overrides = dynamic_material_override(material, &setup.dynamic_material_overrides);
+    eval_material_function_with_overrides(&setup.state, name, function_name, ctx, overrides).ok()
 }
 
 fn dynamic_material_name(material: MaterialKindRt, material_def_names: &[String]) -> Option<&str> {
@@ -3318,6 +3349,7 @@ fn build_render_setup(
         materials: scene.materials.clone(),
         object_transforms: scene.object_transforms.clone(),
         material_def_names: sorted_material_def_names(state),
+        dynamic_material_overrides: scene.dynamic_material_overrides.clone(),
         environment_name: find_environment_name(state),
     }
 }
@@ -3455,7 +3487,7 @@ fn extract_material_kind(state: &EvalState, value: &Value) -> Option<MaterialKin
     if let Some(material_value) = obj.fields.get("material")
         && let Value::Object(material_obj) = material_value
     {
-        return Some(material_from_object(state, material_obj));
+        return Some(material_from_object(state, material_obj, None));
     }
 
     for field_value in obj.fields.values() {
@@ -3471,20 +3503,24 @@ fn extract_material_kind(state: &EvalState, value: &Value) -> Option<MaterialKin
         || type_name.eq_ignore_ascii_case("metal")
         || type_name.eq_ignore_ascii_case("dielectric")
     {
-        return Some(material_from_object(state, obj));
+        return Some(material_from_object(state, obj, None));
     }
 
     if state.material_defs.contains_key(type_name) {
-        return Some(material_from_dynamic_def(state, type_name));
+        return Some(material_from_dynamic_def(state, type_name, obj, None));
     }
 
     None
 }
 
-fn material_from_object(state: &EvalState, obj: &ObjectValue) -> MaterialKindRt {
+fn material_from_object(
+    state: &EvalState,
+    obj: &ObjectValue,
+    ctx: Option<&mut CompileContext>,
+) -> MaterialKindRt {
     let type_name = obj.type_name.as_deref().unwrap_or_default();
     if state.material_defs.contains_key(type_name) {
-        return material_from_dynamic_def(state, type_name);
+        return material_from_dynamic_def(state, type_name, obj, ctx);
     }
     if type_name.eq_ignore_ascii_case("lambert") {
         let color = read_spectrum_field(obj, "color")
@@ -3604,7 +3640,12 @@ fn material_from_legacy_object(_state: &EvalState, obj: &ObjectValue) -> Materia
     MaterialKindRt::Lambert(params)
 }
 
-fn material_from_dynamic_def(state: &EvalState, name: &str) -> MaterialKindRt {
+fn material_from_dynamic_def(
+    state: &EvalState,
+    name: &str,
+    overrides: &ObjectValue,
+    ctx: Option<&mut CompileContext>,
+) -> MaterialKindRt {
     let Some(def) = state.material_defs.get(name) else {
         return default_material();
     };
@@ -3620,11 +3661,13 @@ fn material_from_dynamic_def(state: &EvalState, name: &str) -> MaterialKindRt {
         ),
         _ => MaterialParams::lambert(Spectrum::rgb(0.8, 0.8, 0.8), Spectrum::black(), 0.0),
     };
-    apply_dynamic_material_properties(state, name, &mut params);
+    apply_dynamic_material_properties(state, name, overrides, &mut params);
     params.dynamic_material_id = sorted_material_def_names(state)
         .iter()
         .position(|candidate| candidate == name)
         .map(|idx| idx as u32);
+    params.dynamic_override_id =
+        ctx.and_then(|ctx| ctx.intern_dynamic_material_override(overrides));
     match def.model.as_str() {
         "Metal" => MaterialKindRt::Metal(params),
         "Dielectric" => MaterialKindRt::Dielectric(params),
@@ -3635,9 +3678,12 @@ fn material_from_dynamic_def(state: &EvalState, name: &str) -> MaterialKindRt {
 fn apply_dynamic_material_properties(
     state: &EvalState,
     material_name: &str,
+    overrides: &ObjectValue,
     params: &mut MaterialParams,
 ) {
-    let Ok(properties) = eval_material_properties(state, material_name) else {
+    let Ok(properties) =
+        eval_material_properties_with_overrides(state, material_name, Some(overrides))
+    else {
         return;
     };
     for (name, value) in properties {
@@ -4088,6 +4134,7 @@ fn resolve_leaf_material(
     let runtime_color = resolve_dynamic_color(
         &setup.state,
         &setup.material_def_names,
+        &setup.dynamic_material_overrides,
         material,
         hit,
         local_position,
@@ -4096,6 +4143,7 @@ fn resolve_leaf_material(
     let runtime_roughness = resolve_dynamic_number(
         &setup.state,
         &setup.material_def_names,
+        &setup.dynamic_material_overrides,
         material,
         hit,
         local_position,
@@ -4105,6 +4153,7 @@ fn resolve_leaf_material(
     let runtime_ior = resolve_dynamic_number(
         &setup.state,
         &setup.material_def_names,
+        &setup.dynamic_material_overrides,
         material,
         hit,
         local_position,
@@ -4114,6 +4163,7 @@ fn resolve_leaf_material(
     let runtime_thin_walled = resolve_dynamic_number(
         &setup.state,
         &setup.material_def_names,
+        &setup.dynamic_material_overrides,
         material,
         hit,
         local_position,
@@ -4123,6 +4173,7 @@ fn resolve_leaf_material(
     let runtime_medium = resolve_dynamic_object(
         &setup.state,
         &setup.material_def_names,
+        &setup.dynamic_material_overrides,
         material,
         hit,
         local_position,
@@ -4133,6 +4184,7 @@ fn resolve_leaf_material(
     let runtime_subsurface = resolve_dynamic_object(
         &setup.state,
         &setup.material_def_names,
+        &setup.dynamic_material_overrides,
         material,
         hit,
         local_position,
@@ -4143,6 +4195,7 @@ fn resolve_leaf_material(
     let runtime_emission_color = resolve_dynamic_spectrum(
         &setup.state,
         &setup.material_def_names,
+        &setup.dynamic_material_overrides,
         material,
         hit,
         local_position,
@@ -4152,6 +4205,7 @@ fn resolve_leaf_material(
     let runtime_emission_strength = resolve_dynamic_number(
         &setup.state,
         &setup.material_def_names,
+        &setup.dynamic_material_overrides,
         material,
         hit,
         local_position,
@@ -4285,6 +4339,7 @@ fn blend_params(mut a: MaterialParams, b: MaterialParams, t: f32) -> MaterialPar
     a.subsurface = blend_subsurface(a.subsurface, b.subsurface, t);
     a.pattern = None;
     a.dynamic_material_id = None;
+    a.dynamic_override_id = None;
     a
 }
 
@@ -4342,21 +4397,26 @@ fn dominant_material_params(material: MaterialKindRt) -> MaterialParams {
 fn resolve_dynamic_color(
     state: &EvalState,
     material_def_names: &[String],
+    dynamic_material_overrides: &[ObjectValue],
     material: MaterialKindRt,
     hit: RayHit,
     local_position: Vec3,
     view_dir: Vec3,
 ) -> Option<Spectrum> {
     let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
+    let dynamic_override = dynamic_material_override(material, dynamic_material_overrides);
     let name = material_def_names.get(dynamic_material_id as usize)?;
     let ctx = make_shading_context(hit, local_position, view_dir);
-    let value = eval_material_function(state, name, "color", ctx).ok()?;
+    let value =
+        eval_material_function_with_overrides(state, name, "color", ctx, dynamic_override).ok()?;
     spectrum_from_value(&value)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_dynamic_spectrum(
     state: &EvalState,
     material_def_names: &[String],
+    dynamic_material_overrides: &[ObjectValue],
     material: MaterialKindRt,
     hit: RayHit,
     local_position: Vec3,
@@ -4364,15 +4424,20 @@ fn resolve_dynamic_spectrum(
     function_name: &str,
 ) -> Option<Spectrum> {
     let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
+    let dynamic_override = dynamic_material_override(material, dynamic_material_overrides);
     let name = material_def_names.get(dynamic_material_id as usize)?;
     let ctx = make_shading_context(hit, local_position, view_dir);
-    let value = eval_material_function(state, name, function_name, ctx).ok()?;
+    let value =
+        eval_material_function_with_overrides(state, name, function_name, ctx, dynamic_override)
+            .ok()?;
     spectrum_from_value(&value)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_dynamic_number(
     state: &EvalState,
     material_def_names: &[String],
+    dynamic_material_overrides: &[ObjectValue],
     material: MaterialKindRt,
     hit: RayHit,
     local_position: Vec3,
@@ -4380,18 +4445,23 @@ fn resolve_dynamic_number(
     function_name: &str,
 ) -> Option<f64> {
     let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
+    let dynamic_override = dynamic_material_override(material, dynamic_material_overrides);
     let name = material_def_names.get(dynamic_material_id as usize)?;
     let ctx = make_shading_context(hit, local_position, view_dir);
-    let value = eval_material_function(state, name, function_name, ctx).ok()?;
+    let value =
+        eval_material_function_with_overrides(state, name, function_name, ctx, dynamic_override)
+            .ok()?;
     let Value::Number(v) = value else {
         return None;
     };
     Some(v)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_dynamic_normal(
     state: &EvalState,
     material_def_names: &[String],
+    dynamic_material_overrides: &[ObjectValue],
     material: MaterialKindRt,
     hit: RayHit,
     local_position: Vec3,
@@ -4399,9 +4469,11 @@ fn resolve_dynamic_normal(
     geometric_normal: Vec3,
 ) -> Option<Vec3> {
     let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
+    let dynamic_override = dynamic_material_override(material, dynamic_material_overrides);
     let name = material_def_names.get(dynamic_material_id as usize)?;
     let ctx = make_shading_context_with_normal(hit, local_position, view_dir, geometric_normal);
-    let value = eval_material_function(state, name, "normal", ctx).ok()?;
+    let value =
+        eval_material_function_with_overrides(state, name, "normal", ctx, dynamic_override).ok()?;
     let mut normal = vec3_from_value(&value)?.normalize();
     if normal.length() <= 1.0e-6 {
         return None;
@@ -4412,9 +4484,11 @@ fn resolve_dynamic_normal(
     Some(normal)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_dynamic_object(
     state: &EvalState,
     material_def_names: &[String],
+    dynamic_material_overrides: &[ObjectValue],
     material: MaterialKindRt,
     hit: RayHit,
     local_position: Vec3,
@@ -4422,9 +4496,18 @@ fn resolve_dynamic_object(
     function_name: &str,
 ) -> Option<Value> {
     let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
+    let dynamic_override = dynamic_material_override(material, dynamic_material_overrides);
     let name = material_def_names.get(dynamic_material_id as usize)?;
     let ctx = make_shading_context(hit, local_position, view_dir);
-    eval_material_function(state, name, function_name, ctx).ok()
+    eval_material_function_with_overrides(state, name, function_name, ctx, dynamic_override).ok()
+}
+
+fn dynamic_material_override(
+    material: MaterialKindRt,
+    dynamic_material_overrides: &[ObjectValue],
+) -> Option<&ObjectValue> {
+    let override_id = dominant_material_params(material).dynamic_override_id?;
+    dynamic_material_overrides.get(override_id as usize)
 }
 
 fn resolve_pattern_color(params: MaterialParams, local_position: Vec3) -> Spectrum {
@@ -5727,6 +5810,86 @@ mod tests {
         assert!(mat.color.r > 0.7);
         assert!(mat.roughness > 0.8);
         assert!(ctx.normal.x > 0.05);
+    }
+
+    #[test]
+    fn resolves_dynamic_material_instance_overrides() {
+        let source = r#"
+            material CheckerFloor {
+              model: Lambert;
+              roughness = 1.0;
+              let color_a = #f1f3f6;
+              let color_b = #6f7784;
+              let scale = 3.4;
+
+              fn checker(p, scale) {
+                let sx = step(0.0, sin(p.x * scale));
+                let sz = step(0.0, sin(p.z * scale));
+                return abs(sx - sz);
+              }
+
+              fn color(ctx) {
+                let m = checker(ctx.local_position, scale);
+                return mix(color_a, color_b, m);
+              }
+            };
+
+            let scene = Box {
+              size: vec3(4.0, 0.5, 4.0),
+              material: CheckerFloor {
+                color_a: #ff0000,
+                color_b: #0000ff,
+                scale: 3.1415926535
+              }
+            };
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let scene = super::compile_scene(
+            &state,
+            state
+                .bindings
+                .get("scene")
+                .map(|b| &b.value)
+                .expect("scene binding"),
+            super::default_material(),
+        )
+        .expect("scene should compile");
+        let setup = super::build_render_setup(&state, &scene, RenderOptions::default());
+
+        let hit_a = super::RayHit {
+            t: 1.0,
+            position: super::Vec3::new(1.0, 0.25, 0.0),
+            normal: super::Vec3::new(0.0, 1.0, 0.0),
+            front_face: true,
+            object_id: 1,
+            material_id: 1,
+        };
+        let hit_b = super::RayHit {
+            t: 1.0,
+            position: super::Vec3::new(1.5, 0.25, 0.0),
+            normal: super::Vec3::new(0.0, 1.0, 0.0),
+            front_face: true,
+            object_id: 1,
+            material_id: 1,
+        };
+
+        let super::MaterialKindRt::Lambert(mat_a) =
+            super::resolve_material_at_hit(&setup, hit_a, super::Vec3::new(0.0, 1.0, 1.0))
+        else {
+            panic!("expected Lambert material");
+        };
+        let super::MaterialKindRt::Lambert(mat_b) =
+            super::resolve_material_at_hit(&setup, hit_b, super::Vec3::new(0.0, 1.0, 1.0))
+        else {
+            panic!("expected Lambert material");
+        };
+
+        assert!(mat_a.color.r > 0.9);
+        assert!(mat_a.color.b < 0.1);
+        assert!(mat_b.color.b > 0.9);
+        assert!(mat_b.color.r < 0.1);
     }
 
     #[test]

@@ -2,6 +2,21 @@ material Gold {
   name: "Gold";
   description: "Polished gold metal with moderate roughness for reflective showcase materials.";
   tags: ["material", "metal", "gold", "reflective", "warm"];
+  params: [
+    {
+      name: "roughness",
+      type: "number",
+      description: "Surface micro-roughness for the metal highlight and reflection spread.",
+      default: 0.18,
+      min: 0.0,
+      max: 1.0
+    },
+    {
+      name: "color",
+      type: "color",
+      description: "Base reflective metal color."
+    }
+  ];
   model: Metal;
   color = #ebc757;
   roughness = 0.18;

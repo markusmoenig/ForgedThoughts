@@ -2,11 +2,34 @@ material CheckerFloor {
   name: "CheckerFloor";
   description: "Diffuse procedural checker material for floors, stages, and reference scenes.";
   tags: ["material", "checker", "floor", "diffuse", "procedural"];
+  params: [
+    {
+      name: "color_a",
+      type: "color",
+      description: "Primary checker color.",
+      default: #f1f3f6
+    },
+    {
+      name: "color_b",
+      type: "color",
+      description: "Secondary checker color.",
+      default: #6f7784
+    },
+    {
+      name: "scale",
+      type: "number",
+      description: "Checker frequency in object-local space.",
+      default: 3.4,
+      min: 0.1,
+      max: 20.0
+    }
+  ];
   model: Lambert;
   roughness = 1.0;
 
   let color_a = #f1f3f6;
   let color_b = #6f7784;
+  let scale = 3.4;
 
   fn checker(p, scale) {
     let sx = step(0.0, sin(p.x * scale));
@@ -15,7 +38,7 @@ material CheckerFloor {
   }
 
   fn color(ctx) {
-    let m = checker(ctx.local_position, 3.4);
+    let m = checker(ctx.local_position, scale);
     return mix(color_a, color_b, m);
   }
 };

@@ -26,7 +26,7 @@ Supported fields today:
 - `rot.x`, `rot.y`, `rot.z` or legacy `rot_x`, `rot_y`, `rot_z`
 - `material`
 
-```ft
+```forge
 let ball = Sphere {
   radius: 1.0,
   material: Metal {
@@ -43,7 +43,7 @@ let ball = Sphere {
 - `rot.*`
 - `material`
 
-```ft
+```forge
 let block = Box {
   size: vec3(1.2, 0.8, 1.2)
 };
@@ -57,7 +57,7 @@ let block = Box {
 - `rot.*`
 - `material`
 
-```ft
+```forge
 let column = Cylinder {
   radius: 0.5,
   height: 2.4
@@ -72,7 +72,7 @@ let column = Cylinder {
 - `rot.*`
 - `material`
 
-```ft
+```forge
 let ring = Torus {
   major_radius: 1.0,
   minor_radius: 0.2
@@ -90,7 +90,7 @@ let ring = Torus {
 
 This is a regular N-gon extruded along the Y axis.
 
-```ft
+```forge
 let hex = ExtrudePolygon {
   sides: 6,
   radius: 0.8,
@@ -100,7 +100,7 @@ let hex = ExtrudePolygon {
 
 Example:
 
-```ft
+```forge
 var sphere = Sphere {
   radius: 1.0
 };
@@ -127,7 +127,7 @@ For boolean composition, see the dedicated [Booleans](./booleans.md) page.
 
 For geometry that goes beyond the built-ins, define a Forge SDF with a single distance contract:
 
-```ft
+```forge
 sdf SoftBlob {
   fn bounds() {
     return vec3(1.2, 1.2, 1.1);
@@ -175,7 +175,7 @@ So for most custom shapes, add `bounds()` early even if it is only approximate.
 
 Objects and SDFs can be shared through imports:
 
-```ft
+```forge
 import "./shared/blob.ft";
 import "SoftBlob" as blob;
 ```

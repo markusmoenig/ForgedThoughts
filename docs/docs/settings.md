@@ -9,7 +9,7 @@ Forge scenes can provide a top-level `RenderSettings` object through `let render
 
 Example:
 
-```ft
+```forge
 let render = RenderSettings {
   width: 800,
   height: 800,

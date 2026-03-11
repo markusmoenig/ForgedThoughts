@@ -2,6 +2,30 @@ material Glass {
   name: "Glass";
   description: "Clear dielectric glass material for transmissive and refractive surfaces.";
   tags: ["material", "glass", "dielectric", "transmission", "refractive"];
+  params: [
+    {
+      name: "ior",
+      type: "number",
+      description: "Index of refraction for the dielectric boundary.",
+      default: 1.52,
+      min: 1.0,
+      max: 3.0
+    },
+    {
+      name: "roughness",
+      type: "number",
+      description: "Surface roughness for glossy or frosted transmission.",
+      default: 0.02,
+      min: 0.0,
+      max: 1.0
+    },
+    {
+      name: "thin_walled",
+      type: "bool",
+      description: "Treat the surface as a shell instead of a solid dielectric.",
+      default: 0.0
+    }
+  ];
   model: Dielectric;
   color = #f5fcff;
   ior = 1.52;

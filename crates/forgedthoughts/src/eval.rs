@@ -83,6 +83,7 @@ pub enum EvalError {
 struct MaterialRuntime<'a> {
     def: &'a MaterialDef,
     depth: usize,
+    overrides: Option<&'a ObjectValue>,
 }
 
 #[derive(Clone, Copy)]
@@ -754,6 +755,7 @@ fn eval_call(
                     &params,
                     &body,
                     &arg_values,
+                    runtime.overrides,
                     runtime.depth + 1,
                 );
             }
@@ -1072,6 +1074,16 @@ pub fn eval_material_function(
     function_name: &str,
     ctx_value: Value,
 ) -> Result<Value, EvalError> {
+    eval_material_function_with_overrides(state, material_name, function_name, ctx_value, None)
+}
+
+pub fn eval_material_function_with_overrides(
+    state: &EvalState,
+    material_name: &str,
+    function_name: &str,
+    ctx_value: Value,
+    overrides: Option<&ObjectValue>,
+) -> Result<Value, EvalError> {
     let def = state
         .material_defs
         .get(material_name)
@@ -1086,7 +1098,7 @@ pub fn eval_material_function(
             _ => None,
         })
         .ok_or_else(|| EvalError::UndefinedIdentifier(function_name.to_string()))?;
-    eval_material_function_body(state, def, &params, &body, &[ctx_value], 0)
+    eval_material_function_body(state, def, &params, &body, &[ctx_value], overrides, 0)
 }
 
 pub fn eval_top_level_function(
@@ -1106,33 +1118,57 @@ pub fn eval_material_properties(
     state: &EvalState,
     material_name: &str,
 ) -> Result<HashMap<String, Value>, EvalError> {
+    eval_material_properties_with_overrides(state, material_name, None)
+}
+
+pub fn eval_material_properties_with_overrides(
+    state: &EvalState,
+    material_name: &str,
+    overrides: Option<&ObjectValue>,
+) -> Result<HashMap<String, Value>, EvalError> {
     let def = state
         .material_defs
         .get(material_name)
         .ok_or_else(|| EvalError::UndefinedIdentifier(material_name.to_string()))?;
-    let mut locals = HashMap::new();
+    let mut locals = material_override_locals(overrides);
     let mut properties = HashMap::new();
 
     for stmt in &def.statements {
         match stmt {
             MaterialStatement::Binding { name, expr } => {
-                let value = eval_expr_in_material_scope(
-                    expr,
-                    state,
-                    &locals,
-                    Some(MaterialRuntime { def, depth: 0 }),
-                    0,
-                )?;
+                let value = if let Some(value) = material_override_value(overrides, name) {
+                    value.clone()
+                } else {
+                    eval_expr_in_material_scope(
+                        expr,
+                        state,
+                        &locals,
+                        Some(MaterialRuntime {
+                            def,
+                            depth: 0,
+                            overrides,
+                        }),
+                        0,
+                    )?
+                };
                 locals.insert(name.clone(), value);
             }
             MaterialStatement::Property { name, expr } => {
-                let value = eval_expr_in_material_scope(
-                    expr,
-                    state,
-                    &locals,
-                    Some(MaterialRuntime { def, depth: 0 }),
-                    0,
-                )?;
+                let value = if let Some(value) = material_override_value(overrides, name) {
+                    value.clone()
+                } else {
+                    eval_expr_in_material_scope(
+                        expr,
+                        state,
+                        &locals,
+                        Some(MaterialRuntime {
+                            def,
+                            depth: 0,
+                            overrides,
+                        }),
+                        0,
+                    )?
+                };
                 properties.insert(name.clone(), value);
             }
             MaterialStatement::Function { .. } => {}
@@ -1423,9 +1459,10 @@ fn eval_material_function_body(
     params: &[String],
     body: &[MaterialFunctionStatement],
     arg_values: &[Value],
+    overrides: Option<&ObjectValue>,
     depth: usize,
 ) -> Result<Value, EvalError> {
-    let mut locals = HashMap::new();
+    let mut locals = material_override_locals(overrides);
     if arg_values.len() != params.len() {
         return Err(EvalError::UnsupportedCall);
     }
@@ -1436,13 +1473,21 @@ fn eval_material_function_body(
     for stmt in &def.statements {
         match stmt {
             MaterialStatement::Binding { name, expr } => {
-                let value = eval_expr_in_material_scope(
-                    expr,
-                    state,
-                    &locals,
-                    Some(MaterialRuntime { def, depth }),
-                    depth,
-                )?;
+                let value = if let Some(value) = material_override_value(overrides, name) {
+                    value.clone()
+                } else {
+                    eval_expr_in_material_scope(
+                        expr,
+                        state,
+                        &locals,
+                        Some(MaterialRuntime {
+                            def,
+                            depth,
+                            overrides,
+                        }),
+                        depth,
+                    )?
+                };
                 locals.insert(name.clone(), value);
             }
             MaterialStatement::Property { .. } | MaterialStatement::Function { .. } => {}
@@ -1456,7 +1501,11 @@ fn eval_material_function_body(
                     expr,
                     state,
                     &locals,
-                    Some(MaterialRuntime { def, depth }),
+                    Some(MaterialRuntime {
+                        def,
+                        depth,
+                        overrides,
+                    }),
                     depth,
                 )?;
                 locals.insert(name.clone(), value);
@@ -1466,7 +1515,11 @@ fn eval_material_function_body(
                     expr,
                     state,
                     &locals,
-                    Some(MaterialRuntime { def, depth }),
+                    Some(MaterialRuntime {
+                        def,
+                        depth,
+                        overrides,
+                    }),
                     depth,
                 );
             }
@@ -1476,6 +1529,19 @@ fn eval_material_function_body(
     Err(EvalError::UndefinedIdentifier(
         "material function missing return".to_string(),
     ))
+}
+
+fn material_override_locals(overrides: Option<&ObjectValue>) -> HashMap<String, Value> {
+    overrides
+        .map(|object| object.fields.clone())
+        .unwrap_or_default()
+}
+
+fn material_override_value<'a>(
+    overrides: Option<&'a ObjectValue>,
+    name: &str,
+) -> Option<&'a Value> {
+    overrides.and_then(|object| object.fields.get(name))
 }
 
 fn eval_environment_function_body(

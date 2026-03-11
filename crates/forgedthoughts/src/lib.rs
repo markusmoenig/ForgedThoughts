@@ -15,7 +15,8 @@ use std::{
 pub use ast::{BinaryOp, Expr, Program, Statement, UnaryOp};
 pub use eval::{
     Binding, EvalError, EvalState, ObjectValue, Value, eval_environment_function,
-    eval_material_function, eval_material_properties, eval_program, eval_sdf_function,
+    eval_material_function, eval_material_function_with_overrides, eval_material_properties,
+    eval_material_properties_with_overrides, eval_program, eval_sdf_function,
     eval_sdf_zero_arg_function, eval_top_level_function,
 };
 pub use materials::{
@@ -108,6 +109,17 @@ pub struct BuiltinLibraryMetadata {
     pub name: String,
     pub description: String,
     pub tags: Vec<String>,
+    pub params: Vec<BuiltinLibraryParam>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltinLibraryParam {
+    pub name: String,
+    pub param_type: String,
+    pub description: Option<String>,
+    pub default: Option<String>,
+    pub min: Option<String>,
+    pub max: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -342,6 +354,7 @@ pub fn builtin_library_item_metadata(item: &BuiltinLibraryItem) -> BuiltinLibrar
         name: item.name.to_string(),
         description: item.description.to_string(),
         tags: item.tags.iter().map(|tag| (*tag).to_string()).collect(),
+        params: Vec::new(),
     })
 }
 
@@ -391,6 +404,7 @@ fn metadata_from_pairs(
         .iter()
         .map(|tag| (*tag).to_string())
         .collect::<Vec<_>>();
+    let mut params = Vec::new();
 
     for (key, expr) in metadata {
         match key.as_str() {
@@ -409,6 +423,11 @@ fn metadata_from_pairs(
                     tags = values;
                 }
             }
+            "params" => {
+                if let Some(values) = metadata_params(expr) {
+                    params = values;
+                }
+            }
             _ => {}
         }
     }
@@ -417,6 +436,7 @@ fn metadata_from_pairs(
         name,
         description,
         tags,
+        params,
     }
 }
 
@@ -430,6 +450,55 @@ fn metadata_string(expr: &Expr) -> Option<String> {
 fn metadata_string_array(expr: &Expr) -> Option<Vec<String>> {
     match expr {
         Expr::Array(items) => items.iter().map(metadata_string).collect(),
+        _ => None,
+    }
+}
+
+fn metadata_params(expr: &Expr) -> Option<Vec<BuiltinLibraryParam>> {
+    let Expr::Array(items) = expr else {
+        return None;
+    };
+    items.iter().map(metadata_param).collect()
+}
+
+fn metadata_param(expr: &Expr) -> Option<BuiltinLibraryParam> {
+    let Expr::ObjectLiteral { fields, .. } = expr else {
+        return None;
+    };
+    let mut name = None;
+    let mut param_type = None;
+    let mut description = None;
+    let mut default = None;
+    let mut min = None;
+    let mut max = None;
+
+    for (key, value) in fields {
+        match key.as_str() {
+            "name" => name = metadata_string(value),
+            "type" => param_type = metadata_string(value),
+            "description" => description = metadata_string(value),
+            "default" => default = metadata_scalar_string(value),
+            "min" => min = metadata_scalar_string(value),
+            "max" => max = metadata_scalar_string(value),
+            _ => {}
+        }
+    }
+
+    Some(BuiltinLibraryParam {
+        name: name?,
+        param_type: param_type?,
+        description,
+        default,
+        min,
+        max,
+    })
+}
+
+fn metadata_scalar_string(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::String(value) => Some(value.clone()),
+        Expr::Number(value) => Some(value.to_string()),
+        Expr::Ident(value) => Some(value.clone()),
         _ => None,
     }
 }
@@ -1019,9 +1088,10 @@ fn qualify_name(alias: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoreError, ObjectValue, Value, eval_environment_function, eval_program, eval_sdf_function,
-        eval_sdf_zero_arg_function, eval_top_level_function, load_and_eval_scene,
-        load_program_with_imports, parse_program,
+        CoreError, ObjectValue, Value, eval_environment_function,
+        eval_material_function_with_overrides, eval_material_properties_with_overrides,
+        eval_program, eval_sdf_function, eval_sdf_zero_arg_function, eval_top_level_function,
+        load_and_eval_scene, load_program_with_imports, parse_program,
     };
     use std::{
         collections::HashMap,
@@ -1668,6 +1738,141 @@ mod tests {
 
         let err = load_program_with_imports(&dir.join("a.ft")).expect_err("cycle should fail");
         assert!(matches!(err, CoreError::ImportCycle(_)));
+    }
+
+    #[test]
+    fn material_properties_accept_instance_overrides() {
+        let program = parse_program(
+            r#"
+            material Checker {
+              model: Lambert;
+              let color_a = #ffffff;
+              let scale = 3.4;
+              color = color_a;
+              roughness = scale / 10.0;
+            };
+            "#,
+        )
+        .expect("program should parse");
+        let state = eval_program(&program).expect("program should eval");
+        let overrides = ObjectValue {
+            type_name: Some("Checker".to_string()),
+            fields: HashMap::from([
+                (
+                    "color_a".to_string(),
+                    Value::Object(ObjectValue {
+                        type_name: Some("vec3".to_string()),
+                        fields: HashMap::from([
+                            ("x".to_string(), Value::Number(0.2)),
+                            ("y".to_string(), Value::Number(0.4)),
+                            ("z".to_string(), Value::Number(0.6)),
+                        ]),
+                    }),
+                ),
+                ("scale".to_string(), Value::Number(6.0)),
+            ]),
+        };
+
+        let properties =
+            eval_material_properties_with_overrides(&state, "Checker", Some(&overrides))
+                .expect("material properties should evaluate");
+        let Value::Object(color) = properties
+            .get("color")
+            .expect("color property should exist")
+        else {
+            panic!("color should be vec3");
+        };
+        assert!(
+            matches!(color.fields.get("x"), Some(Value::Number(v)) if (*v - 0.2).abs() < 1.0e-6)
+        );
+        assert!(
+            matches!(properties.get("roughness"), Some(Value::Number(v)) if (v - 0.6).abs() < 1.0e-6)
+        );
+    }
+
+    #[test]
+    fn material_functions_accept_instance_overrides() {
+        let program = parse_program(
+            r#"
+            material Checker {
+              model: Lambert;
+              let color_a = #ffffff;
+              let color_b = #000000;
+              let scale = 3.4;
+
+              fn checker(p, scale) {
+                let sx = step(0.0, sin(p.x * scale));
+                let sz = step(0.0, sin(p.z * scale));
+                return abs(sx - sz);
+              }
+
+              fn color(ctx) {
+                let m = checker(ctx.local_position, scale);
+                return mix(color_a, color_b, m);
+              }
+            };
+            "#,
+        )
+        .expect("program should parse");
+        let state = eval_program(&program).expect("program should eval");
+        let overrides = ObjectValue {
+            type_name: Some("Checker".to_string()),
+            fields: HashMap::from([
+                (
+                    "color_a".to_string(),
+                    Value::Object(ObjectValue {
+                        type_name: Some("vec3".to_string()),
+                        fields: HashMap::from([
+                            ("x".to_string(), Value::Number(1.0)),
+                            ("y".to_string(), Value::Number(0.0)),
+                            ("z".to_string(), Value::Number(0.0)),
+                        ]),
+                    }),
+                ),
+                (
+                    "color_b".to_string(),
+                    Value::Object(ObjectValue {
+                        type_name: Some("vec3".to_string()),
+                        fields: HashMap::from([
+                            ("x".to_string(), Value::Number(0.0)),
+                            ("y".to_string(), Value::Number(0.0)),
+                            ("z".to_string(), Value::Number(1.0)),
+                        ]),
+                    }),
+                ),
+                ("scale".to_string(), Value::Number(std::f64::consts::PI)),
+            ]),
+        };
+        let ctx = Value::Object(ObjectValue {
+            type_name: Some("ShadingContext".to_string()),
+            fields: HashMap::from([(
+                "local_position".to_string(),
+                Value::Object(ObjectValue {
+                    type_name: Some("vec3".to_string()),
+                    fields: HashMap::from([
+                        ("x".to_string(), Value::Number(1.0)),
+                        ("y".to_string(), Value::Number(0.0)),
+                        ("z".to_string(), Value::Number(0.0)),
+                    ]),
+                }),
+            )]),
+        });
+
+        let value = eval_material_function_with_overrides(
+            &state,
+            "Checker",
+            "color",
+            ctx,
+            Some(&overrides),
+        )
+        .expect("material function should evaluate");
+        let Value::Object(color) = value else {
+            panic!("color should be vec3");
+        };
+        assert!(
+            matches!(color.fields.get("x"), Some(Value::Number(v)) if (*v - 1.0).abs() < 1.0e-6)
+        );
+        assert!(matches!(color.fields.get("z"), Some(Value::Number(v)) if v.abs() < 1.0e-6));
     }
 
     fn temp_test_dir(label: &str) -> PathBuf {

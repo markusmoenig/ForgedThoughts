@@ -585,6 +585,30 @@ fn run_list(kind: ListCommand) -> ExitCode {
         };
         println!("{}\t{}", metadata.name, item.path);
         println!("  {}{}", metadata.description, tags);
+        if !metadata.params.is_empty() {
+            println!("  params:");
+            for param in &metadata.params {
+                let mut extras = Vec::new();
+                if let Some(default) = &param.default {
+                    extras.push(format!("default={default}"));
+                }
+                if let Some(min) = &param.min {
+                    extras.push(format!("min={min}"));
+                }
+                if let Some(max) = &param.max {
+                    extras.push(format!("max={max}"));
+                }
+                let extras = if extras.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", extras.join(", "))
+                };
+                println!("    - {}: {}{}", param.name, param.param_type, extras);
+                if let Some(description) = &param.description {
+                    println!("      {}", description);
+                }
+            }
+        }
     }
 
     ExitCode::SUCCESS

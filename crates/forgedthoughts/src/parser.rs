@@ -168,7 +168,7 @@ impl Parser {
                 self.expect_kind(TokenKind::Semicolon, ";")?;
                 continue;
             }
-            if matches!(field.as_str(), "name" | "description" | "tags") {
+            if matches!(field.as_str(), "name" | "description" | "tags" | "params") {
                 self.expect_kind(TokenKind::Colon, ":")?;
                 let expr = self.parse_expr()?;
                 self.expect_kind(TokenKind::Semicolon, ";")?;
@@ -231,7 +231,7 @@ impl Parser {
             }
 
             let field = self.expect_ident()?;
-            if matches!(field.as_str(), "name" | "description" | "tags") {
+            if matches!(field.as_str(), "name" | "description" | "tags" | "params") {
                 self.expect_kind(TokenKind::Colon, ":")?;
                 let expr = self.parse_expr()?;
                 self.expect_kind(TokenKind::Semicolon, ";")?;
@@ -291,7 +291,7 @@ impl Parser {
             }
 
             let field = self.expect_ident()?;
-            if matches!(field.as_str(), "name" | "description" | "tags") {
+            if matches!(field.as_str(), "name" | "description" | "tags" | "params") {
                 self.expect_kind(TokenKind::Colon, ":")?;
                 let expr = self.parse_expr()?;
                 self.expect_kind(TokenKind::Semicolon, ";")?;
@@ -488,6 +488,13 @@ impl Parser {
             let expr = self.parse_expr()?;
             self.expect_kind(TokenKind::RParen, ")")?;
             return Ok(expr);
+        }
+        if self.matches_kind(TokenKind::LBrace) {
+            let fields = self.parse_object_fields()?;
+            return Ok(Expr::ObjectLiteral {
+                type_name: "anonymous".to_string(),
+                fields,
+            });
         }
         if self.matches_kind(TokenKind::LBracket) {
             let mut items = Vec::new();

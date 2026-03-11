@@ -15,7 +15,7 @@ Forge currently supports three built-in light types:
 
 Preferred form:
 
-```ft
+```forge
 let key = PointLight {
   position: vec3(3.4, 4.0, 4.8),
   color: #fff2d8,
@@ -35,7 +35,7 @@ The emitted power is `color * intensity`, with inverse-square falloff from the l
 
 `SphereLight` is the first real area light in ForgedThoughts. It gives softer shadows than `PointLight` by sampling a spherical emitter.
 
-```ft
+```forge
 let key = SphereLight {
   position: vec3(2.6, 3.4, 3.8),
   radius: 0.7,
@@ -64,7 +64,7 @@ Notes:
 
 Preferred form:
 
-```ft
+```forge
 let sky = EnvLight {
   color: #d8e7ff,
   intensity: 0.35

@@ -95,7 +95,7 @@ Main renderer
 
 Forge is object-like, incremental, and scriptable:
 
-```ft
+```forge
 var sphere = Sphere {
   radius: 1.0
 };
@@ -130,7 +130,7 @@ Supported language pieces today include:
 
 Example Forge material:
 
-```ft
+```forge
 material SoftGold {
   model: Metal;
   color = vec3(0.92, 0.78, 0.34);
@@ -161,7 +161,7 @@ material SoftGold {
 
 Example top-level helper functions:
 
-```ft
+```forge
 fn accent() {
   return #ebc757;
 }
@@ -192,7 +192,7 @@ See:
 
 Example custom SDF:
 
-```ft
+```forge
 sdf SoftBlob {
   let wave_scale = 0.16;
 
@@ -217,7 +217,7 @@ let scene = SoftBlob {};
 
 Example procedural environment:
 
-```ft
+```forge
 environment Sky {
   let zenith = #4d74c7;
   let horizon = #d8e7ff;
@@ -235,7 +235,7 @@ environment Sky {
 
 Forge supports top-level imports:
 
-```ft
+```forge
 import "./shared/materials.ft";
 import "Gold" as gold;
 import "SoftBlob" as blob;
@@ -253,7 +253,7 @@ Import rules:
 
 Files can also declare explicit exports:
 
-```ft
+```forge
 let private_color = #ebc757;
 material Gold {
   model: Metal;

@@ -6,7 +6,7 @@ export default function Home(): React.JSX.Element {
   return (
     <Layout
       title="ForgedThoughts"
-      description="Programmable SDF rendering with FT"
+      description="Programmable SDF rendering with Forge"
     >
       <main
         style={{
@@ -34,9 +34,9 @@ export default function Home(): React.JSX.Element {
           ForgedThoughts
         </h1>
         <p style={{ fontSize: "1.2rem", maxWidth: 720, marginBottom: "2rem" }}>
-          A programmable rendering project currently in development, built
-          around signed distance fields, a small scene language called FT, and
-          materials that are moving toward self-contained shading code.
+          A programmable CPU rendering project built around signed distance
+          fields, the Forge scene language, a growing semantic asset library,
+          and a fast Whitted-style renderer for iterative scene authoring.
         </p>
         <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
           <Link

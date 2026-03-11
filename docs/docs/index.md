@@ -5,7 +5,7 @@ title: Overview
 
 # ForgedThoughts
 
-ForgedThoughts is a CPU-first rendering project built around the `Forge` language, signed distance field scene construction, and programmable materials.
+ForgedThoughts is a CPU-first rendering project built around the `Forge` language, signed distance field scene construction, programmable materials, and a reusable asset library.
 
 Today it has two rendering modes:
 
@@ -26,6 +26,8 @@ What you can do with it right now:
 
 Where it is heading:
 
+- a clearer semantic asset layer for reusable materials, objects, and scenes
+- an AI-facing scene interface built on top of Forge and the asset library
 - richer programmable materials and geometry logic in Forge
 - more reusable module and library structure
 - a VM/JIT path for hot shading and procedural evaluation code

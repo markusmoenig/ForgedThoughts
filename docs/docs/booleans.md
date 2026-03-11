@@ -35,7 +35,7 @@ Use operators for the basic set:
 - `a - b` for subtraction
 - `a & b` for intersection
 
-```ft
+```forge
 let shape = (body + cap) - cut;
 let mask = body & window;
 ```

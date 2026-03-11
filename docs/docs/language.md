@@ -7,7 +7,7 @@ title: Overview
 
 Forge is object-like and incremental.
 
-```ft
+```forge
 var sphere = Sphere {
   radius: 1.0
 };
@@ -47,14 +47,14 @@ Current supported pieces include:
 
 Forge uses operators for the hard CSG core:
 
-```ft
+```forge
 let shape = (a + b) - c;
 let mask = a & b;
 ```
 
 And named methods for the richer `hg_sdf`-style variants:
 
-```ft
+```forge
 let shape =
   body
     .union_round(ring, 0.08)
@@ -68,7 +68,7 @@ Material functions can now also drive shading-normal perturbation with `fn norma
 
 Top-level helper functions can be reused across a module and may take multiple arguments:
 
-```ft
+```forge
 fn accent() {
   return #ebc757;
 }
@@ -87,7 +87,7 @@ fn make_gold() {
 
 Imported helpers also work through aliases:
 
-```ft
+```forge
 import "Gold" as metals;
 
 fn make_highlight() {
@@ -109,7 +109,7 @@ Current layout methods include:
 
 Example:
 
-```ft
+```forge
 var sphere = Sphere {
   radius: 0.82,
   material: sphere_mat
@@ -130,7 +130,7 @@ var box = Box {
 
 Anchor values such as `Top` and `Center` support inline offsets:
 
-```ft
+```forge
 .attach(floor, Top + 0.1)
 .align_z(floor, Center - 0.4)
 ```
@@ -148,7 +148,7 @@ So `right_of(a, -0.8)` does not silently imply matching `y` or `z`.
 
 Imports are resolved before evaluation:
 
-```ft
+```forge
 import "./shared/materials.ft";
 import "Gold" as gold;
 import "SoftBlob" as blob;
@@ -165,7 +165,7 @@ Import rules:
 
 Files can also declare an explicit public surface:
 
-```ft
+```forge
 let private_color = #ebc757;
 material Gold {
   model: Metal;
@@ -184,11 +184,21 @@ Reusable library assets can carry their own metadata directly in the definition 
 
 For materials:
 
-```ft
+```forge
 material Gold {
   name: "Gold";
   description: "Polished gold metal with moderate roughness.";
   tags: ["material", "metal", "gold", "reflective", "warm"];
+  params: [
+    {
+      name: "roughness",
+      type: "number",
+      description: "Surface micro-roughness.",
+      default: 0.18,
+      min: 0.0,
+      max: 1.0
+    }
+  ];
 
   model: Metal;
   color = #ebc757;
@@ -198,7 +208,7 @@ material Gold {
 
 For custom SDF objects:
 
-```ft
+```forge
 sdf SoftBlob {
   name: "SoftBlob";
   description: "Warped blob SDF with a conservative bounds helper.";
@@ -219,6 +229,16 @@ Supported metadata fields today:
 - `name: "..." ;`
 - `description: "..." ;`
 - `tags: ["...", "..."] ;`
+- `params: [ { ... }, { ... } ] ;`
+
+Parameter metadata is intended for library discovery and future editors/AI tools. A parameter entry can describe:
+
+- `name`
+- `type`
+- `description`
+- `default`
+- `min`
+- `max`
 
 These fields are intended for library discovery, tooling, and future AI-driven scene composition. They do not change rendering behavior directly.
 
@@ -226,7 +246,7 @@ These fields are intended for library discovery, tooling, and future AI-driven s
 
 Procedural environments use the same block-style function model:
 
-```ft
+```forge
 environment Sky {
   let zenith = #4d74c7;
   let horizon = #d8e7ff;
