@@ -4,3 +4,4 @@ Cargo.lock
 docs/build
 docs/node_modules
 docs/.docusaurus
+bigger_picture.md
