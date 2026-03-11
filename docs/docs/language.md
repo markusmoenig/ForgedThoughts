@@ -144,7 +144,7 @@ environment Sky {
 };
 ```
 
-`color(dir)` is called on ray misses in `depth` and `trace`.
+`color(dir)` is called on ray misses in the main renderer and in `depth`.
 
 ## Status
 

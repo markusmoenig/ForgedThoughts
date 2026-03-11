@@ -141,7 +141,7 @@ let gold = Metal {
 
 Current reality:
 
-- the recursive `trace` renderer still has some built-in material branching
+- the renderer still has some built-in material branching
 - `normal(ctx)` perturbs the shading normal only; it does not change SDF intersections or silhouettes
 - material-local helper functions can be reused across hooks like `color`, `roughness`, and `normal`
 - `medium` already affects transmission through simple absorption

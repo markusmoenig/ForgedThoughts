@@ -17,8 +17,8 @@
   },
   "sidebar": "mainSidebar",
   "previous": {
-    "title": "CLI",
-    "permalink": "/docs/cli"
+    "title": "Renderer",
+    "permalink": "/docs/renderer"
   },
   "next": {
     "title": "Objects",

@@ -24,7 +24,7 @@ let sky = EnvLight {
 let glass = Dielectric {
   color: vec3(0.96, 0.99, 1.0),
   ior: 1.52,
-  roughness: 0.02,
+  roughness: 0.0,
   thin_walled: 0.0
 };
 
@@ -43,8 +43,8 @@ let backdrop_mat = Lambert {
 };
 
 let render = RenderSettings {
-  width: 800,
-  height: 800,
+  width: 400,
+  height: 400,
   max_steps: 360,
   max_dist: 70.0,
   epsilon: 0.00015,

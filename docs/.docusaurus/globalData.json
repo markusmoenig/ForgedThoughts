@@ -56,6 +56,11 @@
               "sidebar": "mainSidebar"
             },
             {
+              "id": "renderer",
+              "path": "/docs/renderer",
+              "sidebar": "mainSidebar"
+            },
+            {
               "id": "settings",
               "path": "/docs/settings",
               "sidebar": "mainSidebar"

@@ -33,7 +33,7 @@ The emitted power is `color * intensity`, with inverse-square falloff from the l
 
 ## SphereLight
 
-`SphereLight` is the first real area light for the `trace` renderer. It gives softer shadows than `PointLight` by sampling a spherical emitter.
+`SphereLight` is the first real area light in ForgedThoughts. It gives softer shadows than `PointLight` by sampling a spherical emitter.
 
 ```ft
 let key = SphereLight {
@@ -57,7 +57,7 @@ Notes:
 
 - The emitted power is `color * intensity`.
 - Larger `radius` values produce softer shadows.
-- Higher `samples` values reduce shadow stepping/noise in `trace`, but cost more render time.
+- Higher `samples` values reduce shadow stepping/noise, but cost more render time.
 - If `radius` is `0`, `SphereLight` behaves like a point light.
 
 ## EnvLight

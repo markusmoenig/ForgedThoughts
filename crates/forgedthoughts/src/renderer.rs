@@ -1,5 +1,8 @@
+use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Instant;
 
 use image::{ImageError, RgbImage};
@@ -1172,7 +1175,7 @@ fn render_with_accel<A: Accelerator + Sync>(
     )
 }
 
-fn render_ray_with_accel_progressive<A: Accelerator + Sync>(
+fn render_ray_with_accel_progressive<A: Accelerator + Sync + Send>(
     scene: CompiledScene,
     setup: RenderSetup,
     options: RenderOptions,
@@ -1191,77 +1194,72 @@ fn render_ray_with_accel_progressive<A: Accelerator + Sync>(
     let aa_samples = settings.aa_samples.max(1);
     let sample_offsets = pixel_sample_offsets(aa_samples);
     let tile_size = settings.tile_size.max(1) as usize;
-    let tiles_x = width.div_ceil(tile_size);
-    let tiles_y = height.div_ceil(tile_size);
-    let tiles_total = (tiles_x * tiles_y) as u32;
+    let tiles = tile_jobs(width, height, tile_size);
+    let tiles_total = tiles.len() as u32;
     let start = Instant::now();
     let mut tiles_done = 0_u32;
+    let mut callback_error = None;
+    let queue = Arc::new(Mutex::new(VecDeque::from(tiles)));
+    let (tx, rx) = mpsc::channel::<TileResult>();
+    let worker_count = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(tiles_total as usize)
+        .max(1);
+    thread::scope(|scope| {
+        let accel_ref = &accel;
+        let setup_ref = &setup;
+        for _ in 0..worker_count {
+            let queue = Arc::clone(&queue);
+            let tx = tx.clone();
+            let sample_offsets = sample_offsets.clone();
+            scope.spawn(move || {
+                loop {
+                    let job = {
+                        let mut queue = queue.lock().expect("tile queue lock should succeed");
+                        queue.pop_front()
+                    };
+                    let Some(job) = job else {
+                        break;
+                    };
+                    let data = render_ray_tile(
+                        accel_ref,
+                        setup_ref,
+                        options,
+                        ray_ctx,
+                        settings.debug_aov,
+                        aspect,
+                        aa_samples,
+                        &sample_offsets,
+                        &job,
+                    );
+                    let _ = tx.send(TileResult { job, data });
+                }
+            });
+        }
+        drop(tx);
 
-    for ty in (0..height).step_by(tile_size) {
-        for tx in (0..width).step_by(tile_size) {
-            let tile_w = (width - tx).min(tile_size);
-            let tile_h = (height - ty).min(tile_size);
-            let mut tile = vec![0_u8; tile_w * tile_h * 3];
-            tile.par_chunks_mut(tile_w * 3)
-                .enumerate()
-                .for_each(|(ly, row)| {
-                    let y = ty + ly;
-                    let y_u32 = y as u32;
-                    for lx in 0..tile_w {
-                        let x = tx + lx;
-                        let x_u32 = x as u32;
-                        let mut sum = Spectrum::black();
-                        for &(sx, sy) in &sample_offsets {
-                            let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
-                            let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
-                            let ray = setup.camera.generate_ray(px * aspect, py);
-                            let origin = from_api_vec3(ray.origin);
-                            let dir = from_api_vec3(ray.direction).normalize();
-                            let c = if let Some(aov) = settings.debug_aov {
-                                ray::trace_ray_debug_aov(&accel, &setup, ray_ctx, origin, dir, aov)
-                            } else {
-                                ray::trace_ray_recursive(
-                                    &accel,
-                                    &setup,
-                                    ray_ctx,
-                                    origin,
-                                    dir,
-                                    MediumState::air(),
-                                    0,
-                                )
-                            };
-                            sum = sum + c;
-                        }
-                        let avg = sum.scale(1.0 / aa_samples as f32);
-                        let rgb = if settings.debug_aov.is_some() {
-                            spectrum_to_rgb8(avg)
-                        } else {
-                            spectrum_to_rgb8_reinhard(avg)
-                        };
-                        let i = lx * 3;
-                        row[i] = rgb[0];
-                        row[i + 1] = rgb[1];
-                        row[i + 2] = rgb[2];
-                    }
-                });
-            for ly in 0..tile_h {
-                let dst = ((ty + ly) * width + tx) * 3;
-                let src = (ly * tile_w) * 3;
-                let len = tile_w * 3;
-                buffer[dst..dst + len].copy_from_slice(&tile[src..src + len]);
-            }
+        for _ in 0..tiles_total {
+            let tile = rx.recv().expect("worker tile result should arrive");
+            merge_tile_into_buffer(&mut buffer, width, &tile.job, &tile.data);
             tiles_done += 1;
             let image = RgbImage::from_vec(options.width, options.height, buffer.clone())
                 .expect("pixel buffer length must match image dimensions");
-            on_tile(
+            if let Err(err) = on_tile(
                 RayProgress {
                     tiles_done,
                     tiles_total,
                     elapsed_ms: start.elapsed().as_millis(),
                 },
                 &image,
-            )?;
+            ) {
+                callback_error = Some(err);
+                break;
+            }
         }
+    });
+    if let Some(err) = callback_error {
+        return Err(err);
     }
 
     Ok(RgbImage::from_vec(options.width, options.height, buffer)
@@ -1281,7 +1279,7 @@ fn render_depth_image(
     .expect("preview rendering without callback failure should succeed")
 }
 
-fn render_preview_with_accel_progressive<A: Accelerator + Sync>(
+fn render_preview_with_accel_progressive<A: Accelerator + Sync + Send>(
     scene: CompiledScene,
     setup: RenderSetup,
     options: RenderOptions,
@@ -1308,69 +1306,207 @@ fn render_preview_tiled(
     let aa_samples = aa_samples.max(1);
     let sample_offsets = pixel_sample_offsets(aa_samples);
     let tile_size = tile_size.max(1) as usize;
-    let tiles_x = width.div_ceil(tile_size);
-    let tiles_y = height.div_ceil(tile_size);
-    let tiles_total = (tiles_x * tiles_y) as u32;
+    let tiles = tile_jobs(width, height, tile_size);
+    let tiles_total = tiles.len() as u32;
     let start = Instant::now();
     let mut tiles_done = 0_u32;
+    let mut callback_error = None;
+    let queue = Arc::new(Mutex::new(VecDeque::from(tiles)));
+    let (tx, rx) = mpsc::channel::<TileResult>();
+    let worker_count = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(tiles_total as usize)
+        .max(1);
+    thread::scope(|scope| {
+        let accel_ref = accel;
+        let setup_ref = setup;
+        for _ in 0..worker_count {
+            let queue = Arc::clone(&queue);
+            let tx = tx.clone();
+            let sample_offsets = sample_offsets.clone();
+            scope.spawn(move || {
+                loop {
+                    let job = {
+                        let mut queue = queue.lock().expect("tile queue lock should succeed");
+                        queue.pop_front()
+                    };
+                    let Some(job) = job else {
+                        break;
+                    };
+                    let data = render_depth_tile(
+                        accel_ref,
+                        setup_ref,
+                        options,
+                        aspect,
+                        aa_samples,
+                        &sample_offsets,
+                        &job,
+                    );
+                    let _ = tx.send(TileResult { job, data });
+                }
+            });
+        }
+        drop(tx);
 
-    for ty in (0..height).step_by(tile_size) {
-        for tx in (0..width).step_by(tile_size) {
-            let tile_w = (width - tx).min(tile_size);
-            let tile_h = (height - ty).min(tile_size);
-            let mut tile = vec![0_u8; tile_w * tile_h * 3];
-            tile.par_chunks_mut(tile_w * 3)
-                .enumerate()
-                .for_each(|(ly, row)| {
-                    let y = ty + ly;
-                    let y_u32 = y as u32;
-                    for lx in 0..tile_w {
-                        let x = tx + lx;
-                        let x_u32 = x as u32;
-                        let mut sum = Spectrum::black();
-                        for &(sx, sy) in &sample_offsets {
-                            let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
-                            let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
-                            let ray = setup.camera.generate_ray(px * aspect, py);
-                            let origin = from_api_vec3(ray.origin);
-                            let dir = from_api_vec3(ray.direction).normalize();
-                            let hit =
-                                raymarch_hit(accel, origin, dir, options, 0.0, options.max_dist);
-                            let depth = match hit {
-                                Some(hit) => depth_preview_value(hit.t, options.max_dist),
-                                None => 0.0,
-                            };
-                            sum = sum + Spectrum::rgb(depth, depth, depth);
-                        }
-                        let rgb = spectrum_to_rgb8(sum.scale(1.0 / aa_samples as f32));
-                        let i = lx * 3;
-                        row[i] = rgb[0];
-                        row[i + 1] = rgb[1];
-                        row[i + 2] = rgb[2];
-                    }
-                });
-            for ly in 0..tile_h {
-                let dst = ((ty + ly) * width + tx) * 3;
-                let src = (ly * tile_w) * 3;
-                let len = tile_w * 3;
-                buffer[dst..dst + len].copy_from_slice(&tile[src..src + len]);
-            }
+        for _ in 0..tiles_total {
+            let tile = rx.recv().expect("worker tile result should arrive");
+            merge_tile_into_buffer(&mut buffer, width, &tile.job, &tile.data);
             tiles_done += 1;
             let image = RgbImage::from_vec(options.width, options.height, buffer.clone())
                 .expect("pixel buffer length must match image dimensions");
-            on_tile(
+            if let Err(err) = on_tile(
                 PreviewProgress {
                     tiles_done,
                     tiles_total,
                     elapsed_ms: start.elapsed().as_millis(),
                 },
                 &image,
-            )?;
+            ) {
+                callback_error = Some(err);
+                break;
+            }
         }
+    });
+    if let Some(err) = callback_error {
+        return Err(err);
     }
 
     Ok(RgbImage::from_vec(options.width, options.height, buffer)
         .expect("pixel buffer length must match image dimensions"))
+}
+
+#[derive(Clone)]
+struct TileJob {
+    tx: usize,
+    ty: usize,
+    tile_w: usize,
+    tile_h: usize,
+}
+
+struct TileResult {
+    job: TileJob,
+    data: Vec<u8>,
+}
+
+fn tile_jobs(width: usize, height: usize, tile_size: usize) -> Vec<TileJob> {
+    let mut jobs = Vec::new();
+    for ty in (0..height).step_by(tile_size) {
+        for tx in (0..width).step_by(tile_size) {
+            jobs.push(TileJob {
+                tx,
+                ty,
+                tile_w: (width - tx).min(tile_size),
+                tile_h: (height - ty).min(tile_size),
+            });
+        }
+    }
+    jobs
+}
+
+fn merge_tile_into_buffer(buffer: &mut [u8], image_width: usize, job: &TileJob, tile: &[u8]) {
+    for ly in 0..job.tile_h {
+        let dst = ((job.ty + ly) * image_width + job.tx) * 3;
+        let src = (ly * job.tile_w) * 3;
+        let len = job.tile_w * 3;
+        buffer[dst..dst + len].copy_from_slice(&tile[src..src + len]);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_ray_tile(
+    accel: &(impl Accelerator + Sync),
+    setup: &RenderSetup,
+    options: RenderOptions,
+    ray_ctx: RayTraceCtx,
+    debug_aov: Option<RayDebugAov>,
+    aspect: f32,
+    aa_samples: u32,
+    sample_offsets: &[(f32, f32)],
+    job: &TileJob,
+) -> Vec<u8> {
+    let mut tile = vec![0_u8; job.tile_w * job.tile_h * 3];
+    for ly in 0..job.tile_h {
+        let y = job.ty + ly;
+        let y_u32 = y as u32;
+        for lx in 0..job.tile_w {
+            let x = job.tx + lx;
+            let x_u32 = x as u32;
+            let mut sum = Spectrum::black();
+            for &(sx, sy) in sample_offsets {
+                let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
+                let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
+                let ray = setup.camera.generate_ray(px * aspect, py);
+                let origin = from_api_vec3(ray.origin);
+                let dir = from_api_vec3(ray.direction).normalize();
+                let c = if let Some(aov) = debug_aov {
+                    ray::trace_ray_debug_aov(accel, setup, ray_ctx, origin, dir, aov)
+                } else {
+                    ray::trace_ray_recursive(
+                        accel,
+                        setup,
+                        ray_ctx,
+                        origin,
+                        dir,
+                        MediumState::air(),
+                        0,
+                    )
+                };
+                sum = sum + c;
+            }
+            let avg = sum.scale(1.0 / aa_samples as f32);
+            let rgb = if debug_aov.is_some() {
+                spectrum_to_rgb8(avg)
+            } else {
+                spectrum_to_rgb8_reinhard(avg)
+            };
+            let i = (ly * job.tile_w + lx) * 3;
+            tile[i] = rgb[0];
+            tile[i + 1] = rgb[1];
+            tile[i + 2] = rgb[2];
+        }
+    }
+    tile
+}
+
+fn render_depth_tile(
+    accel: &(impl Accelerator + Sync),
+    setup: &RenderSetup,
+    options: RenderOptions,
+    aspect: f32,
+    aa_samples: u32,
+    sample_offsets: &[(f32, f32)],
+    job: &TileJob,
+) -> Vec<u8> {
+    let mut tile = vec![0_u8; job.tile_w * job.tile_h * 3];
+    for ly in 0..job.tile_h {
+        let y = job.ty + ly;
+        let y_u32 = y as u32;
+        for lx in 0..job.tile_w {
+            let x = job.tx + lx;
+            let x_u32 = x as u32;
+            let mut sum = Spectrum::black();
+            for &(sx, sy) in sample_offsets {
+                let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
+                let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
+                let ray = setup.camera.generate_ray(px * aspect, py);
+                let origin = from_api_vec3(ray.origin);
+                let dir = from_api_vec3(ray.direction).normalize();
+                let hit = raymarch_hit(accel, origin, dir, options, 0.0, options.max_dist);
+                let depth = match hit {
+                    Some(hit) => depth_preview_value(hit.t, options.max_dist),
+                    None => 0.0,
+                };
+                sum = sum + Spectrum::rgb(depth, depth, depth);
+            }
+            let rgb = spectrum_to_rgb8(sum.scale(1.0 / aa_samples as f32));
+            let i = (ly * job.tile_w + lx) * 3;
+            tile[i] = rgb[0];
+            tile[i + 1] = rgb[1];
+            tile[i + 2] = rgb[2];
+        }
+    }
+    tile
 }
 
 #[allow(dead_code)]

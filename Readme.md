@@ -6,7 +6,7 @@ Current state:
 
 - Forge parser, evaluator, and scene loading
 - Fast depth preview rendering from `.ft` files
-- Classical Whitted-style `trace` rendering for lookdev
+- Classical Whitted-style CPU rendering for lookdev
 - Acceleration backends: `naive`, `bvh`, `bricks`
 - Built-in lights: `PointLight`, `SphereLight`, `EnvLight`
 - Built-in material backends: `Lambert`, `Metal`, `Dielectric`
@@ -76,9 +76,9 @@ Outputs default to the scene path with `.png` extension, so `examples/glass.ft` 
 
 ## Renderers
 
-`trace`
+Main renderer
 
-- Classical Whitted-style CPU ray tracer for quick iteration
+- Classical Whitted-style CPU renderer for quick iteration
 - Progressive tiled updates
 - Supports `--aa` for camera supersampling
 - Supports debug AOVs with `--debug-aov`
@@ -229,7 +229,7 @@ environment Sky {
 };
 ```
 
-`color(dir)` is used as the visible background on misses in `depth` and `trace`.
+`color(dir)` is used as the visible background on misses in the main renderer and in `depth`.
 
 ## Imports
 
@@ -300,7 +300,7 @@ Current hit/BSDF context includes values such as:
 
 - `subsurface` exists as material data, but true subsurface transport is not implemented yet
 - `medium` currently affects transmission through simple Beer-Lambert attenuation
-- Forge-defined `eval/pdf/sample` are currently most useful through the shared material system, but the `trace` renderer still has some backend-specific recursion logic
+- Forge-defined `eval/pdf/sample` are currently most useful through the shared material system, but the renderer still has some backend-specific recursion logic
 - Forge material functions are still interpreted, not VM/JIT compiled
 
 ## Development

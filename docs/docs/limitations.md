@@ -9,7 +9,7 @@ Current limitations:
 
 - Forge material functions are interpreted, not VM/JIT compiled
 - `subsurface` is not yet rendered as true subsurface transport
-- the `trace` renderer still contains backend-specific recursion logic
+- the renderer still contains some backend-specific recursion logic
 - the language is still evolving and should not be treated as stable yet
 
 Near-term priorities:
