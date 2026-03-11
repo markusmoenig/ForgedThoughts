@@ -7,6 +7,15 @@ title: Booleans
 
 Forge supports a small hard-CSG core plus named SDF boolean variants inspired by `hg_sdf`.
 
+Experimental operators:
+- `*_columns`
+- `pipe`
+- `engrave`
+- `groove`
+- `tongue`
+
+These are available in Forge, but they are still being tuned and are not shown with beauty renders yet.
+
 ## Parameters
 
 - `r`
@@ -36,7 +45,7 @@ All examples below use the same reference setup:
 - left source shape: gold metallic sphere
 - right source shape: diffuse box
 - shared camera, lights, environment, and checker floor
-- per-operator scene source in [`examples/`](/Users/markusmoenig/ForgedThoughts/examples)
+- per-operator scene source in the repo `examples/` directory
 
 ## Hard Union
 
@@ -44,7 +53,7 @@ All examples below use the same reference setup:
 
 ![Hard Union](/img/booleans/boolean_union.png)
 
-Scene: [boolean_union.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_union.ft)
+Scene file: `examples/boolean_union.ft`
 
 ## Hard Difference
 
@@ -52,7 +61,7 @@ Scene: [boolean_union.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_un
 
 ![Hard Difference](/img/booleans/boolean_difference.png)
 
-Scene: [boolean_difference.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_difference.ft)
+Scene file: `examples/boolean_difference.ft`
 
 ## Hard Intersection
 
@@ -60,7 +69,7 @@ Scene: [boolean_difference.ft](/Users/markusmoenig/ForgedThoughts/examples/boole
 
 ![Hard Intersection](/img/booleans/boolean_intersection.png)
 
-Scene: [boolean_intersection.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_intersection.ft)
+Scene file: `examples/boolean_intersection.ft`
 
 ## Union Round
 
@@ -68,7 +77,7 @@ Scene: [boolean_intersection.ft](/Users/markusmoenig/ForgedThoughts/examples/boo
 
 ![Union Round](/img/booleans/boolean_union_round.png)
 
-Scene: [boolean_union_round.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_union_round.ft)
+Scene file: `examples/boolean_union_round.ft`
 
 ## Union Chamfer
 
@@ -76,13 +85,13 @@ Scene: [boolean_union_round.ft](/Users/markusmoenig/ForgedThoughts/examples/bool
 
 ![Union Chamfer](/img/booleans/boolean_union_chamfer.png)
 
-Scene: [boolean_union_chamfer.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_union_chamfer.ft)
+Scene file: `examples/boolean_union_chamfer.ft`
 
 ## Union Columns
 
 `a.union_columns(b, r, n)`
 
-Scene: [boolean_union_columns.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_union_columns.ft)
+Scene file: `examples/boolean_union_columns.ft`
 
 Image omitted for now while the operator is being tuned.
 
@@ -92,7 +101,7 @@ Image omitted for now while the operator is being tuned.
 
 ![Union Stairs](/img/booleans/boolean_union_stairs.png)
 
-Scene: [boolean_union_stairs.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_union_stairs.ft)
+Scene file: `examples/boolean_union_stairs.ft`
 
 ## Union Soft
 
@@ -100,7 +109,7 @@ Scene: [boolean_union_stairs.ft](/Users/markusmoenig/ForgedThoughts/examples/boo
 
 ![Union Soft](/img/booleans/boolean_union_soft.png)
 
-Scene: [boolean_union_soft.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_union_soft.ft)
+Scene file: `examples/boolean_union_soft.ft`
 
 ## Intersect Round
 
@@ -108,7 +117,7 @@ Scene: [boolean_union_soft.ft](/Users/markusmoenig/ForgedThoughts/examples/boole
 
 ![Intersect Round](/img/booleans/boolean_intersect_round.png)
 
-Scene: [boolean_intersect_round.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_intersect_round.ft)
+Scene file: `examples/boolean_intersect_round.ft`
 
 ## Intersect Chamfer
 
@@ -116,13 +125,13 @@ Scene: [boolean_intersect_round.ft](/Users/markusmoenig/ForgedThoughts/examples/
 
 ![Intersect Chamfer](/img/booleans/boolean_intersect_chamfer.png)
 
-Scene: [boolean_intersect_chamfer.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_intersect_chamfer.ft)
+Scene file: `examples/boolean_intersect_chamfer.ft`
 
 ## Intersect Columns
 
 `a.intersect_columns(b, r, n)`
 
-Scene: [boolean_intersect_columns.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_intersect_columns.ft)
+Scene file: `examples/boolean_intersect_columns.ft`
 
 Image omitted for now while the operator is being tuned.
 
@@ -132,7 +141,7 @@ Image omitted for now while the operator is being tuned.
 
 ![Intersect Stairs](/img/booleans/boolean_intersect_stairs.png)
 
-Scene: [boolean_intersect_stairs.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_intersect_stairs.ft)
+Scene file: `examples/boolean_intersect_stairs.ft`
 
 ## Difference Round
 
@@ -140,7 +149,7 @@ Scene: [boolean_intersect_stairs.ft](/Users/markusmoenig/ForgedThoughts/examples
 
 ![Difference Round](/img/booleans/boolean_diff_round.png)
 
-Scene: [boolean_diff_round.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_diff_round.ft)
+Scene file: `examples/boolean_diff_round.ft`
 
 ## Difference Chamfer
 
@@ -148,13 +157,13 @@ Scene: [boolean_diff_round.ft](/Users/markusmoenig/ForgedThoughts/examples/boole
 
 ![Difference Chamfer](/img/booleans/boolean_diff_chamfer.png)
 
-Scene: [boolean_diff_chamfer.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_diff_chamfer.ft)
+Scene file: `examples/boolean_diff_chamfer.ft`
 
 ## Difference Columns
 
 `a.diff_columns(b, r, n)`
 
-Scene: [boolean_diff_columns.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_diff_columns.ft)
+Scene file: `examples/boolean_diff_columns.ft`
 
 Image omitted for now while the operator is being tuned.
 
@@ -164,13 +173,13 @@ Image omitted for now while the operator is being tuned.
 
 ![Difference Stairs](/img/booleans/boolean_diff_stairs.png)
 
-Scene: [boolean_diff_stairs.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_diff_stairs.ft)
+Scene file: `examples/boolean_diff_stairs.ft`
 
 ## Pipe
 
 `a.pipe(b, r)`
 
-Scene: [boolean_pipe.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_pipe.ft)
+Scene file: `examples/boolean_pipe.ft`
 
 Image omitted for now while the operator is being tuned.
 
@@ -178,7 +187,7 @@ Image omitted for now while the operator is being tuned.
 
 `a.engrave(b, r)`
 
-Scene: [boolean_engrave.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_engrave.ft)
+Scene file: `examples/boolean_engrave.ft`
 
 Image omitted for now while the operator is being tuned.
 
@@ -186,7 +195,7 @@ Image omitted for now while the operator is being tuned.
 
 `a.groove(b, ra, rb)`
 
-Scene: [boolean_groove.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_groove.ft)
+Scene file: `examples/boolean_groove.ft`
 
 Image omitted for now while the operator is being tuned.
 
@@ -194,6 +203,6 @@ Image omitted for now while the operator is being tuned.
 
 `a.tongue(b, ra, rb)`
 
-Scene: [boolean_tongue.ft](/Users/markusmoenig/ForgedThoughts/examples/boolean_tongue.ft)
+Scene file: `examples/boolean_tongue.ft`
 
 Image omitted for now while the operator is being tuned.

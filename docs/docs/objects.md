@@ -121,7 +121,7 @@ For simple profile changes on a single shape, Forge supports:
 
 - `shape.round(r)` for rounded/beveled forms
 
-For boolean composition, see the dedicated [Booleans](/Users/markusmoenig/ForgedThoughts/docs/docs/booleans.md) page.
+For boolean composition, see the dedicated [Booleans](./booleans.md) page.
 
 ## Custom SDFs
 
