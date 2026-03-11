@@ -120,6 +120,7 @@ pub enum Expr {
 pub enum BinaryOp {
     Add,
     Sub,
+    Intersect,
     Mul,
     Div,
 }

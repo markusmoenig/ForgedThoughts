@@ -1,0 +1,4 @@
+import "./boolean_base.ft";
+
+let shape = a.intersect_chamfer(b, 0.18);
+let scene = floor + shape;

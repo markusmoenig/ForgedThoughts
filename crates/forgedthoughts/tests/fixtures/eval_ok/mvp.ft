@@ -11,4 +11,4 @@ var d = Box {
   material: mat
 };
 
-let b = (s-d).smooth(0.2);
+let b = s.diff_round(d, 0.2);

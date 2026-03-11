@@ -139,6 +139,8 @@ Supported language pieces today include:
 - material definitions with local bindings and functions
 - environment definitions with local bindings and functions
 - custom SDF definitions with `sdf Name { fn distance(p) { ... } }`
+- hard booleans with `+`, `-`, and `&`
+- named `hg_sdf`-style boolean variants like `union_round`, `diff_chamfer`, and `intersect_stairs`
 
 Example Forge material:
 

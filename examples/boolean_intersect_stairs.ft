@@ -1,0 +1,4 @@
+import "./boolean_base.ft";
+
+let shape = a.intersect_stairs(b, 0.18, 5.0);
+let scene = floor + shape;

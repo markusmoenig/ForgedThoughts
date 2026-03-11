@@ -357,6 +357,8 @@ impl Parser {
                 Some(BinaryOp::Add)
             } else if self.matches_kind(TokenKind::Minus) {
                 Some(BinaryOp::Sub)
+            } else if self.matches_kind(TokenKind::Amp) {
+                Some(BinaryOp::Intersect)
             } else {
                 None
             };

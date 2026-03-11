@@ -11,6 +11,11 @@
           "mainDocId": "index",
           "docs": [
             {
+              "id": "booleans",
+              "path": "/docs/booleans",
+              "sidebar": "mainSidebar"
+            },
+            {
               "id": "cli",
               "path": "/docs/cli",
               "sidebar": "mainSidebar"
@@ -48,6 +53,11 @@
             {
               "id": "objects",
               "path": "/docs/objects",
+              "sidebar": "mainSidebar"
+            },
+            {
+              "id": "settings",
+              "path": "/docs/settings",
               "sidebar": "mainSidebar"
             }
           ],

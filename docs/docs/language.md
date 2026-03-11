@@ -36,9 +36,30 @@ Current supported pieces include:
 - scalar and `vec3` arithmetic
 - hex color literals like `#ff0000` and `#f00`
 - built-ins such as `mix`, `clamp`, `step`, `smoothstep`, `dot`, `length`, `normalize`, `sin`, `cos`
+- hard booleans with `+`, `-`, and `&`
+- named SDF boolean variants such as `union_round`, `diff_chamfer`, and `intersect_stairs`
 - material definitions with local bindings and functions
 - environment definitions with local bindings and functions
 - custom SDF definitions with `sdf Name { fn distance(p) { ... } }`
+
+## Booleans
+
+Forge uses operators for the hard CSG core:
+
+```ft
+let shape = (a + b) - c;
+let mask = a & b;
+```
+
+And named methods for the richer `hg_sdf`-style variants:
+
+```ft
+let shape =
+  body
+    .union_round(ring, 0.08)
+    .diff_chamfer(cut, 0.04)
+    .intersect_stairs(mask, 0.12, 6.0);
+```
 
 ## Functions
 

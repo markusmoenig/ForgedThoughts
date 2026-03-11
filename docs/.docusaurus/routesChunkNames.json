@@ -42,22 +42,26 @@
       "plugin": "plugin---docusaurus-debugb-38-ad3"
     }
   },
-  "/docs-a68": {
+  "/docs-1c6": {
     "__comp": "__comp---theme-docs-root-5-e-9-0b6",
     "__context": {
       "plugin": "plugin---docsaba-d7c"
     }
   },
-  "/docs-11f": {
+  "/docs-f7a": {
     "__comp": "__comp---theme-doc-version-roota-7-b-5de",
     "__props": "__props---docs-005-788"
   },
-  "/docs-680": {
+  "/docs-ba7": {
     "__comp": "__comp---theme-doc-roota-94-67a"
   },
   "/docs/-b43": {
     "__comp": "__comp---theme-doc-item-178-a40",
     "content": "content---docs-c-37-4d0"
+  },
+  "/docs/booleans-327": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-booleans-236-019"
   },
   "/docs/cli-e2e": {
     "__comp": "__comp---theme-doc-item-178-a40",
@@ -86,6 +90,10 @@
   "/docs/objects-5b3": {
     "__comp": "__comp---theme-doc-item-178-a40",
     "content": "content---docs-objectsb-51-593"
+  },
+  "/docs/settings-e94": {
+    "__comp": "__comp---theme-doc-item-178-a40",
+    "content": "content---docs-settingsdec-893"
   },
   "/-e5f": {
     "__comp": "__comp---site-src-pages-index-tsx-1-df-d3e",

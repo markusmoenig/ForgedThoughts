@@ -1,0 +1,20 @@
+material CheckerFloor {
+  model: Lambert;
+  roughness = 1.0;
+
+  let color_a = #f1f3f6;
+  let color_b = #6f7784;
+
+  fn checker(p, scale) {
+    let sx = step(0.0, sin(p.x * scale));
+    let sz = step(0.0, sin(p.z * scale));
+    return abs(sx - sz);
+  }
+
+  fn color(ctx) {
+    let m = checker(ctx.local_position, 3.4);
+    return mix(color_a, color_b, m);
+  }
+};
+
+export { CheckerFloor };

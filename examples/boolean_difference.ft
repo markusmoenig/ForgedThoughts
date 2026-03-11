@@ -1,0 +1,4 @@
+import "./boolean_base.ft";
+
+let shape = a - b;
+let scene = floor + shape;

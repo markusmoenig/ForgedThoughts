@@ -19,6 +19,7 @@ What you can do with it right now:
 - build scenes from primitives, CSG operations, and custom SDFs
 - light scenes with point lights and environment lights
 - write materials with built-in backends like `Lambert`, `Metal`, and `Dielectric`
+- tune renderer behavior through `RenderSettings`
 - override material behavior with Forge-side hooks such as `color`, `roughness`, `ior`, `medium`, `eval`, `pdf`, and `sample`
 - share materials, objects, scenes, and helper functions through imports, exports, and the built-in library
 

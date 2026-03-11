@@ -115,22 +115,13 @@ Transforms are currently driven with nested properties like `pos.x`, `pos.y`, `r
 
 Rounding is not yet a native primitive field like `Box { rounding: 0.2 }`. Right now rounded or beveled shapes are created with shape operators such as `.round(r)`.
 
-## CSG and Shape Operators
+## Shape Operators
 
-Objects can be combined with:
+For simple profile changes on a single shape, Forge supports:
 
-- `a + b` for union
-- `a - b` for subtraction
-- `shape.smooth(k)` for smooth union-style blending
 - `shape.round(r)` for rounded/beveled forms
 
-Example:
-
-```ft
-let shell = Sphere { radius: 1.0 };
-let cut = Box { size: vec3(1.2, 1.2, 1.2) };
-let scene = (shell - cut).round(0.05);
-```
+For boolean composition, see the dedicated [Booleans](/Users/markusmoenig/ForgedThoughts/docs/docs/booleans.md) page.
 
 ## Custom SDFs
 

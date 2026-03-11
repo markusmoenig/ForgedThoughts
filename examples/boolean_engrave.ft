@@ -1,0 +1,4 @@
+import "./boolean_base.ft";
+
+let shape = a.engrave(b, 0.14);
+let scene = floor + shape;

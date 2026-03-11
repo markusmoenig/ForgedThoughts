@@ -39,19 +39,25 @@ export default [
   },
   {
     path: '/docs',
-    component: ComponentCreator('/docs', 'a68'),
+    component: ComponentCreator('/docs', '1c6'),
     routes: [
       {
         path: '/docs',
-        component: ComponentCreator('/docs', '11f'),
+        component: ComponentCreator('/docs', 'f7a'),
         routes: [
           {
             path: '/docs',
-            component: ComponentCreator('/docs', '680'),
+            component: ComponentCreator('/docs', 'ba7'),
             routes: [
               {
                 path: '/docs/',
                 component: ComponentCreator('/docs/', 'b43'),
+                exact: true,
+                sidebar: "mainSidebar"
+              },
+              {
+                path: '/docs/booleans',
+                component: ComponentCreator('/docs/booleans', '327'),
                 exact: true,
                 sidebar: "mainSidebar"
               },
@@ -94,6 +100,12 @@ export default [
               {
                 path: '/docs/objects',
                 component: ComponentCreator('/docs/objects', '5b3'),
+                exact: true,
+                sidebar: "mainSidebar"
+              },
+              {
+                path: '/docs/settings',
+                component: ComponentCreator('/docs/settings', 'e94'),
                 exact: true,
                 sidebar: "mainSidebar"
               }

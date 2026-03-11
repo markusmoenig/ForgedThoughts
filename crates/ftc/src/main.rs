@@ -112,7 +112,7 @@ enum Command {
         tile_size: u32,
 
         /// Camera samples per pixel for anti-aliasing
-        #[arg(long, default_value_t = 4)]
+        #[arg(long, default_value_t = 1)]
         aa: u32,
 
         /// Re-render when the scene file changes
@@ -923,6 +923,9 @@ fn merged_render_options(
     }
     if let Some(v) = scene_settings.epsilon {
         options.epsilon = v;
+    }
+    if let Some(v) = scene_settings.step_scale {
+        options.step_scale = v.clamp(0.05, 1.0);
     }
     if let Some(v) = scene_settings.camera_z {
         options.camera_z = v;

@@ -1,0 +1,4 @@
+import "./boolean_base.ft";
+
+let shape = a.pipe(b, 0.12);
+let scene = floor + shape;

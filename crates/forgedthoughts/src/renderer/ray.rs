@@ -27,26 +27,55 @@ pub(super) fn trace_ray_recursive(
         );
     };
 
+    let view_dir = dir.mul(-1.0).normalize();
+    if let Some((a, b, t)) = resolve_split_material_at_hit(setup, hit, view_dir) {
+        let a = trace_hit_with_material(accel, setup, ctx, hit, dir, medium, depth, a);
+        let b = trace_hit_with_material(accel, setup, ctx, hit, dir, medium, depth, b);
+        return lerp_spectrum(a, b, t);
+    }
+    let mat = resolve_material_at_hit(setup, hit, view_dir);
+    trace_hit_with_material(accel, setup, ctx, hit, dir, medium, depth, mat)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn trace_hit_with_material(
+    accel: &(impl Accelerator + Sync),
+    setup: &RenderSetup,
+    ctx: RayTraceCtx,
+    hit: RayHit,
+    dir: Vec3,
+    medium: MediumState,
+    depth: u32,
+    mat: MaterialKindRt,
+) -> Spectrum {
     let hit_point = hit.position;
-    let mat = resolve_material_at_hit(setup, hit, dir.mul(-1.0).normalize());
     let normal = if hit.front_face {
         hit.normal.normalize()
     } else {
         hit.normal.mul(-1.0).normalize()
     };
     let bsdf_ctx = build_bsdf_context(setup, hit, dir.mul(-1.0), medium.ior);
-    let (transmission, ior, thin, specular_color, base_color, metallic) = match mat {
-        MaterialKindRt::Lambert(m) => (0.0, 1.0, false, Spectrum::rgb(0.0, 0.0, 0.0), m.color, 0.0),
-        MaterialKindRt::Metal(m) => (0.0, 1.0, false, m.color, m.color, 1.0),
-        MaterialKindRt::Dielectric(m) => (
-            1.0,
-            m.ior.clamp(1.0, 3.0),
-            m.thin_walled,
-            Spectrum::rgb(1.0, 1.0, 1.0),
-            m.color,
-            0.0,
-        ),
-    };
+    let params = dominant_material_params(mat);
+    let (transmission, ior, thin, specular_color, base_color, metallic) =
+        match dominant_material_model(mat) {
+            MaterialKindTag::Lambert => (
+                0.0,
+                1.0,
+                false,
+                Spectrum::rgb(0.0, 0.0, 0.0),
+                params.color,
+                0.0,
+            ),
+            MaterialKindTag::Metal => (0.0, 1.0, false, params.color, params.color, 1.0),
+            MaterialKindTag::Dielectric => (
+                1.0,
+                params.ior.clamp(1.0, 3.0),
+                params.thin_walled,
+                Spectrum::rgb(1.0, 1.0, 1.0),
+                params.color,
+                0.0,
+            ),
+        };
     let (eta_i, eta_t, next_ior) = if thin {
         (1.0, 1.0, medium.ior)
     } else if hit.front_face {
@@ -161,21 +190,22 @@ pub(super) fn trace_ray_debug_aov(
         ),
         RayDebugAov::MaterialId => material_id_color(hit.material_id),
         RayDebugAov::Ior => {
-            let ior = match mat {
-                MaterialKindRt::Dielectric(m) => m.ior.clamp(1.0, 3.0),
+            let ior = match dominant_material_model(mat) {
+                MaterialKindTag::Dielectric => dominant_material_params(mat).ior.clamp(1.0, 3.0),
                 _ => 1.0,
             };
             let v = ((ior - 1.0) / 2.0).clamp(0.0, 1.0);
             Spectrum::rgb(v, v, v)
         }
         RayDebugAov::Transmission => {
-            let v = matches!(mat, MaterialKindRt::Dielectric(_)) as u8 as f32;
+            let v =
+                matches!(dominant_material_model(mat), MaterialKindTag::Dielectric) as u8 as f32;
             Spectrum::rgb(v, v, v)
         }
         RayDebugAov::Fresnel => {
             let wo = dir.mul(-1.0).normalize();
-            let ior = match mat {
-                MaterialKindRt::Dielectric(m) => m.ior.clamp(1.0, 3.0),
+            let ior = match dominant_material_model(mat) {
+                MaterialKindTag::Dielectric => dominant_material_params(mat).ior.clamp(1.0, 3.0),
                 _ => 1.0,
             };
             let f = fresnel_dielectric_scalar(normal.dot(wo).abs(), 1.0, ior);

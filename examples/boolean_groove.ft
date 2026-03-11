@@ -1,0 +1,4 @@
+import "./boolean_base.ft";
+
+let shape = a.groove(b, 0.16, 0.12);
+let scene = floor + shape;

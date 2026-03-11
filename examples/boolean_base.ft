@@ -1,0 +1,76 @@
+import "CheckerFloor";
+
+let camera = Camera {
+  origin: vec3(0.0, 1.9, 6.8),
+  target: vec3(0.0, 0.3, 0.0),
+  fov_y: 25.0
+};
+
+let key = PointLight {
+  position: vec3(3.8, 5.0, 5.2),
+  color: #fff1d6,
+  intensity: 145.0
+};
+
+let fill = PointLight {
+  position: vec3(-4.2, 2.6, 3.4),
+  color: #c9dcff,
+  intensity: 34.0
+};
+
+environment Sky {
+  let zenith = #3f82ff;
+  let horizon = #cfe6ff;
+  let nadir = #eef4ff;
+
+  fn up_blend(dir) {
+    return clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+  }
+
+  fn color(dir) {
+    let t = up_blend(dir);
+    let sky = mix(horizon, zenith, pow(t, 0.7));
+    let down = clamp(-dir.y * 1.8, 0.0, 1.0);
+    return mix(sky, nadir, down);
+  }
+};
+
+let box_mat = Lambert {
+  color: #f0f0f2
+};
+
+let sphere_mat = Metal {
+  color: #d4af37,
+  roughness: 0.35
+};
+
+let render = RenderSettings {
+  width: 400,
+  height: 400,
+  max_steps: 560,
+  max_dist: 60.0,
+  epsilon: 0.0002,
+  step_scale: 0.7,
+  accel: Bvh{}
+};
+
+var floor = Box {
+  size: vec3(20.0, 0.5, 20.0),
+  material: CheckerFloor {}
+};
+floor.pos.y = -1.15;
+
+var a = Sphere {
+  radius: 0.82,
+  material: sphere_mat
+};
+a.pos.x = -0.28;
+a.pos.y = 0.25;
+
+var b = Box {
+  size: vec3(1.15, 1.15, 1.15),
+  material: box_mat
+};
+b.pos.x = 0.32;
+b.pos.y = 0.25;
+b.rot.z = 10.0;

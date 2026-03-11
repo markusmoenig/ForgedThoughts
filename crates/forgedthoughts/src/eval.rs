@@ -309,6 +309,7 @@ fn eval_binary(lhs: Value, op: BinaryOp, rhs: Value) -> Result<Value, EvalError>
         let out = match op {
             BinaryOp::Add => left + right,
             BinaryOp::Sub => left - right,
+            BinaryOp::Intersect => return Err(EvalError::BinaryTypeMismatch),
             BinaryOp::Mul => left * right,
             BinaryOp::Div => left / right,
         };
@@ -326,15 +327,17 @@ fn eval_binary(lhs: Value, op: BinaryOp, rhs: Value) -> Result<Value, EvalError>
             BinaryOp::Sub => [left[0] - right[0], left[1] - right[1], left[2] - right[2]],
             BinaryOp::Mul => [left[0] * right[0], left[1] * right[1], left[2] * right[2]],
             BinaryOp::Div => [left[0] / right[0], left[1] / right[1], left[2] / right[2]],
+            BinaryOp::Intersect => return Err(EvalError::BinaryTypeMismatch),
         };
         return Ok(vec3_value(out));
     }
 
     match op {
-        BinaryOp::Add | BinaryOp::Sub => {
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Intersect => {
             let op_name = match op {
                 BinaryOp::Add => "add",
                 BinaryOp::Sub => "sub",
+                BinaryOp::Intersect => "intersect",
                 BinaryOp::Mul | BinaryOp::Div => unreachable!(),
             };
             let mut fields = HashMap::new();
@@ -347,6 +350,214 @@ fn eval_binary(lhs: Value, op: BinaryOp, rhs: Value) -> Result<Value, EvalError>
         }
         BinaryOp::Mul | BinaryOp::Div => Err(EvalError::BinaryTypeMismatch),
     }
+}
+
+fn build_sdf_member_value(
+    field: &str,
+    base: Value,
+    args: Vec<Value>,
+) -> Result<Option<Value>, EvalError> {
+    let (type_name, fields): (&str, Vec<(&str, Value)>) = match field {
+        "smooth" => {
+            if args.len() != 1 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(k) = args[0] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            ("smooth", vec![("base", base), ("k", Value::Number(k))])
+        }
+        "round" | "bevel" | "chamfer" => {
+            if args.len() != 1 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(r) = args[0] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            ("round", vec![("base", base), ("r", Value::Number(r))])
+        }
+        "union_round" | "union_chamfer" | "union_soft" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(r) = args[1] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            (
+                field,
+                vec![
+                    ("lhs", base),
+                    ("rhs", args[0].clone()),
+                    ("r", Value::Number(r)),
+                ],
+            )
+        }
+        "union_columns" | "union_stairs" => {
+            if args.len() != 3 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(r) = args[1] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            let Value::Number(n) = args[2] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            (
+                field,
+                vec![
+                    ("lhs", base),
+                    ("rhs", args[0].clone()),
+                    ("r", Value::Number(r)),
+                    ("n", Value::Number(n)),
+                ],
+            )
+        }
+        "intersect_round" | "intersect_chamfer" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(r) = args[1] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            (
+                field,
+                vec![
+                    ("lhs", base),
+                    ("rhs", args[0].clone()),
+                    ("r", Value::Number(r)),
+                ],
+            )
+        }
+        "intersect_columns" | "intersect_stairs" => {
+            if args.len() != 3 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(r) = args[1] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            let Value::Number(n) = args[2] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            (
+                field,
+                vec![
+                    ("lhs", base),
+                    ("rhs", args[0].clone()),
+                    ("r", Value::Number(r)),
+                    ("n", Value::Number(n)),
+                ],
+            )
+        }
+        "diff_round" | "diff_chamfer" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(r) = args[1] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            (
+                field,
+                vec![
+                    ("lhs", base),
+                    ("rhs", args[0].clone()),
+                    ("r", Value::Number(r)),
+                ],
+            )
+        }
+        "diff_columns" | "diff_stairs" => {
+            if args.len() != 3 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(r) = args[1] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            let Value::Number(n) = args[2] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            (
+                field,
+                vec![
+                    ("lhs", base),
+                    ("rhs", args[0].clone()),
+                    ("r", Value::Number(r)),
+                    ("n", Value::Number(n)),
+                ],
+            )
+        }
+        "pipe" | "engrave" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(r) = args[1] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            (
+                field,
+                vec![
+                    ("lhs", base),
+                    ("rhs", args[0].clone()),
+                    ("r", Value::Number(r)),
+                ],
+            )
+        }
+        "groove" | "tongue" => {
+            if args.len() != 3 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(ra) = args[1] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            let Value::Number(rb) = args[2] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            (
+                field,
+                vec![
+                    ("lhs", base),
+                    ("rhs", args[0].clone()),
+                    ("ra", Value::Number(ra)),
+                    ("rb", Value::Number(rb)),
+                ],
+            )
+        }
+        _ => return Ok(None),
+    };
+
+    let mut object_fields = HashMap::new();
+    for (name, value) in fields {
+        object_fields.insert(name.to_string(), value);
+    }
+    Ok(Some(Value::Object(ObjectValue {
+        type_name: Some(type_name.to_string()),
+        fields: object_fields,
+    })))
+}
+
+fn is_sdf_member_operator(field: &str) -> bool {
+    matches!(
+        field,
+        "smooth"
+            | "round"
+            | "bevel"
+            | "chamfer"
+            | "union_round"
+            | "union_chamfer"
+            | "union_columns"
+            | "union_stairs"
+            | "union_soft"
+            | "intersect_round"
+            | "intersect_chamfer"
+            | "intersect_columns"
+            | "intersect_stairs"
+            | "diff_round"
+            | "diff_chamfer"
+            | "diff_columns"
+            | "diff_stairs"
+            | "pipe"
+            | "engrave"
+            | "groove"
+            | "tongue"
+    )
 }
 
 fn eval_unary(op: UnaryOp, value: Value) -> Result<Value, EvalError> {
@@ -410,71 +621,21 @@ fn eval_call(
             }
             Err(EvalError::UnsupportedCall)
         }
-        Expr::Member { target, field } if field == "smooth" => {
-            if args.len() != 1 {
-                return Err(EvalError::UnsupportedCall);
+        Expr::Member { target, field } => {
+            if is_sdf_member_operator(field) {
+                let base = eval_expr_in_material_scope(
+                    target,
+                    state,
+                    locals,
+                    material_runtime,
+                    top_level_depth,
+                )?;
+                let arg_values =
+                    eval_arg_values(args, state, locals, material_runtime, top_level_depth)?;
+                if let Some(value) = build_sdf_member_value(field, base, arg_values)? {
+                    return Ok(value);
+                }
             }
-
-            let base = eval_expr_in_material_scope(
-                target,
-                state,
-                locals,
-                material_runtime,
-                top_level_depth,
-            )?;
-            let radius = eval_expr_in_material_scope(
-                &args[0],
-                state,
-                locals,
-                material_runtime,
-                top_level_depth,
-            )?;
-            let Value::Number(k) = radius else {
-                return Err(EvalError::UnsupportedCall);
-            };
-
-            let mut fields = HashMap::new();
-            fields.insert("base".to_string(), base);
-            fields.insert("k".to_string(), Value::Number(k));
-            Ok(Value::Object(ObjectValue {
-                type_name: Some("smooth".to_string()),
-                fields,
-            }))
-        }
-        Expr::Member { target, field }
-            if field == "round" || field == "bevel" || field == "chamfer" =>
-        {
-            if args.len() != 1 {
-                return Err(EvalError::UnsupportedCall);
-            }
-
-            let base = eval_expr_in_material_scope(
-                target,
-                state,
-                locals,
-                material_runtime,
-                top_level_depth,
-            )?;
-            let radius = eval_expr_in_material_scope(
-                &args[0],
-                state,
-                locals,
-                material_runtime,
-                top_level_depth,
-            )?;
-            let Value::Number(r) = radius else {
-                return Err(EvalError::UnsupportedCall);
-            };
-
-            let mut fields = HashMap::new();
-            fields.insert("base".to_string(), base);
-            fields.insert("r".to_string(), Value::Number(r));
-            Ok(Value::Object(ObjectValue {
-                type_name: Some("round".to_string()),
-                fields,
-            }))
-        }
-        Expr::Member { .. } => {
             if let Some(name) = flatten_member_expr(callee) {
                 let arg_values =
                     eval_arg_values(args, state, locals, material_runtime, top_level_depth)?;
@@ -1040,47 +1201,14 @@ fn eval_sdf_call(
             }
             Err(EvalError::UnsupportedCall)
         }
-        Expr::Member { target, field } if field == "smooth" => {
-            if args.len() != 1 {
-                return Err(EvalError::UnsupportedCall);
+        Expr::Member { target, field } => {
+            if is_sdf_member_operator(field) {
+                let base = eval_sdf_expr(target, state, locals, sdf_runtime)?;
+                let arg_values = eval_sdf_arg_values(args, state, locals, sdf_runtime)?;
+                if let Some(value) = build_sdf_member_value(field, base, arg_values)? {
+                    return Ok(value);
+                }
             }
-
-            let base = eval_sdf_expr(target, state, locals, sdf_runtime)?;
-            let radius = eval_sdf_expr(&args[0], state, locals, sdf_runtime)?;
-            let Value::Number(k) = radius else {
-                return Err(EvalError::UnsupportedCall);
-            };
-
-            let mut fields = HashMap::new();
-            fields.insert("base".to_string(), base);
-            fields.insert("k".to_string(), Value::Number(k));
-            Ok(Value::Object(ObjectValue {
-                type_name: Some("smooth".to_string()),
-                fields,
-            }))
-        }
-        Expr::Member { target, field }
-            if field == "round" || field == "bevel" || field == "chamfer" =>
-        {
-            if args.len() != 1 {
-                return Err(EvalError::UnsupportedCall);
-            }
-
-            let base = eval_sdf_expr(target, state, locals, sdf_runtime)?;
-            let radius = eval_sdf_expr(&args[0], state, locals, sdf_runtime)?;
-            let Value::Number(r) = radius else {
-                return Err(EvalError::UnsupportedCall);
-            };
-
-            let mut fields = HashMap::new();
-            fields.insert("base".to_string(), base);
-            fields.insert("r".to_string(), Value::Number(r));
-            Ok(Value::Object(ObjectValue {
-                type_name: Some("round".to_string()),
-                fields,
-            }))
-        }
-        Expr::Member { .. } => {
             if let Some(name) = flatten_member_expr(callee) {
                 let arg_values = eval_sdf_arg_values(args, state, locals, sdf_runtime)?;
                 if let Some(def) = state.function_defs.get(&name)

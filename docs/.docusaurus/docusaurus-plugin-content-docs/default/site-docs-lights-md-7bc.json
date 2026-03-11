@@ -17,11 +17,11 @@
   },
   "sidebar": "mainSidebar",
   "previous": {
-    "title": "Language",
-    "permalink": "/docs/language"
+    "title": "Materials",
+    "permalink": "/docs/materials"
   },
   "next": {
-    "title": "Objects",
-    "permalink": "/docs/objects"
+    "title": "Booleans",
+    "permalink": "/docs/booleans"
   }
 }

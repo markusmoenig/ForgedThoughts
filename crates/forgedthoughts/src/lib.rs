@@ -19,9 +19,9 @@ pub use eval::{
     eval_sdf_zero_arg_function, eval_top_level_function,
 };
 pub use materials::{
-    BsdfSample as MaterialBsdfSample, ColorPattern, DielectricMaterial, LambertMaterial, Material,
-    MaterialBsdf, MaterialParams, MediumParams, MetalMaterial, SampleInput as MaterialSampleInput,
-    SubsurfaceParams,
+    BlendedMaterial, BsdfSample as MaterialBsdfSample, ColorPattern, DielectricMaterial,
+    LambertMaterial, Material, MaterialBsdf, MaterialKindTag, MaterialParams, MediumParams,
+    MetalMaterial, SampleInput as MaterialSampleInput, SubsurfaceParams,
 };
 pub use parser::{ParseError, parse_program};
 pub use render_api::{
@@ -65,6 +65,12 @@ const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
         name: "Glass",
         path: "materials/glass.ft",
         source: include_str!("../library/materials/glass.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Materials,
+        name: "CheckerFloor",
+        path: "materials/checker_floor.ft",
+        source: include_str!("../library/materials/checker_floor.ft"),
     },
     BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Objects,
@@ -986,6 +992,36 @@ mod tests {
         assert_eq!(obj.type_name.as_deref(), Some("round"));
         assert!(obj.fields.contains_key("base"));
         assert_eq!(obj.fields.get("r"), Some(&Value::Number(0.1)));
+    }
+
+    #[test]
+    fn supports_intersection_and_boolean_variant_calls() {
+        let source = r#"
+            var a = Sphere{};
+            var b = Box { size: vec3(1.0) };
+            let i = a & b;
+            let u = a.union_round(b, 0.2);
+            let d = a.diff_stairs(b, 0.3, 5.0);
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+
+        let Value::Object(i_obj) = &state.bindings.get("i").expect("i binding").value else {
+            panic!("i should be an object");
+        };
+        assert_eq!(i_obj.type_name.as_deref(), Some("intersect"));
+
+        let Value::Object(u_obj) = &state.bindings.get("u").expect("u binding").value else {
+            panic!("u should be an object");
+        };
+        assert_eq!(u_obj.type_name.as_deref(), Some("union_round"));
+        assert_eq!(u_obj.fields.get("r"), Some(&Value::Number(0.2)));
+
+        let Value::Object(d_obj) = &state.bindings.get("d").expect("d binding").value else {
+            panic!("d should be an object");
+        };
+        assert_eq!(d_obj.type_name.as_deref(), Some("diff_stairs"));
+        assert_eq!(d_obj.fields.get("n"), Some(&Value::Number(5.0)));
     }
 
     #[test]

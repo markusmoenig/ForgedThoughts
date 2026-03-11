@@ -7,9 +7,10 @@ use rayon::prelude::*;
 use thiserror::Error;
 
 use crate::{
-    ColorPattern, EvalState, Material, MaterialParams, MaterialSampleInput, MediumParams,
-    ObjectValue, SubsurfaceParams, Value, eval_environment_function, eval_material_function,
-    eval_material_properties, eval_sdf_function, eval_sdf_zero_arg_function,
+    BlendedMaterial, ColorPattern, EvalState, Material, MaterialKindTag, MaterialParams,
+    MaterialSampleInput, MediumParams, ObjectValue, SubsurfaceParams, Value,
+    eval_environment_function, eval_material_function, eval_material_properties, eval_sdf_function,
+    eval_sdf_zero_arg_function,
     render_api::{
         Camera, CameraKind, EnvLight, Light, PinholeCamera, PointLight, Spectrum, Vec3 as ApiVec3,
     },
@@ -27,6 +28,7 @@ pub struct RenderOptions {
     pub max_steps: u32,
     pub max_dist: f32,
     pub epsilon: f32,
+    pub step_scale: f32,
     pub camera_z: f32,
     pub fov_y_degrees: f32,
 }
@@ -39,6 +41,7 @@ impl Default for RenderOptions {
             max_steps: 128,
             max_dist: 40.0,
             epsilon: 0.001,
+            step_scale: 0.7,
             camera_z: 6.0,
             fov_y_degrees: 45.0,
         }
@@ -59,6 +62,7 @@ pub struct SceneRenderSettings {
     pub max_steps: Option<u32>,
     pub max_dist: Option<f32>,
     pub epsilon: Option<f32>,
+    pub step_scale: Option<f32>,
     pub camera_z: Option<f32>,
     pub fov_y_degrees: Option<f32>,
     pub accel: Option<AccelMode>,
@@ -192,6 +196,7 @@ enum SdfNode {
     Custom {
         transform: PrimitiveTransform,
         runtime: Arc<CustomSdfRuntime>,
+        #[allow(dead_code)]
         bounds_radius: f32,
         object_id: u32,
         material_id: u32,
@@ -200,9 +205,106 @@ enum SdfNode {
         lhs: Box<SdfNode>,
         rhs: Box<SdfNode>,
     },
+    Intersect {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+    },
     Subtract {
         lhs: Box<SdfNode>,
         rhs: Box<SdfNode>,
+    },
+    UnionRound {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+    },
+    UnionChamfer {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+    },
+    UnionColumns {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+        n: f32,
+    },
+    UnionStairs {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+        n: f32,
+    },
+    UnionSoft {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+    },
+    IntersectRound {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+    },
+    IntersectChamfer {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+    },
+    IntersectColumns {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+        n: f32,
+    },
+    IntersectStairs {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+        n: f32,
+    },
+    DiffRound {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+    },
+    DiffChamfer {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+    },
+    DiffColumns {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+        n: f32,
+    },
+    DiffStairs {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+        n: f32,
+    },
+    Pipe {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+    },
+    Engrave {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        r: f32,
+    },
+    Groove {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        ra: f32,
+        rb: f32,
+    },
+    Tongue {
+        lhs: Box<SdfNode>,
+        rhs: Box<SdfNode>,
+        ra: f32,
+        rb: f32,
     },
     Smooth {
         base: Box<SdfNode>,
@@ -286,21 +388,25 @@ impl Vec3 {
         Self::new(self.x.abs(), self.y.abs(), self.z.abs())
     }
 
+    #[allow(dead_code)]
     fn min(self, rhs: Self) -> Self {
         Self::new(self.x.min(rhs.x), self.y.min(rhs.y), self.z.min(rhs.z))
     }
 
+    #[allow(dead_code)]
     fn max(self, rhs: Self) -> Self {
         Self::new(self.x.max(rhs.x), self.y.max(rhs.y), self.z.max(rhs.z))
     }
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 struct Aabb {
     min: Vec3,
     max: Vec3,
 }
 
+#[allow(dead_code)]
 impl Aabb {
     fn union(self, rhs: Self) -> Self {
         Self {
@@ -322,13 +428,13 @@ impl Aabb {
 struct CompiledScene {
     root: SdfNode,
     center: Vec3,
-    bounds: Aabb,
     materials: Vec<MaterialKindRt>,
     object_transforms: Vec<PrimitiveTransform>,
 }
 
 struct RenderSetup {
     state: EvalState,
+    root: SdfNode,
     camera: CameraKind,
     lights: Vec<Box<dyn Light>>,
     path_lights: Vec<PathLight>,
@@ -451,10 +557,7 @@ impl Accelerator for BvhAccel {
     }
 
     fn distance_info(&self, p: Vec3) -> DistanceInfo {
-        let dist_bound = distance_to_aabb(p, self.scene.bounds);
-        let mut info = sdf_distance_info(&self.scene.root, p);
-        info.distance = info.distance.max(dist_bound);
-        info
+        sdf_distance_info(&self.scene.root, p)
     }
 }
 
@@ -468,10 +571,7 @@ impl Accelerator for BricksAccel {
     }
 
     fn distance_info(&self, p: Vec3) -> DistanceInfo {
-        let dist_bound = distance_to_aabb(p, self.scene.bounds);
-        let mut info = sdf_distance_info(&self.scene.root, p);
-        info.distance = info.distance.max(dist_bound * 0.75);
-        info
+        sdf_distance_info(&self.scene.root, p)
     }
 }
 
@@ -677,6 +777,7 @@ pub fn extract_scene_render_settings(state: &EvalState) -> SceneRenderSettings {
     out.max_steps = read_number_field(obj, &["max_steps"]).and_then(float_to_u32);
     out.max_dist = read_number_field(obj, &["max_dist"]);
     out.epsilon = read_number_field(obj, &["epsilon"]);
+    out.step_scale = read_number_field(obj, &["step_scale"]);
     out.camera_z = read_number_field(obj, &["camera_z"]);
     out.fov_y_degrees = read_number_field(obj, &["fov_y", "fov"]);
     out.accel = read_accel_field(obj, "accel");
@@ -715,11 +816,9 @@ fn compile_scene(
     let shared_state = Arc::new(state.clone());
     let root = compile_sdf(&shared_state, value, &mut ctx)?;
     let center = sdf_center(&root);
-    let bounds = sdf_bounds(&root);
     Ok(CompiledScene {
         root,
         center,
-        bounds,
         materials: ctx.materials,
         object_transforms: ctx.object_transforms,
     })
@@ -836,12 +935,86 @@ fn compile_sdf(
                 rhs: Box::new(rhs),
             })
         }
+        "intersect" => {
+            let lhs = compile_sdf(state, required_field(object, "lhs")?, ctx)?;
+            let rhs = compile_sdf(state, required_field(object, "rhs")?, ctx)?;
+            Ok(SdfNode::Intersect {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            })
+        }
         "sub" => {
             let lhs = compile_sdf(state, required_field(object, "lhs")?, ctx)?;
             let rhs = compile_sdf(state, required_field(object, "rhs")?, ctx)?;
             Ok(SdfNode::Subtract {
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
+            })
+        }
+        "union_round" | "union_chamfer" | "union_soft" | "intersect_round"
+        | "intersect_chamfer" | "diff_round" | "diff_chamfer" | "pipe" | "engrave" => {
+            let lhs = compile_sdf(state, required_field(object, "lhs")?, ctx)?;
+            let rhs = compile_sdf(state, required_field(object, "rhs")?, ctx)?;
+            let r = match required_field(object, "r")? {
+                Value::Number(v) => *v as f32,
+                _ => 0.0,
+            };
+            let lhs = Box::new(lhs);
+            let rhs = Box::new(rhs);
+            Ok(match type_name {
+                "union_round" => SdfNode::UnionRound { lhs, rhs, r },
+                "union_chamfer" => SdfNode::UnionChamfer { lhs, rhs, r },
+                "union_soft" => SdfNode::UnionSoft { lhs, rhs, r },
+                "intersect_round" => SdfNode::IntersectRound { lhs, rhs, r },
+                "intersect_chamfer" => SdfNode::IntersectChamfer { lhs, rhs, r },
+                "diff_round" => SdfNode::DiffRound { lhs, rhs, r },
+                "diff_chamfer" => SdfNode::DiffChamfer { lhs, rhs, r },
+                "pipe" => SdfNode::Pipe { lhs, rhs, r },
+                "engrave" => SdfNode::Engrave { lhs, rhs, r },
+                _ => unreachable!(),
+            })
+        }
+        "union_columns" | "union_stairs" | "intersect_columns" | "intersect_stairs"
+        | "diff_columns" | "diff_stairs" => {
+            let lhs = compile_sdf(state, required_field(object, "lhs")?, ctx)?;
+            let rhs = compile_sdf(state, required_field(object, "rhs")?, ctx)?;
+            let r = match required_field(object, "r")? {
+                Value::Number(v) => *v as f32,
+                _ => 0.0,
+            };
+            let n = match required_field(object, "n")? {
+                Value::Number(v) => *v as f32,
+                _ => 4.0,
+            };
+            let lhs = Box::new(lhs);
+            let rhs = Box::new(rhs);
+            Ok(match type_name {
+                "union_columns" => SdfNode::UnionColumns { lhs, rhs, r, n },
+                "union_stairs" => SdfNode::UnionStairs { lhs, rhs, r, n },
+                "intersect_columns" => SdfNode::IntersectColumns { lhs, rhs, r, n },
+                "intersect_stairs" => SdfNode::IntersectStairs { lhs, rhs, r, n },
+                "diff_columns" => SdfNode::DiffColumns { lhs, rhs, r, n },
+                "diff_stairs" => SdfNode::DiffStairs { lhs, rhs, r, n },
+                _ => unreachable!(),
+            })
+        }
+        "groove" | "tongue" => {
+            let lhs = compile_sdf(state, required_field(object, "lhs")?, ctx)?;
+            let rhs = compile_sdf(state, required_field(object, "rhs")?, ctx)?;
+            let ra = match required_field(object, "ra")? {
+                Value::Number(v) => *v as f32,
+                _ => 0.0,
+            };
+            let rb = match required_field(object, "rb")? {
+                Value::Number(v) => *v as f32,
+                _ => 0.0,
+            };
+            let lhs = Box::new(lhs);
+            let rhs = Box::new(rhs);
+            Ok(match type_name {
+                "groove" => SdfNode::Groove { lhs, rhs, ra, rb },
+                "tongue" => SdfNode::Tongue { lhs, rhs, ra, rb },
+                _ => unreachable!(),
             })
         }
         "smooth" => {
@@ -1157,14 +1330,27 @@ fn render_preview_tiled(
                                 raymarch_hit(accel, origin, dir, options, 0.0, options.max_dist);
                             let c = match hit {
                                 Some(hit) => {
-                                    let material = resolve_material_at_hit(
-                                        setup,
-                                        hit,
-                                        dir.mul(-1.0).normalize(),
-                                    );
+                                    let view_dir = dir.mul(-1.0).normalize();
                                     let bsdf_ctx =
                                         build_bsdf_context(setup, hit, dir.mul(-1.0), 1.0);
-                                    shade_preview_color(setup, &setup.lights, material, bsdf_ctx)
+                                    if let Some((a, b, t)) =
+                                        resolve_split_material_at_hit(setup, hit, view_dir)
+                                    {
+                                        let ca =
+                                            shade_preview_color(setup, &setup.lights, a, bsdf_ctx);
+                                        let cb =
+                                            shade_preview_color(setup, &setup.lights, b, bsdf_ctx);
+                                        lerp_spectrum(ca, cb, t)
+                                    } else {
+                                        let material =
+                                            resolve_material_at_hit(setup, hit, view_dir);
+                                        shade_preview_color(
+                                            setup,
+                                            &setup.lights,
+                                            material,
+                                            bsdf_ctx,
+                                        )
+                                    }
                                 }
                                 None => environment_color(setup, dir)
                                     .unwrap_or_else(|| env_radiance(&setup.path_lights)),
@@ -1288,7 +1474,29 @@ fn sdf_center(node: &SdfNode) -> Vec3 {
             let r = sdf_center(rhs);
             Vec3::new((l.x + r.x) * 0.5, (l.y + r.y) * 0.5, (l.z + r.z) * 0.5)
         }
+        SdfNode::Intersect { lhs, rhs }
+        | SdfNode::UnionRound { lhs, rhs, .. }
+        | SdfNode::UnionChamfer { lhs, rhs, .. }
+        | SdfNode::UnionColumns { lhs, rhs, .. }
+        | SdfNode::UnionStairs { lhs, rhs, .. }
+        | SdfNode::UnionSoft { lhs, rhs, .. }
+        | SdfNode::IntersectRound { lhs, rhs, .. }
+        | SdfNode::IntersectChamfer { lhs, rhs, .. }
+        | SdfNode::IntersectColumns { lhs, rhs, .. }
+        | SdfNode::IntersectStairs { lhs, rhs, .. } => {
+            let l = sdf_center(lhs);
+            let r = sdf_center(rhs);
+            Vec3::new((l.x + r.x) * 0.5, (l.y + r.y) * 0.5, (l.z + r.z) * 0.5)
+        }
         SdfNode::Subtract { lhs, .. } => sdf_center(lhs),
+        SdfNode::DiffRound { lhs, .. }
+        | SdfNode::DiffChamfer { lhs, .. }
+        | SdfNode::DiffColumns { lhs, .. }
+        | SdfNode::DiffStairs { lhs, .. }
+        | SdfNode::Pipe { lhs, .. }
+        | SdfNode::Engrave { lhs, .. }
+        | SdfNode::Groove { lhs, .. }
+        | SdfNode::Tongue { lhs, .. } => sdf_center(lhs),
         SdfNode::Smooth { base, .. } => sdf_center(base),
         SdfNode::Round { base, .. } => sdf_center(base),
     }
@@ -1335,7 +1543,9 @@ fn raymarch_hit(
             });
         }
         previous_traveled = traveled;
-        traveled += d.abs().max((options.epsilon * 0.5).max(1.0e-5));
+        let step = (d.abs() * options.step_scale.clamp(0.05, 1.0))
+            .max((options.epsilon * 0.5).max(1.0e-5));
+        traveled += step;
     }
     None
 }
@@ -1567,11 +1777,15 @@ fn build_bsdf_context(
         .copied()
         .unwrap_or_else(PrimitiveTransform::identity);
     let local_position = to_local(hit.position, transform);
-    let geometric_normal = if hit.front_face {
-        hit.normal.normalize()
-    } else {
-        hit.normal.mul(-1.0).normalize()
-    };
+    let geometric_normal =
+        resolve_surface_normal_at_hit(&setup.root, hit.position, hit.front_face, 1.0e-4)
+            .unwrap_or_else(|| {
+                if hit.front_face {
+                    hit.normal.normalize()
+                } else {
+                    hit.normal.mul(-1.0).normalize()
+                }
+            });
     let material = material_for_id(&setup.materials, hit.material_id);
     let normal = resolve_dynamic_normal(
         &setup.state,
@@ -1590,6 +1804,125 @@ fn build_bsdf_context(
         normal,
         wo: view_dir.normalize(),
         current_ior,
+    }
+}
+
+fn resolve_surface_normal_at_hit(
+    node: &SdfNode,
+    p: Vec3,
+    front_face: bool,
+    epsilon: f32,
+) -> Option<Vec3> {
+    let n = resolve_surface_normal_from_node(node, p, epsilon)?;
+    let n = if front_face { n } else { n.mul(-1.0) };
+    Some(n.normalize())
+}
+
+fn resolve_surface_normal_from_node(node: &SdfNode, p: Vec3, epsilon: f32) -> Option<Vec3> {
+    match node {
+        SdfNode::Sphere { .. }
+        | SdfNode::Box { .. }
+        | SdfNode::Cylinder { .. }
+        | SdfNode::Torus { .. }
+        | SdfNode::ExtrudePolygon { .. }
+        | SdfNode::Custom { .. } => Some(estimate_node_normal(node, p, epsilon)),
+        SdfNode::Union { lhs, rhs } => {
+            let l = sdf_distance_info(lhs, p);
+            let r = sdf_distance_info(rhs, p);
+            if l.distance <= r.distance {
+                resolve_surface_normal_from_node(lhs, p, epsilon)
+            } else {
+                resolve_surface_normal_from_node(rhs, p, epsilon)
+            }
+        }
+        SdfNode::Intersect { lhs, rhs } => {
+            let l = sdf_distance_info(lhs, p);
+            let r = sdf_distance_info(rhs, p);
+            if l.distance >= r.distance {
+                resolve_surface_normal_from_node(lhs, p, epsilon)
+            } else {
+                resolve_surface_normal_from_node(rhs, p, epsilon)
+            }
+        }
+        SdfNode::Subtract { lhs, rhs } => {
+            let l = sdf_distance_info(lhs, p);
+            let r = sdf_distance_info(rhs, p);
+            if l.distance >= -r.distance {
+                resolve_surface_normal_from_node(lhs, p, epsilon)
+            } else {
+                resolve_surface_normal_from_node(rhs, p, epsilon).map(|n| n.mul(-1.0))
+            }
+        }
+        SdfNode::UnionRound { lhs, rhs, r }
+        | SdfNode::UnionChamfer { lhs, rhs, r }
+        | SdfNode::UnionSoft { lhs, rhs, r }
+        | SdfNode::IntersectRound { lhs, rhs, r }
+        | SdfNode::IntersectChamfer { lhs, rhs, r }
+        | SdfNode::UnionColumns { lhs, rhs, r, .. }
+        | SdfNode::UnionStairs { lhs, rhs, r, .. }
+        | SdfNode::IntersectColumns { lhs, rhs, r, .. }
+        | SdfNode::IntersectStairs { lhs, rhs, r, .. } => {
+            blend_surface_normals(lhs, rhs, p, epsilon, *r, false)
+        }
+        SdfNode::DiffRound { lhs, rhs, r }
+        | SdfNode::DiffChamfer { lhs, rhs, r }
+        | SdfNode::DiffColumns { lhs, rhs, r, .. }
+        | SdfNode::DiffStairs { lhs, rhs, r, .. }
+        | SdfNode::Pipe { lhs, rhs, r }
+        | SdfNode::Engrave { lhs, rhs, r } => blend_surface_normals(lhs, rhs, p, epsilon, *r, true),
+        SdfNode::Groove { lhs, rhs, ra, rb } | SdfNode::Tongue { lhs, rhs, ra, rb } => {
+            blend_surface_normals(lhs, rhs, p, epsilon, ra.max(*rb), true)
+        }
+        SdfNode::Smooth { base, .. } | SdfNode::Round { base, .. } => {
+            resolve_surface_normal_from_node(base, p, epsilon)
+        }
+    }
+}
+
+fn blend_surface_normals(
+    lhs: &SdfNode,
+    rhs: &SdfNode,
+    p: Vec3,
+    epsilon: f32,
+    radius: f32,
+    difference_mode: bool,
+) -> Option<Vec3> {
+    let l = sdf_distance_info(lhs, p);
+    let r = sdf_distance_info(rhs, p);
+    let left = resolve_surface_normal_from_node(lhs, p, epsilon)?;
+    let mut right = resolve_surface_normal_from_node(rhs, p, epsilon)?;
+    let k = radius.abs().max(1.0e-6);
+    let t = if difference_mode {
+        right = right.mul(-1.0);
+        smoothstepf(0.0, 1.0, 0.5 + 0.5 * (((-r.distance) - l.distance) / k))
+    } else {
+        smoothstepf(0.0, 1.0, 0.5 + 0.5 * ((l.distance - r.distance) / k))
+    };
+    let n = left.mul(1.0 - t).add(right.mul(t));
+    if n.length() > 1.0e-6 {
+        Some(n.normalize())
+    } else if t < 0.5 {
+        Some(left)
+    } else {
+        Some(right)
+    }
+}
+
+fn estimate_node_normal(node: &SdfNode, p: Vec3, epsilon: f32) -> Vec3 {
+    let e = epsilon.max(1.0e-5);
+    let k1 = Vec3::new(1.0, -1.0, -1.0);
+    let k2 = Vec3::new(-1.0, -1.0, 1.0);
+    let k3 = Vec3::new(-1.0, 1.0, -1.0);
+    let k4 = Vec3::new(1.0, 1.0, 1.0);
+    let n = k1
+        .mul(sdf_distance_info(node, p.add(k1.mul(e))).distance)
+        .add(k2.mul(sdf_distance_info(node, p.add(k2.mul(e))).distance))
+        .add(k3.mul(sdf_distance_info(node, p.add(k3.mul(e))).distance))
+        .add(k4.mul(sdf_distance_info(node, p.add(k4.mul(e))).distance));
+    if n.length() > 1.0e-6 {
+        n.normalize()
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
     }
 }
 
@@ -1988,11 +2321,7 @@ fn resolve_bsdf_object_hook(
 }
 
 fn dynamic_material_name(material: MaterialKindRt, material_def_names: &[String]) -> Option<&str> {
-    let dynamic_material_id = match material {
-        MaterialKindRt::Lambert(params)
-        | MaterialKindRt::Metal(params)
-        | MaterialKindRt::Dielectric(params) => params.dynamic_material_id,
-    }?;
+    let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
     material_def_names
         .get(dynamic_material_id as usize)
         .map(String::as_str)
@@ -2068,7 +2397,8 @@ fn offset_ray_origin(position: Vec3, geometric_normal: Vec3, dir: Vec3, epsilon:
     };
     let sign = if dir.dot(n) >= 0.0 { 1.0 } else { -1.0 };
     let normal_offset = n.mul(sign * (epsilon * 16.0).max(2.0e-4));
-    let dir_offset = dir.normalize().mul((epsilon * 8.0).max(1.0e-4));
+    let dir_step = (epsilon * 8.0).max(1.0e-4);
+    let dir_offset = dir.normalize().mul(dir_step);
     position.add(normal_offset).add(dir_offset)
 }
 
@@ -2116,18 +2446,18 @@ fn apply_medium_attenuation(color: Spectrum, medium: MediumState, distance: f32)
 }
 
 fn medium_state_from_material(material: MaterialKindRt) -> Option<MediumState> {
-    let params = match material {
-        MaterialKindRt::Lambert(params)
-        | MaterialKindRt::Metal(params)
-        | MaterialKindRt::Dielectric(params) => params,
-    };
+    let params = dominant_material_params(material);
     let explicit = params.medium.map(|medium| MediumState {
         ior: medium.ior.clamp(1.0, 3.0),
         absorption_color: medium.absorption_color,
         density: medium.density.max(0.0),
     });
     explicit.or_else(|| {
-        matches!(material, MaterialKindRt::Dielectric(_)).then_some(MediumState {
+        matches!(
+            dominant_material_model(material),
+            MaterialKindTag::Dielectric
+        )
+        .then_some(MediumState {
             ior: params.ior.clamp(1.0, 3.0),
             absorption_color: Spectrum::rgb(1.0, 1.0, 1.0),
             density: 0.0,
@@ -2140,7 +2470,10 @@ fn transition_medium(
     front_face: bool,
     current: MediumState,
 ) -> MediumState {
-    if !matches!(material, MaterialKindRt::Dielectric(_)) {
+    if !matches!(
+        dominant_material_model(material),
+        MaterialKindTag::Dielectric
+    ) {
         return current;
     }
     if front_face {
@@ -2217,13 +2550,7 @@ fn spectrum_to_rgb8_reinhard(s: Spectrum) -> [u8; 3] {
     [to_u8(s.r), to_u8(s.g), to_u8(s.b)]
 }
 
-fn distance_to_aabb(p: Vec3, bounds: Aabb) -> f32 {
-    let dx = (bounds.min.x - p.x).max(0.0).max(p.x - bounds.max.x);
-    let dy = (bounds.min.y - p.y).max(0.0).max(p.y - bounds.max.y);
-    let dz = (bounds.min.z - p.z).max(0.0).max(p.z - bounds.max.z);
-    Vec3::new(dx, dy, dz).length()
-}
-
+#[allow(dead_code)]
 fn sdf_bounds(node: &SdfNode) -> Aabb {
     match node {
         SdfNode::Sphere {
@@ -2299,7 +2626,25 @@ fn sdf_bounds(node: &SdfNode) -> Aabb {
             }
         }
         SdfNode::Union { lhs, rhs } => sdf_bounds(lhs).union(sdf_bounds(rhs)),
+        SdfNode::Intersect { lhs, rhs } => sdf_bounds(lhs).union(sdf_bounds(rhs)),
         SdfNode::Subtract { lhs, .. } => sdf_bounds(lhs),
+        SdfNode::UnionRound { lhs, rhs, .. }
+        | SdfNode::UnionChamfer { lhs, rhs, .. }
+        | SdfNode::UnionColumns { lhs, rhs, .. }
+        | SdfNode::UnionStairs { lhs, rhs, .. }
+        | SdfNode::UnionSoft { lhs, rhs, .. }
+        | SdfNode::IntersectRound { lhs, rhs, .. }
+        | SdfNode::IntersectChamfer { lhs, rhs, .. }
+        | SdfNode::IntersectColumns { lhs, rhs, .. }
+        | SdfNode::IntersectStairs { lhs, rhs, .. }
+        | SdfNode::DiffRound { lhs, rhs, .. }
+        | SdfNode::DiffChamfer { lhs, rhs, .. }
+        | SdfNode::DiffColumns { lhs, rhs, .. }
+        | SdfNode::DiffStairs { lhs, rhs, .. }
+        | SdfNode::Pipe { lhs, rhs, .. }
+        | SdfNode::Engrave { lhs, rhs, .. }
+        | SdfNode::Groove { lhs, rhs, .. }
+        | SdfNode::Tongue { lhs, rhs, .. } => sdf_bounds(lhs).union(sdf_bounds(rhs)),
         SdfNode::Smooth { base, k } => sdf_bounds(base).expand(*k * 0.1),
         SdfNode::Round { base, r } => sdf_bounds(base).expand(r.abs()),
     }
@@ -2407,6 +2752,11 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             let r = sdf_distance_info(rhs, p);
             if l.distance <= r.distance { l } else { r }
         }
+        SdfNode::Intersect { lhs, rhs } => {
+            let l = sdf_distance_info(lhs, p);
+            let r = sdf_distance_info(rhs, p);
+            if l.distance >= r.distance { l } else { r }
+        }
         SdfNode::Subtract { lhs, rhs } => {
             let l = sdf_distance_info(lhs, p);
             let r = sdf_distance_info(rhs, p);
@@ -2421,6 +2771,188 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
                 }
             }
         }
+        SdfNode::UnionRound { lhs, rhs, r } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let distance = op_union_round(l.distance, r_info.distance, *r);
+            if l.distance <= r_info.distance {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo { distance, ..r_info }
+            }
+        }
+        SdfNode::UnionChamfer { lhs, rhs, r } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let distance = op_union_chamfer(l.distance, r_info.distance, *r);
+            if l.distance <= r_info.distance {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo { distance, ..r_info }
+            }
+        }
+        SdfNode::UnionColumns { lhs, rhs, r, n } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let distance = op_union_columns(l.distance, r_info.distance, *r, *n);
+            if l.distance <= r_info.distance {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo { distance, ..r_info }
+            }
+        }
+        SdfNode::UnionStairs { lhs, rhs, r, n } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let distance = op_union_stairs(l.distance, r_info.distance, *r, *n);
+            if l.distance <= r_info.distance {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo { distance, ..r_info }
+            }
+        }
+        SdfNode::UnionSoft { lhs, rhs, r } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let distance = op_union_soft(l.distance, r_info.distance, *r);
+            if l.distance <= r_info.distance {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo { distance, ..r_info }
+            }
+        }
+        SdfNode::IntersectRound { lhs, rhs, r } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let distance = op_intersect_round(l.distance, r_info.distance, *r);
+            if l.distance >= r_info.distance {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo { distance, ..r_info }
+            }
+        }
+        SdfNode::IntersectChamfer { lhs, rhs, r } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let distance = op_intersect_chamfer(l.distance, r_info.distance, *r);
+            if l.distance >= r_info.distance {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo { distance, ..r_info }
+            }
+        }
+        SdfNode::IntersectColumns { lhs, rhs, r, n } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let distance = op_intersect_columns(l.distance, r_info.distance, *r, *n);
+            if l.distance >= r_info.distance {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo { distance, ..r_info }
+            }
+        }
+        SdfNode::IntersectStairs { lhs, rhs, r, n } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let distance = op_intersect_stairs(l.distance, r_info.distance, *r, *n);
+            if l.distance >= r_info.distance {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo { distance, ..r_info }
+            }
+        }
+        SdfNode::DiffRound { lhs, rhs, r } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let rd = -r_info.distance;
+            let distance = op_diff_round(l.distance, r_info.distance, *r);
+            if l.distance >= rd {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo {
+                    distance,
+                    object_id: r_info.object_id,
+                    material_id: r_info.material_id,
+                }
+            }
+        }
+        SdfNode::DiffChamfer { lhs, rhs, r } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let rd = -r_info.distance;
+            let distance = op_diff_chamfer(l.distance, r_info.distance, *r);
+            if l.distance >= rd {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo {
+                    distance,
+                    object_id: r_info.object_id,
+                    material_id: r_info.material_id,
+                }
+            }
+        }
+        SdfNode::DiffColumns { lhs, rhs, r, n } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let rd = -r_info.distance;
+            let distance = op_diff_columns(l.distance, r_info.distance, *r, *n);
+            if l.distance >= rd {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo {
+                    distance,
+                    object_id: r_info.object_id,
+                    material_id: r_info.material_id,
+                }
+            }
+        }
+        SdfNode::DiffStairs { lhs, rhs, r, n } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            let rd = -r_info.distance;
+            let distance = op_diff_stairs(l.distance, r_info.distance, *r, *n);
+            if l.distance >= rd {
+                DistanceInfo { distance, ..l }
+            } else {
+                DistanceInfo {
+                    distance,
+                    object_id: r_info.object_id,
+                    material_id: r_info.material_id,
+                }
+            }
+        }
+        SdfNode::Pipe { lhs, rhs, r } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            DistanceInfo {
+                distance: op_pipe(l.distance, r_info.distance, *r),
+                ..l
+            }
+        }
+        SdfNode::Engrave { lhs, rhs, r } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            DistanceInfo {
+                distance: op_engrave(l.distance, r_info.distance, *r),
+                ..l
+            }
+        }
+        SdfNode::Groove { lhs, rhs, ra, rb } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            DistanceInfo {
+                distance: op_groove(l.distance, r_info.distance, *ra, *rb),
+                ..l
+            }
+        }
+        SdfNode::Tongue { lhs, rhs, ra, rb } => {
+            let l = sdf_distance_info(lhs, p);
+            let r_info = sdf_distance_info(rhs, p);
+            DistanceInfo {
+                distance: op_tongue(l.distance, r_info.distance, *ra, *rb),
+                ..l
+            }
+        }
         SdfNode::Smooth { base, k } => {
             let mut info = sdf_distance_info(base, p);
             info.distance -= *k * 0.1;
@@ -2432,6 +2964,116 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             info
         }
     }
+}
+
+fn op_union_round(a: f32, b: f32, r: f32) -> f32 {
+    let r = r.abs().max(1.0e-6);
+    let ux = (r - a).max(0.0);
+    let uy = (r - b).max(0.0);
+    r.max(a.min(b)) - (ux * ux + uy * uy).sqrt()
+}
+
+fn op_intersect_round(a: f32, b: f32, r: f32) -> f32 {
+    let r = r.abs().max(1.0e-6);
+    let ux = (r + a).max(0.0);
+    let uy = (r + b).max(0.0);
+    (-r).min(a.max(b)) + (ux * ux + uy * uy).sqrt()
+}
+
+fn op_diff_round(a: f32, b: f32, r: f32) -> f32 {
+    op_intersect_round(a, -b, r)
+}
+
+fn op_union_chamfer(a: f32, b: f32, r: f32) -> f32 {
+    a.min(b).min((a - r + b) * std::f32::consts::FRAC_1_SQRT_2)
+}
+
+fn op_intersect_chamfer(a: f32, b: f32, r: f32) -> f32 {
+    a.max(b).max((a + r + b) * std::f32::consts::FRAC_1_SQRT_2)
+}
+
+fn op_diff_chamfer(a: f32, b: f32, r: f32) -> f32 {
+    op_intersect_chamfer(a, -b, r)
+}
+
+fn repeat_centered(mut p: f32, size: f32) -> f32 {
+    let size = size.max(1.0e-6);
+    p = (p + size * 0.5).rem_euclid(size) - size * 0.5;
+    p
+}
+
+fn rotate45(x: f32, y: f32) -> (f32, f32) {
+    (
+        (x + y) * std::f32::consts::FRAC_1_SQRT_2,
+        (y - x) * std::f32::consts::FRAC_1_SQRT_2,
+    )
+}
+
+fn op_union_columns(a: f32, b: f32, r: f32, n: f32) -> f32 {
+    if a < r && b < r {
+        let n = n.round().max(2.0);
+        let column_radius = r * (2.0_f32).sqrt() / ((n - 1.0) * 2.0 + (2.0_f32).sqrt());
+        let mut x = a + column_radius;
+        let mut y = b + column_radius;
+        if (n as i32) % 2 == 1 {
+            x += column_radius;
+        }
+        (x, y) = rotate45(x, y);
+        x -= (2.0_f32).sqrt() * 0.5 * r;
+        x += -column_radius * (2.0_f32).sqrt();
+        if (n as i32) % 2 == 1 {
+            y += column_radius;
+        }
+        y = repeat_centered(y, column_radius * 2.0);
+        return (x * x + y * y).sqrt() - column_radius;
+    }
+    a.min(b)
+}
+
+fn op_intersect_columns(a: f32, b: f32, r: f32, n: f32) -> f32 {
+    -op_union_columns(-a, -b, r, n)
+}
+
+fn op_diff_columns(a: f32, b: f32, r: f32, n: f32) -> f32 {
+    -op_union_columns(-a, b, r, n)
+}
+
+fn op_union_stairs(a: f32, b: f32, r: f32, n: f32) -> f32 {
+    let n = n.round().max(1.0);
+    let s = r / n;
+    let u = b - r;
+    a.min(b)
+        .min(0.5 * (u + a + ((u - a + s).rem_euclid(2.0 * s) - s).abs()))
+}
+
+fn op_intersect_stairs(a: f32, b: f32, r: f32, n: f32) -> f32 {
+    -op_union_stairs(-a, -b, r, n)
+}
+
+fn op_diff_stairs(a: f32, b: f32, r: f32, n: f32) -> f32 {
+    -op_union_stairs(-a, b, r, n)
+}
+
+fn op_union_soft(a: f32, b: f32, r: f32) -> f32 {
+    let r = r.abs().max(1.0e-6);
+    let e = (r - (a - b).abs()).max(0.0);
+    a.min(b) - e * e * 0.25 / r
+}
+
+fn op_pipe(a: f32, b: f32, r: f32) -> f32 {
+    (a * a + b * b).sqrt() - r.abs()
+}
+
+fn op_engrave(a: f32, b: f32, r: f32) -> f32 {
+    a.max((a + r.abs() - b.abs()) * std::f32::consts::FRAC_1_SQRT_2)
+}
+
+fn op_groove(a: f32, b: f32, ra: f32, rb: f32) -> f32 {
+    a.max((a + ra.abs()).min(rb.abs() - b.abs()))
+}
+
+fn op_tongue(a: f32, b: f32, ra: f32, rb: f32) -> f32 {
+    a.min((a - ra.abs()).max(b.abs() - rb.abs()))
 }
 
 fn eval_custom_sdf_distance(runtime: &CustomSdfRuntime, p: Vec3) -> f32 {
@@ -2506,6 +3148,7 @@ fn build_render_setup(
     let (lights, path_lights) = parse_lights(state);
     RenderSetup {
         state: state.clone(),
+        root: scene.root.clone(),
         camera,
         lights,
         path_lights,
@@ -3009,7 +3652,247 @@ fn find_environment_name(state: &EvalState) -> Option<String> {
 }
 
 fn resolve_material_at_hit(setup: &RenderSetup, hit: RayHit, view_dir: Vec3) -> MaterialKindRt {
-    let material = material_for_id(&setup.materials, hit.material_id);
+    resolve_material_from_node(&setup.root, setup, hit, view_dir).unwrap_or_else(|| {
+        resolve_leaf_material(
+            material_for_id(&setup.materials, hit.material_id),
+            setup,
+            hit,
+            view_dir,
+        )
+    })
+}
+
+fn resolve_split_material_at_hit(
+    setup: &RenderSetup,
+    hit: RayHit,
+    view_dir: Vec3,
+) -> Option<(MaterialKindRt, MaterialKindRt, f32)> {
+    resolve_split_material_from_node(&setup.root, setup, hit, view_dir)
+}
+
+fn resolve_material_from_node(
+    node: &SdfNode,
+    setup: &RenderSetup,
+    hit: RayHit,
+    view_dir: Vec3,
+) -> Option<MaterialKindRt> {
+    match node {
+        SdfNode::Sphere {
+            object_id,
+            material_id,
+            ..
+        }
+        | SdfNode::Box {
+            object_id,
+            material_id,
+            ..
+        }
+        | SdfNode::Cylinder {
+            object_id,
+            material_id,
+            ..
+        }
+        | SdfNode::Torus {
+            object_id,
+            material_id,
+            ..
+        }
+        | SdfNode::ExtrudePolygon {
+            object_id,
+            material_id,
+            ..
+        }
+        | SdfNode::Custom {
+            object_id,
+            material_id,
+            ..
+        } => {
+            let leaf_hit = RayHit {
+                object_id: *object_id,
+                material_id: *material_id,
+                ..hit
+            };
+            Some(resolve_leaf_material(
+                material_for_id(&setup.materials, *material_id),
+                setup,
+                leaf_hit,
+                view_dir,
+            ))
+        }
+        SdfNode::Union { lhs, rhs } => {
+            let l = sdf_distance_info(lhs, hit.position);
+            let r = sdf_distance_info(rhs, hit.position);
+            if l.distance <= r.distance {
+                resolve_material_from_node(lhs, setup, hit, view_dir)
+            } else {
+                resolve_material_from_node(rhs, setup, hit, view_dir)
+            }
+        }
+        SdfNode::Intersect { lhs, rhs } => {
+            let l = sdf_distance_info(lhs, hit.position);
+            let r = sdf_distance_info(rhs, hit.position);
+            if l.distance >= r.distance {
+                resolve_material_from_node(lhs, setup, hit, view_dir)
+            } else {
+                resolve_material_from_node(rhs, setup, hit, view_dir)
+            }
+        }
+        SdfNode::Subtract { lhs, rhs } => {
+            let l = sdf_distance_info(lhs, hit.position);
+            let r = sdf_distance_info(rhs, hit.position);
+            if l.distance >= -r.distance {
+                resolve_material_from_node(lhs, setup, hit, view_dir)
+            } else {
+                resolve_material_from_node(rhs, setup, hit, view_dir)
+            }
+        }
+        SdfNode::UnionRound { lhs, rhs, r }
+        | SdfNode::UnionChamfer { lhs, rhs, r }
+        | SdfNode::UnionSoft { lhs, rhs, r }
+        | SdfNode::IntersectRound { lhs, rhs, r }
+        | SdfNode::IntersectChamfer { lhs, rhs, r } => {
+            blend_node_materials(lhs, rhs, setup, hit, view_dir, *r, false)
+        }
+        SdfNode::UnionColumns { lhs, rhs, r, .. }
+        | SdfNode::UnionStairs { lhs, rhs, r, .. }
+        | SdfNode::IntersectColumns { lhs, rhs, r, .. }
+        | SdfNode::IntersectStairs { lhs, rhs, r, .. } => {
+            blend_node_materials(lhs, rhs, setup, hit, view_dir, *r, false)
+        }
+        SdfNode::DiffRound { lhs, rhs, r }
+        | SdfNode::DiffChamfer { lhs, rhs, r }
+        | SdfNode::Pipe { lhs, rhs, r }
+        | SdfNode::Engrave { lhs, rhs, r } => {
+            blend_node_materials(lhs, rhs, setup, hit, view_dir, *r, true)
+        }
+        SdfNode::DiffColumns { lhs, rhs, r, .. } | SdfNode::DiffStairs { lhs, rhs, r, .. } => {
+            blend_node_materials(lhs, rhs, setup, hit, view_dir, *r, true)
+        }
+        SdfNode::Groove { lhs, rhs, ra, rb } | SdfNode::Tongue { lhs, rhs, ra, rb } => {
+            blend_node_materials(lhs, rhs, setup, hit, view_dir, ra.max(*rb), true)
+        }
+        SdfNode::Smooth { base, .. } | SdfNode::Round { base, .. } => {
+            resolve_material_from_node(base, setup, hit, view_dir)
+        }
+    }
+}
+
+fn resolve_split_material_from_node(
+    node: &SdfNode,
+    setup: &RenderSetup,
+    hit: RayHit,
+    view_dir: Vec3,
+) -> Option<(MaterialKindRt, MaterialKindRt, f32)> {
+    match node {
+        SdfNode::Union { lhs, rhs } => {
+            let l = sdf_distance_info(lhs, hit.position);
+            let r = sdf_distance_info(rhs, hit.position);
+            if l.distance <= r.distance {
+                resolve_split_material_from_node(lhs, setup, hit, view_dir)
+            } else {
+                resolve_split_material_from_node(rhs, setup, hit, view_dir)
+            }
+        }
+        SdfNode::Intersect { lhs, rhs } => {
+            let l = sdf_distance_info(lhs, hit.position);
+            let r = sdf_distance_info(rhs, hit.position);
+            if l.distance >= r.distance {
+                resolve_split_material_from_node(lhs, setup, hit, view_dir)
+            } else {
+                resolve_split_material_from_node(rhs, setup, hit, view_dir)
+            }
+        }
+        SdfNode::Subtract { lhs, rhs } => {
+            let l = sdf_distance_info(lhs, hit.position);
+            let r = sdf_distance_info(rhs, hit.position);
+            if l.distance >= -r.distance {
+                resolve_split_material_from_node(lhs, setup, hit, view_dir)
+            } else {
+                resolve_split_material_from_node(rhs, setup, hit, view_dir)
+            }
+        }
+        SdfNode::UnionRound { lhs, rhs, r }
+        | SdfNode::UnionChamfer { lhs, rhs, r }
+        | SdfNode::UnionSoft { lhs, rhs, r }
+        | SdfNode::IntersectRound { lhs, rhs, r }
+        | SdfNode::IntersectChamfer { lhs, rhs, r } => {
+            split_node_materials(lhs, rhs, setup, hit, view_dir, *r, false)
+        }
+        SdfNode::UnionColumns { lhs, rhs, r, .. }
+        | SdfNode::UnionStairs { lhs, rhs, r, .. }
+        | SdfNode::IntersectColumns { lhs, rhs, r, .. }
+        | SdfNode::IntersectStairs { lhs, rhs, r, .. } => {
+            split_node_materials(lhs, rhs, setup, hit, view_dir, *r, false)
+        }
+        SdfNode::DiffRound { lhs, rhs, r }
+        | SdfNode::DiffChamfer { lhs, rhs, r }
+        | SdfNode::Pipe { lhs, rhs, r }
+        | SdfNode::Engrave { lhs, rhs, r } => {
+            split_node_materials(lhs, rhs, setup, hit, view_dir, *r, true)
+        }
+        SdfNode::DiffColumns { lhs, rhs, r, .. } | SdfNode::DiffStairs { lhs, rhs, r, .. } => {
+            split_node_materials(lhs, rhs, setup, hit, view_dir, *r, true)
+        }
+        SdfNode::Groove { lhs, rhs, ra, rb } | SdfNode::Tongue { lhs, rhs, ra, rb } => {
+            split_node_materials(lhs, rhs, setup, hit, view_dir, ra.max(*rb), true)
+        }
+        SdfNode::Smooth { base, .. } | SdfNode::Round { base, .. } => {
+            resolve_split_material_from_node(base, setup, hit, view_dir)
+        }
+        _ => None,
+    }
+}
+
+fn blend_node_materials(
+    lhs: &SdfNode,
+    rhs: &SdfNode,
+    setup: &RenderSetup,
+    hit: RayHit,
+    view_dir: Vec3,
+    radius: f32,
+    difference_mode: bool,
+) -> Option<MaterialKindRt> {
+    let l = sdf_distance_info(lhs, hit.position);
+    let r = sdf_distance_info(rhs, hit.position);
+    let left = resolve_material_from_node(lhs, setup, hit, view_dir)?;
+    let right = resolve_material_from_node(rhs, setup, hit, view_dir)?;
+    let k = radius.abs().max(1.0e-6);
+    let t = if difference_mode {
+        smoothstepf(0.0, 1.0, 0.5 + 0.5 * (((-r.distance) - l.distance) / k))
+    } else {
+        smoothstepf(0.0, 1.0, 0.5 + 0.5 * ((l.distance - r.distance) / k))
+    };
+    Some(blend_materials(left, right, t))
+}
+
+fn split_node_materials(
+    lhs: &SdfNode,
+    rhs: &SdfNode,
+    setup: &RenderSetup,
+    hit: RayHit,
+    view_dir: Vec3,
+    radius: f32,
+    difference_mode: bool,
+) -> Option<(MaterialKindRt, MaterialKindRt, f32)> {
+    let l = sdf_distance_info(lhs, hit.position);
+    let r = sdf_distance_info(rhs, hit.position);
+    let left = resolve_material_from_node(lhs, setup, hit, view_dir)?;
+    let right = resolve_material_from_node(rhs, setup, hit, view_dir)?;
+    let k = radius.abs().max(1.0e-6);
+    let t = if difference_mode {
+        smoothstepf(0.0, 1.0, 0.5 + 0.5 * (((-r.distance) - l.distance) / k))
+    } else {
+        smoothstepf(0.0, 1.0, 0.5 + 0.5 * ((l.distance - r.distance) / k))
+    };
+    Some((left, right, t))
+}
+
+fn resolve_leaf_material(
+    material: MaterialKindRt,
+    setup: &RenderSetup,
+    hit: RayHit,
+    view_dir: Vec3,
+) -> MaterialKindRt {
     let transform = setup
         .object_transforms
         .get(hit.object_id as usize)
@@ -3133,6 +4016,140 @@ fn resolve_material_at_hit(setup: &RenderSetup, hit: RayHit, view_dir: Vec3) -> 
                 .max(0.0) as f32;
             MaterialKindRt::Dielectric(params)
         }
+        MaterialKindRt::Blend(blend) => MaterialKindRt::Blend(blend),
+    }
+}
+
+fn smoothstepf(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0).max(1.0e-6)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn blend_medium(a: Option<MediumParams>, b: Option<MediumParams>, t: f32) -> Option<MediumParams> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(MediumParams {
+            ior: a.ior + (b.ior - a.ior) * t,
+            absorption_color: lerp_spectrum(a.absorption_color, b.absorption_color, t),
+            density: a.density + (b.density - a.density) * t,
+        }),
+        (Some(a), None) => {
+            if t < 0.5 {
+                Some(a)
+            } else {
+                None
+            }
+        }
+        (None, Some(b)) => {
+            if t >= 0.5 {
+                Some(b)
+            } else {
+                None
+            }
+        }
+        (None, None) => None,
+    }
+}
+
+fn blend_subsurface(
+    a: Option<SubsurfaceParams>,
+    b: Option<SubsurfaceParams>,
+    t: f32,
+) -> Option<SubsurfaceParams> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(SubsurfaceParams {
+            color: lerp_spectrum(a.color, b.color, t),
+            radius: ApiVec3::new(
+                a.radius.x + (b.radius.x - a.radius.x) * t,
+                a.radius.y + (b.radius.y - a.radius.y) * t,
+                a.radius.z + (b.radius.z - a.radius.z) * t,
+            ),
+            anisotropy: a.anisotropy + (b.anisotropy - a.anisotropy) * t,
+            scale: a.scale + (b.scale - a.scale) * t,
+        }),
+        (Some(a), None) => {
+            if t < 0.5 {
+                Some(a)
+            } else {
+                None
+            }
+        }
+        (None, Some(b)) => {
+            if t >= 0.5 {
+                Some(b)
+            } else {
+                None
+            }
+        }
+        (None, None) => None,
+    }
+}
+
+fn blend_params(mut a: MaterialParams, b: MaterialParams, t: f32) -> MaterialParams {
+    a.color = lerp_spectrum(a.color, b.color, t);
+    a.roughness = a.roughness + (b.roughness - a.roughness) * t;
+    a.ior = a.ior + (b.ior - a.ior) * t;
+    a.thin_walled = if t < 0.5 {
+        a.thin_walled
+    } else {
+        b.thin_walled
+    };
+    a.emission_color = lerp_spectrum(a.emission_color, b.emission_color, t);
+    a.emission_strength = a.emission_strength + (b.emission_strength - a.emission_strength) * t;
+    a.medium = blend_medium(a.medium, b.medium, t);
+    a.subsurface = blend_subsurface(a.subsurface, b.subsurface, t);
+    a.pattern = None;
+    a.dynamic_material_id = None;
+    a
+}
+
+fn blend_materials(a: MaterialKindRt, b: MaterialKindRt, t: f32) -> MaterialKindRt {
+    match (a, b) {
+        (MaterialKindRt::Lambert(a), MaterialKindRt::Lambert(b)) => {
+            MaterialKindRt::Lambert(blend_params(a, b, t))
+        }
+        (MaterialKindRt::Metal(a), MaterialKindRt::Metal(b)) => {
+            MaterialKindRt::Metal(blend_params(a, b, t))
+        }
+        (MaterialKindRt::Dielectric(a), MaterialKindRt::Dielectric(b)) => {
+            MaterialKindRt::Dielectric(blend_params(a, b, t))
+        }
+        (a, b) => MaterialKindRt::Blend(BlendedMaterial {
+            a_model: dominant_material_model(a),
+            a_params: dominant_material_params(a),
+            b_model: dominant_material_model(b),
+            b_params: dominant_material_params(b),
+            t: t.clamp(0.0, 1.0),
+        }),
+    }
+}
+
+fn dominant_material_model(material: MaterialKindRt) -> MaterialKindTag {
+    match material {
+        MaterialKindRt::Lambert(_) => MaterialKindTag::Lambert,
+        MaterialKindRt::Metal(_) => MaterialKindTag::Metal,
+        MaterialKindRt::Dielectric(_) => MaterialKindTag::Dielectric,
+        MaterialKindRt::Blend(blend) => {
+            if blend.t < 0.5 {
+                blend.a_model
+            } else {
+                blend.b_model
+            }
+        }
+    }
+}
+
+fn dominant_material_params(material: MaterialKindRt) -> MaterialParams {
+    match material {
+        MaterialKindRt::Lambert(params)
+        | MaterialKindRt::Metal(params)
+        | MaterialKindRt::Dielectric(params) => params,
+        MaterialKindRt::Blend(blend) => {
+            if blend.t < 0.5 {
+                blend.a_params
+            } else {
+                blend.b_params
+            }
+        }
     }
 }
 
@@ -3144,11 +4161,7 @@ fn resolve_dynamic_color(
     local_position: Vec3,
     view_dir: Vec3,
 ) -> Option<Spectrum> {
-    let dynamic_material_id = match material {
-        MaterialKindRt::Lambert(params)
-        | MaterialKindRt::Metal(params)
-        | MaterialKindRt::Dielectric(params) => params.dynamic_material_id,
-    }?;
+    let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
     let name = material_def_names.get(dynamic_material_id as usize)?;
     let ctx = make_shading_context(hit, local_position, view_dir);
     let value = eval_material_function(state, name, "color", ctx).ok()?;
@@ -3164,11 +4177,7 @@ fn resolve_dynamic_spectrum(
     view_dir: Vec3,
     function_name: &str,
 ) -> Option<Spectrum> {
-    let dynamic_material_id = match material {
-        MaterialKindRt::Lambert(params)
-        | MaterialKindRt::Metal(params)
-        | MaterialKindRt::Dielectric(params) => params.dynamic_material_id,
-    }?;
+    let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
     let name = material_def_names.get(dynamic_material_id as usize)?;
     let ctx = make_shading_context(hit, local_position, view_dir);
     let value = eval_material_function(state, name, function_name, ctx).ok()?;
@@ -3184,11 +4193,7 @@ fn resolve_dynamic_number(
     view_dir: Vec3,
     function_name: &str,
 ) -> Option<f64> {
-    let dynamic_material_id = match material {
-        MaterialKindRt::Lambert(params)
-        | MaterialKindRt::Metal(params)
-        | MaterialKindRt::Dielectric(params) => params.dynamic_material_id,
-    }?;
+    let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
     let name = material_def_names.get(dynamic_material_id as usize)?;
     let ctx = make_shading_context(hit, local_position, view_dir);
     let value = eval_material_function(state, name, function_name, ctx).ok()?;
@@ -3207,11 +4212,7 @@ fn resolve_dynamic_normal(
     view_dir: Vec3,
     geometric_normal: Vec3,
 ) -> Option<Vec3> {
-    let dynamic_material_id = match material {
-        MaterialKindRt::Lambert(params)
-        | MaterialKindRt::Metal(params)
-        | MaterialKindRt::Dielectric(params) => params.dynamic_material_id,
-    }?;
+    let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
     let name = material_def_names.get(dynamic_material_id as usize)?;
     let ctx = make_shading_context_with_normal(hit, local_position, view_dir, geometric_normal);
     let value = eval_material_function(state, name, "normal", ctx).ok()?;
@@ -3234,11 +4235,7 @@ fn resolve_dynamic_object(
     view_dir: Vec3,
     function_name: &str,
 ) -> Option<Value> {
-    let dynamic_material_id = match material {
-        MaterialKindRt::Lambert(params)
-        | MaterialKindRt::Metal(params)
-        | MaterialKindRt::Dielectric(params) => params.dynamic_material_id,
-    }?;
+    let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
     let name = material_def_names.get(dynamic_material_id as usize)?;
     let ctx = make_shading_context(hit, local_position, view_dir);
     eval_material_function(state, name, function_name, ctx).ok()
@@ -3569,6 +4566,7 @@ mod tests {
         render_fields.insert("max_steps".to_string(), Value::Number(180.0));
         render_fields.insert("max_dist".to_string(), Value::Number(60.0));
         render_fields.insert("epsilon".to_string(), Value::Number(0.0005));
+        render_fields.insert("step_scale".to_string(), Value::Number(0.7));
         render_fields.insert("camera_z".to_string(), Value::Number(9.0));
         render_fields.insert("fov_y".to_string(), Value::Number(50.0));
         render_fields.insert("spp".to_string(), Value::Number(64.0));
@@ -3602,6 +4600,7 @@ mod tests {
         assert_eq!(settings.max_steps, Some(180));
         assert_eq!(settings.max_dist, Some(60.0));
         assert_eq!(settings.epsilon, Some(0.0005));
+        assert_eq!(settings.step_scale, Some(0.7));
         assert_eq!(settings.camera_z, Some(9.0));
         assert_eq!(settings.fov_y_degrees, Some(50.0));
         assert_eq!(settings.trace_spp, Some(64));
