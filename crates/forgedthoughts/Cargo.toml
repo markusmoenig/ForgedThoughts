@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+cranelift-codegen = "0.117"
+cranelift-frontend = "0.117"
+cranelift-jit = "0.117"
+cranelift-module = "0.117"
+cranelift-native = "0.117"
 image = { version = "0.25", default-features = false, features = ["png"] }
 rayon = "1.10"
 thiserror = "1.0"

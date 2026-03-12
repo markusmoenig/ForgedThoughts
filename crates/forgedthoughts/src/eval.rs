@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, env};
 
 use thiserror::Error;
 
@@ -6,6 +6,11 @@ use crate::ast::{
     BinaryOp, EnvironmentDef, Expr, FunctionDef, MaterialDef, MaterialFunctionStatement,
     MaterialStatement, Program, SdfDef, SdfFunctionStatement, SdfStatement, Statement, UnaryOp,
 };
+use crate::jit::{
+    JitCapture, JitFunction, JitSdfDistanceFunction, JitVec3Function, compile_jit_function,
+    compile_material_vec3_function, compile_sdf_distance_function,
+};
+use crate::vm::{VmFunction, VmInstruction, compile_function};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -40,6 +45,15 @@ pub struct Binding {
 pub struct EvalState {
     pub bindings: HashMap<String, Binding>,
     pub function_defs: HashMap<String, FunctionDef>,
+    pub compiled_functions: HashMap<String, VmFunction>,
+    pub jitted_functions: HashMap<String, JitFunction>,
+    pub compiled_material_functions: HashMap<String, HashMap<String, VmFunction>>,
+    pub jitted_material_functions: HashMap<String, HashMap<String, (Vec<String>, JitFunction)>>,
+    pub jitted_material_vec3_functions:
+        HashMap<String, HashMap<String, (Vec<JitCapture>, JitVec3Function)>>,
+    pub jitted_sdf_distance_functions: HashMap<String, JitSdfDistanceFunction>,
+    pub jitted_sdf_functions: HashMap<String, HashMap<String, JitFunction>>,
+    pub compiled_sdf_functions: HashMap<String, HashMap<String, VmFunction>>,
     pub material_defs: HashMap<String, MaterialDef>,
     pub sdf_defs: HashMap<String, SdfDef>,
     pub environment_defs: HashMap<String, EnvironmentDef>,
@@ -90,12 +104,21 @@ struct MaterialRuntime<'a> {
 struct SdfRuntime<'a> {
     def: &'a SdfDef,
     depth: usize,
+    overrides: Option<&'a ObjectValue>,
 }
 
 pub fn eval_program(program: &Program) -> Result<EvalState, EvalError> {
     let mut state = EvalState {
         bindings: HashMap::new(),
         function_defs: HashMap::new(),
+        compiled_functions: HashMap::new(),
+        jitted_functions: HashMap::new(),
+        compiled_material_functions: HashMap::new(),
+        jitted_material_functions: HashMap::new(),
+        jitted_material_vec3_functions: HashMap::new(),
+        jitted_sdf_distance_functions: HashMap::new(),
+        jitted_sdf_functions: HashMap::new(),
+        compiled_sdf_functions: HashMap::new(),
         material_defs: HashMap::new(),
         sdf_defs: HashMap::new(),
         environment_defs: HashMap::new(),
@@ -106,6 +129,13 @@ pub fn eval_program(program: &Program) -> Result<EvalState, EvalError> {
     }
 
     Ok(state)
+}
+
+fn jit_enabled() -> bool {
+    !matches!(
+        env::var("FORGEDTHOUGHTS_DISABLE_JIT").ok().as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
 }
 
 fn eval_statement(stmt: &Statement, state: &mut EvalState) -> Result<(), EvalError> {
@@ -133,14 +163,99 @@ fn eval_statement(stmt: &Statement, state: &mut EvalState) -> Result<(), EvalErr
         }
         Statement::FunctionDef(def) => {
             state.function_defs.insert(def.name.clone(), def.clone());
+            if let Some(compiled) = compile_function(def) {
+                if jit_enabled()
+                    && let Some(jitted) = compile_jit_function(&def.name, &compiled)
+                {
+                    state.jitted_functions.insert(def.name.clone(), jitted);
+                }
+                state.compiled_functions.insert(def.name.clone(), compiled);
+            }
             Ok(())
         }
         Statement::MaterialDef(def) => {
             state.material_defs.insert(def.name.clone(), def.clone());
+            let mut compiled = HashMap::new();
+            let mut jitted = HashMap::new();
+            let mut jitted_vec3 = HashMap::new();
+            for stmt in &def.statements {
+                if let MaterialStatement::Function { name, params, body } = stmt
+                    && let Some(vm) = crate::vm::compile_function_parts(params, body)
+                {
+                    if jit_enabled()
+                        && let Some(rewritten) = rewrite_material_body_for_jit(body)
+                        && let Some(rewritten_vm) =
+                            crate::vm::compile_function_parts(params, &rewritten)
+                    {
+                        let capture_names = collect_vm_capture_names(&rewritten_vm);
+                        let jit_vm = VmFunction {
+                            params: capture_names.clone(),
+                            code: rewritten_vm.code.clone(),
+                        };
+                        if let Some(compiled_jit) =
+                            compile_jit_function(&format!("{}_{}", def.name, name), &jit_vm)
+                        {
+                            jitted.insert(name.clone(), (capture_names, compiled_jit));
+                        }
+                    }
+                    compiled.insert(name.clone(), vm);
+                }
+                if jit_enabled()
+                    && let MaterialStatement::Function { name, .. } = stmt
+                    && let Some(compiled_jit) = compile_material_vec3_function(def, name)
+                {
+                    jitted_vec3.insert(name.clone(), compiled_jit);
+                }
+            }
+            if !compiled.is_empty() {
+                state
+                    .compiled_material_functions
+                    .insert(def.name.clone(), compiled);
+            }
+            if !jitted.is_empty() {
+                state
+                    .jitted_material_functions
+                    .insert(def.name.clone(), jitted);
+            }
+            if !jitted_vec3.is_empty() {
+                state
+                    .jitted_material_vec3_functions
+                    .insert(def.name.clone(), jitted_vec3);
+            }
             Ok(())
         }
         Statement::SdfDef(def) => {
             state.sdf_defs.insert(def.name.clone(), def.clone());
+            if jit_enabled()
+                && let Some(distance_jit) = compile_sdf_distance_function(def)
+            {
+                state
+                    .jitted_sdf_distance_functions
+                    .insert(def.name.clone(), distance_jit);
+            }
+            let mut compiled = HashMap::new();
+            let mut jitted = HashMap::new();
+            for stmt in &def.statements {
+                if let SdfStatement::Function { name, params, body } = stmt
+                    && let Some(vm) = crate::vm::compile_function_parts(params, body)
+                {
+                    if jit_enabled()
+                        && let Some(compiled_jit) =
+                            compile_jit_function(&format!("{}_{}", def.name, name), &vm)
+                    {
+                        jitted.insert(name.clone(), compiled_jit);
+                    }
+                    compiled.insert(name.clone(), vm);
+                }
+            }
+            if !compiled.is_empty() {
+                state
+                    .compiled_sdf_functions
+                    .insert(def.name.clone(), compiled);
+            }
+            if !jitted.is_empty() {
+                state.jitted_sdf_functions.insert(def.name.clone(), jitted);
+            }
             Ok(())
         }
         Statement::EnvironmentDef(def) => {
@@ -251,6 +366,7 @@ fn eval_expr_in_material_scope(
                     )?,
                 );
             }
+            augment_object_literal_fields(state, type_name, &mut resolved_fields)?;
             Ok(Value::Object(ObjectValue {
                 type_name: Some(type_name.clone()),
                 fields: resolved_fields,
@@ -311,6 +427,34 @@ fn flatten_member_expr(expr: &Expr) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn augment_object_literal_fields(
+    state: &EvalState,
+    type_name: &str,
+    fields: &mut HashMap<String, Value>,
+) -> Result<(), EvalError> {
+    if !state.sdf_defs.contains_key(type_name) {
+        return Ok(());
+    }
+
+    let overrides = ObjectValue {
+        type_name: Some(type_name.to_string()),
+        fields: fields.clone(),
+    };
+    if !fields.contains_key("__bounds")
+        && let Ok(value) =
+            eval_sdf_zero_arg_function_with_overrides(state, type_name, "bounds", Some(&overrides))
+    {
+        fields.insert("__bounds".to_string(), value);
+    }
+    if !fields.contains_key("anchors")
+        && let Ok(value) =
+            eval_sdf_binding_with_overrides(state, type_name, "anchors", Some(&overrides))
+    {
+        fields.insert("anchors".to_string(), value);
+    }
+    Ok(())
 }
 
 fn resolve_binding_path(
@@ -1087,6 +1231,50 @@ pub fn eval_material_function_with_overrides(
     ctx_value: Value,
     overrides: Option<&ObjectValue>,
 ) -> Result<Value, EvalError> {
+    if let Some((captures, jitted)) = state
+        .jitted_material_vec3_functions
+        .get(material_name)
+        .and_then(|functions| functions.get(function_name))
+    {
+        let def = state
+            .material_defs
+            .get(material_name)
+            .ok_or_else(|| EvalError::UndefinedIdentifier(material_name.to_string()))?;
+        let mut locals = material_override_locals(overrides);
+        locals.insert("ctx".to_string(), ctx_value.clone());
+        populate_material_locals(state, def, overrides, 0, &mut locals)?;
+        let args = numeric_capture_args(captures, &locals)?;
+        if let Some(value) = jitted.invoke(&args) {
+            return Ok(vec3_value(value));
+        }
+    }
+    if let Some((capture_names, jitted)) = state
+        .jitted_material_functions
+        .get(material_name)
+        .and_then(|functions| functions.get(function_name))
+    {
+        let def = state
+            .material_defs
+            .get(material_name)
+            .ok_or_else(|| EvalError::UndefinedIdentifier(material_name.to_string()))?;
+        let mut locals = material_override_locals(overrides);
+        locals.insert("ctx".to_string(), ctx_value.clone());
+        populate_material_locals(state, def, overrides, 0, &mut locals)?;
+        let mut flattened = HashMap::new();
+        for (name, value) in &locals {
+            flatten_numeric_locals(name, value, &mut flattened);
+        }
+        let mut args = Vec::with_capacity(capture_names.len());
+        for name in capture_names {
+            let value = flattened
+                .get(name)
+                .ok_or_else(|| EvalError::UndefinedIdentifier(name.clone()))?;
+            args.push(numeric_arg(value)?);
+        }
+        if let Some(value) = jitted.invoke(&args) {
+            return Ok(Value::Number(value));
+        }
+    }
     let def = state
         .material_defs
         .get(material_name)
@@ -1101,6 +1289,21 @@ pub fn eval_material_function_with_overrides(
             _ => None,
         })
         .ok_or_else(|| EvalError::UndefinedIdentifier(function_name.to_string()))?;
+    if let Some(compiled) = state
+        .compiled_material_functions
+        .get(material_name)
+        .and_then(|functions| functions.get(function_name))
+    {
+        return execute_material_vm_function(
+            state,
+            material_name,
+            compiled,
+            &params,
+            vec![ctx_value],
+            overrides,
+            0,
+        );
+    }
     eval_material_function_body(state, def, &params, &body, &[ctx_value], overrides, 0)
 }
 
@@ -1210,6 +1413,29 @@ pub fn eval_sdf_function(
     function_name: &str,
     arg_value: Value,
 ) -> Result<Value, EvalError> {
+    eval_sdf_function_with_overrides(state, sdf_name, function_name, arg_value, None)
+}
+
+pub fn eval_sdf_function_with_overrides(
+    state: &EvalState,
+    sdf_name: &str,
+    function_name: &str,
+    arg_value: Value,
+    overrides: Option<&ObjectValue>,
+) -> Result<Value, EvalError> {
+    if function_name == "distance"
+        && let Some(jitted) = state.jitted_sdf_distance_functions.get(sdf_name)
+        && let Some(p) = numeric_vec3(&arg_value)
+    {
+        let mut captures = Vec::with_capacity(jitted.capture_names.len());
+        for name in &jitted.capture_names {
+            let value = eval_sdf_binding_with_overrides(state, sdf_name, name, overrides)?;
+            captures.push(numeric_arg(&value)?);
+        }
+        if let Some(value) = jitted.invoke(p, &captures) {
+            return Ok(Value::Number(value));
+        }
+    }
     let def = state
         .sdf_defs
         .get(sdf_name)
@@ -1224,13 +1450,37 @@ pub fn eval_sdf_function(
             _ => None,
         })
         .ok_or_else(|| EvalError::UndefinedIdentifier(function_name.to_string()))?;
-    eval_sdf_function_body(state, def, &params, &body, &[arg_value], 0)
+    if let Some(compiled) = state
+        .compiled_sdf_functions
+        .get(sdf_name)
+        .and_then(|functions| functions.get(function_name))
+    {
+        return execute_sdf_vm_function(
+            state,
+            sdf_name,
+            function_name,
+            compiled,
+            vec![arg_value],
+            overrides,
+            0,
+        );
+    }
+    eval_sdf_function_body(state, def, &params, &body, &[arg_value], overrides, 0)
 }
 
 pub fn eval_sdf_zero_arg_function(
     state: &EvalState,
     sdf_name: &str,
     function_name: &str,
+) -> Result<Value, EvalError> {
+    eval_sdf_zero_arg_function_with_overrides(state, sdf_name, function_name, None)
+}
+
+pub fn eval_sdf_zero_arg_function_with_overrides(
+    state: &EvalState,
+    sdf_name: &str,
+    function_name: &str,
+    overrides: Option<&ObjectValue>,
 ) -> Result<Value, EvalError> {
     let def = state
         .sdf_defs
@@ -1249,7 +1499,228 @@ pub fn eval_sdf_zero_arg_function(
     if !params.is_empty() {
         return Err(EvalError::UnsupportedCall);
     }
-    eval_sdf_function_body(state, def, &params, &body, &[], 0)
+    if let Some(compiled) = state
+        .compiled_sdf_functions
+        .get(sdf_name)
+        .and_then(|functions| functions.get(function_name))
+    {
+        return execute_sdf_vm_function(
+            state,
+            sdf_name,
+            function_name,
+            compiled,
+            Vec::new(),
+            overrides,
+            0,
+        );
+    }
+    eval_sdf_function_body(state, def, &params, &body, &[], overrides, 0)
+}
+
+fn populate_sdf_locals(
+    state: &EvalState,
+    def: &SdfDef,
+    overrides: Option<&ObjectValue>,
+    depth: usize,
+    locals: &mut HashMap<String, Value>,
+) -> Result<(), EvalError> {
+    for stmt in &def.statements {
+        match stmt {
+            SdfStatement::Binding { name, expr } => {
+                let value = if let Some(value) = sdf_override_value(overrides, name) {
+                    value.clone()
+                } else {
+                    eval_sdf_expr(
+                        expr,
+                        state,
+                        locals,
+                        Some(SdfRuntime {
+                            def,
+                            depth,
+                            overrides,
+                        }),
+                    )?
+                };
+                locals.insert(name.clone(), value);
+            }
+            SdfStatement::Function { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn execute_sdf_vm_function(
+    state: &EvalState,
+    sdf_name: &str,
+    function_name: &str,
+    function: &VmFunction,
+    arg_values: Vec<Value>,
+    overrides: Option<&ObjectValue>,
+    depth: usize,
+) -> Result<Value, EvalError> {
+    if arg_values.len() != function.params.len() {
+        return Err(EvalError::UnsupportedCall);
+    }
+    if depth >= 32 {
+        return Err(EvalError::MaterialCallDepthExceeded);
+    }
+    let def = state
+        .sdf_defs
+        .get(sdf_name)
+        .ok_or_else(|| EvalError::UndefinedIdentifier(sdf_name.to_string()))?;
+    let mut locals = sdf_override_locals(overrides);
+    for (param, value) in function.params.iter().zip(arg_values.iter()) {
+        locals.insert(param.clone(), value.clone());
+    }
+    populate_sdf_locals(state, def, overrides, depth, &mut locals)?;
+    if let Some(jitted) = state
+        .jitted_sdf_functions
+        .get(sdf_name)
+        .and_then(|functions| functions.get(function_name))
+        && let Some(args) = numeric_vm_args(function, &locals)
+        && let Some(value) = jitted.invoke(&args)
+    {
+        return Ok(Value::Number(value));
+    }
+
+    let mut stack = Vec::new();
+    for instruction in &function.code {
+        match instruction {
+            VmInstruction::PushNumber(v) => stack.push(Value::Number(*v)),
+            VmInstruction::PushString(v) => stack.push(Value::String(v.clone())),
+            VmInstruction::LoadName(name) => {
+                if let Some(value) = locals.get(name) {
+                    stack.push(value.clone());
+                } else if let Some(value) = builtin_symbol_value(name) {
+                    stack.push(value);
+                } else if let Some(binding) = state.bindings.get(name) {
+                    stack.push(binding.value.clone());
+                } else {
+                    return Err(EvalError::UndefinedIdentifier(name.clone()));
+                }
+            }
+            VmInstruction::BuildArray(count) => {
+                if stack.len() < *count {
+                    return Err(EvalError::UnsupportedCall);
+                }
+                let start = stack.len() - *count;
+                let values = stack.drain(start..).collect::<Vec<_>>();
+                stack.push(Value::Array(values));
+            }
+            VmInstruction::BuildObject {
+                type_name,
+                field_names,
+            } => {
+                if stack.len() < field_names.len() {
+                    return Err(EvalError::UnsupportedCall);
+                }
+                let start = stack.len() - field_names.len();
+                let values = stack.drain(start..).collect::<Vec<_>>();
+                let mut fields = HashMap::new();
+                for (name, value) in field_names.iter().cloned().zip(values.into_iter()) {
+                    fields.insert(name, value);
+                }
+                augment_object_literal_fields(state, type_name, &mut fields)?;
+                stack.push(Value::Object(ObjectValue {
+                    type_name: Some(type_name.clone()),
+                    fields,
+                }));
+            }
+            VmInstruction::LoadMember(field) => {
+                let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                let obj = as_object(&value)?;
+                let member = obj
+                    .fields
+                    .get(field)
+                    .cloned()
+                    .ok_or_else(|| EvalError::UndefinedIdentifier(field.clone()))?;
+                stack.push(member);
+            }
+            VmInstruction::Unary(op) => {
+                let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                stack.push(eval_unary(*op, value)?);
+            }
+            VmInstruction::Binary(op) => {
+                let rhs = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                let lhs = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                stack.push(eval_binary(lhs, *op, rhs)?);
+            }
+            VmInstruction::CallNamed { name, argc } => {
+                if stack.len() < *argc {
+                    return Err(EvalError::UnsupportedCall);
+                }
+                let start = stack.len() - *argc;
+                let args = stack.drain(start..).collect::<Vec<_>>();
+                if let Some(compiled) = state
+                    .compiled_sdf_functions
+                    .get(sdf_name)
+                    .and_then(|functions| functions.get(name))
+                {
+                    stack.push(execute_sdf_vm_function(
+                        state,
+                        sdf_name,
+                        name,
+                        compiled,
+                        args,
+                        overrides,
+                        depth + 1,
+                    )?);
+                } else {
+                    stack.push(eval_named_vm_call(state, name, &args, depth)?);
+                }
+            }
+            VmInstruction::StoreLocal(name) => {
+                let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                locals.insert(name.clone(), value);
+            }
+            VmInstruction::Return => return stack.pop().ok_or(EvalError::UnsupportedCall),
+        }
+    }
+
+    Err(EvalError::UndefinedIdentifier(
+        "vm sdf function missing return".to_string(),
+    ))
+}
+
+fn eval_sdf_binding_with_overrides(
+    state: &EvalState,
+    sdf_name: &str,
+    binding_name: &str,
+    overrides: Option<&ObjectValue>,
+) -> Result<Value, EvalError> {
+    let def = state
+        .sdf_defs
+        .get(sdf_name)
+        .ok_or_else(|| EvalError::UndefinedIdentifier(sdf_name.to_string()))?;
+    let mut locals = sdf_override_locals(overrides);
+
+    for stmt in &def.statements {
+        match stmt {
+            SdfStatement::Binding { name, expr } => {
+                let value = if let Some(value) = sdf_override_value(overrides, name) {
+                    value.clone()
+                } else {
+                    eval_sdf_expr(
+                        expr,
+                        state,
+                        &locals,
+                        Some(SdfRuntime {
+                            def,
+                            depth: 0,
+                            overrides,
+                        }),
+                    )?
+                };
+                if name == binding_name {
+                    return Ok(value);
+                }
+                locals.insert(name.clone(), value);
+            }
+            SdfStatement::Function { .. } => {}
+        }
+    }
+
+    Err(EvalError::UndefinedIdentifier(binding_name.to_string()))
 }
 
 fn eval_sdf_function_body(
@@ -1258,9 +1729,10 @@ fn eval_sdf_function_body(
     params: &[String],
     body: &[SdfFunctionStatement],
     arg_values: &[Value],
+    overrides: Option<&ObjectValue>,
     depth: usize,
 ) -> Result<Value, EvalError> {
-    let mut locals = HashMap::new();
+    let mut locals = sdf_override_locals(overrides);
     if arg_values.len() != params.len() {
         return Err(EvalError::UnsupportedCall);
     }
@@ -1271,7 +1743,20 @@ fn eval_sdf_function_body(
     for stmt in &def.statements {
         match stmt {
             SdfStatement::Binding { name, expr } => {
-                let value = eval_sdf_expr(expr, state, &locals, Some(SdfRuntime { def, depth }))?;
+                let value = if let Some(value) = sdf_override_value(overrides, name) {
+                    value.clone()
+                } else {
+                    eval_sdf_expr(
+                        expr,
+                        state,
+                        &locals,
+                        Some(SdfRuntime {
+                            def,
+                            depth,
+                            overrides,
+                        }),
+                    )?
+                };
                 locals.insert(name.clone(), value);
             }
             SdfStatement::Function { .. } => {}
@@ -1281,11 +1766,33 @@ fn eval_sdf_function_body(
     for stmt in body {
         match stmt {
             MaterialFunctionStatement::Binding { name, expr } => {
-                let value = eval_sdf_expr(expr, state, &locals, Some(SdfRuntime { def, depth }))?;
+                let value = if let Some(value) = sdf_override_value(overrides, name) {
+                    value.clone()
+                } else {
+                    eval_sdf_expr(
+                        expr,
+                        state,
+                        &locals,
+                        Some(SdfRuntime {
+                            def,
+                            depth,
+                            overrides,
+                        }),
+                    )?
+                };
                 locals.insert(name.clone(), value);
             }
             MaterialFunctionStatement::Return { expr } => {
-                return eval_sdf_expr(expr, state, &locals, Some(SdfRuntime { def, depth }));
+                return eval_sdf_expr(
+                    expr,
+                    state,
+                    &locals,
+                    Some(SdfRuntime {
+                        def,
+                        depth,
+                        overrides,
+                    }),
+                );
             }
         }
     }
@@ -1293,6 +1800,16 @@ fn eval_sdf_function_body(
     Err(EvalError::UndefinedIdentifier(
         "sdf function missing return".to_string(),
     ))
+}
+
+fn sdf_override_locals(overrides: Option<&ObjectValue>) -> HashMap<String, Value> {
+    overrides
+        .map(|object| object.fields.clone())
+        .unwrap_or_default()
+}
+
+fn sdf_override_value<'a>(overrides: Option<&'a ObjectValue>, name: &str) -> Option<&'a Value> {
+    overrides.and_then(|object| object.fields.get(name))
 }
 
 fn eval_sdf_expr(
@@ -1332,6 +1849,7 @@ fn eval_sdf_expr(
                     eval_sdf_expr(field_expr, state, locals, sdf_runtime)?,
                 );
             }
+            augment_object_literal_fields(state, type_name, &mut resolved_fields)?;
             Ok(Value::Object(ObjectValue {
                 type_name: Some(type_name.clone()),
                 fields: resolved_fields,
@@ -1394,6 +1912,7 @@ fn eval_sdf_call(
                     &params,
                     &body,
                     &arg_values,
+                    runtime.overrides,
                     runtime.depth + 1,
                 );
             }
@@ -1534,6 +2053,164 @@ fn eval_material_function_body(
     ))
 }
 
+fn populate_material_locals(
+    state: &EvalState,
+    def: &MaterialDef,
+    overrides: Option<&ObjectValue>,
+    depth: usize,
+    locals: &mut HashMap<String, Value>,
+) -> Result<(), EvalError> {
+    for stmt in &def.statements {
+        match stmt {
+            MaterialStatement::Binding { name, expr } => {
+                let value = if let Some(value) = material_override_value(overrides, name) {
+                    value.clone()
+                } else {
+                    eval_expr_in_material_scope(
+                        expr,
+                        state,
+                        locals,
+                        Some(MaterialRuntime {
+                            def,
+                            depth,
+                            overrides,
+                        }),
+                        depth,
+                    )?
+                };
+                locals.insert(name.clone(), value);
+            }
+            MaterialStatement::Property { .. } | MaterialStatement::Function { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn execute_material_vm_function(
+    state: &EvalState,
+    material_name: &str,
+    function: &VmFunction,
+    params: &[String],
+    arg_values: Vec<Value>,
+    overrides: Option<&ObjectValue>,
+    depth: usize,
+) -> Result<Value, EvalError> {
+    if arg_values.len() != params.len() {
+        return Err(EvalError::UnsupportedCall);
+    }
+    if depth >= 32 {
+        return Err(EvalError::MaterialCallDepthExceeded);
+    }
+    let def = state
+        .material_defs
+        .get(material_name)
+        .ok_or_else(|| EvalError::UndefinedIdentifier(material_name.to_string()))?;
+    let mut locals = material_override_locals(overrides);
+    for (param, value) in params.iter().zip(arg_values.iter()) {
+        locals.insert(param.clone(), value.clone());
+    }
+    populate_material_locals(state, def, overrides, depth, &mut locals)?;
+
+    let mut stack = Vec::new();
+    for instruction in &function.code {
+        match instruction {
+            VmInstruction::PushNumber(v) => stack.push(Value::Number(*v)),
+            VmInstruction::PushString(v) => stack.push(Value::String(v.clone())),
+            VmInstruction::LoadName(name) => {
+                if let Some(value) = locals.get(name) {
+                    stack.push(value.clone());
+                } else if let Some(value) = builtin_symbol_value(name) {
+                    stack.push(value);
+                } else if let Some(binding) = state.bindings.get(name) {
+                    stack.push(binding.value.clone());
+                } else {
+                    return Err(EvalError::UndefinedIdentifier(name.clone()));
+                }
+            }
+            VmInstruction::BuildArray(count) => {
+                if stack.len() < *count {
+                    return Err(EvalError::UnsupportedCall);
+                }
+                let start = stack.len() - *count;
+                let values = stack.drain(start..).collect::<Vec<_>>();
+                stack.push(Value::Array(values));
+            }
+            VmInstruction::BuildObject {
+                type_name,
+                field_names,
+            } => {
+                if stack.len() < field_names.len() {
+                    return Err(EvalError::UnsupportedCall);
+                }
+                let start = stack.len() - field_names.len();
+                let values = stack.drain(start..).collect::<Vec<_>>();
+                let mut fields = HashMap::new();
+                for (name, value) in field_names.iter().cloned().zip(values.into_iter()) {
+                    fields.insert(name, value);
+                }
+                augment_object_literal_fields(state, type_name, &mut fields)?;
+                stack.push(Value::Object(ObjectValue {
+                    type_name: Some(type_name.clone()),
+                    fields,
+                }));
+            }
+            VmInstruction::LoadMember(field) => {
+                let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                let obj = as_object(&value)?;
+                let member = obj
+                    .fields
+                    .get(field)
+                    .cloned()
+                    .ok_or_else(|| EvalError::UndefinedIdentifier(field.clone()))?;
+                stack.push(member);
+            }
+            VmInstruction::Unary(op) => {
+                let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                stack.push(eval_unary(*op, value)?);
+            }
+            VmInstruction::Binary(op) => {
+                let rhs = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                let lhs = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                stack.push(eval_binary(lhs, *op, rhs)?);
+            }
+            VmInstruction::CallNamed { name, argc } => {
+                if stack.len() < *argc {
+                    return Err(EvalError::UnsupportedCall);
+                }
+                let start = stack.len() - *argc;
+                let args = stack.drain(start..).collect::<Vec<_>>();
+                if let Some(compiled) = state
+                    .compiled_material_functions
+                    .get(material_name)
+                    .and_then(|functions| functions.get(name))
+                {
+                    let params = compiled.params.clone();
+                    stack.push(execute_material_vm_function(
+                        state,
+                        material_name,
+                        compiled,
+                        &params,
+                        args,
+                        overrides,
+                        depth + 1,
+                    )?);
+                } else {
+                    stack.push(eval_named_vm_call(state, name, &args, depth)?);
+                }
+            }
+            VmInstruction::StoreLocal(name) => {
+                let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                locals.insert(name.clone(), value);
+            }
+            VmInstruction::Return => return stack.pop().ok_or(EvalError::UnsupportedCall),
+        }
+    }
+
+    Err(EvalError::UndefinedIdentifier(
+        "vm material function missing return".to_string(),
+    ))
+}
+
 fn material_override_locals(overrides: Option<&ObjectValue>) -> HashMap<String, Value> {
     overrides
         .map(|object| object.fields.clone())
@@ -1655,6 +2332,311 @@ fn eval_expr_in_environment_scope(
     }
 }
 
+fn eval_named_vm_call(
+    state: &EvalState,
+    name: &str,
+    arg_values: &[Value],
+    depth: usize,
+) -> Result<Value, EvalError> {
+    if let Some(value) = eval_ident_call(name, arg_values)? {
+        return Ok(value);
+    }
+    if let Some(jitted) = state.jitted_functions.get(name)
+        && let Some(args) = numeric_arg_slice(arg_values)
+        && let Some(value) = jitted.invoke(&args)
+    {
+        return Ok(Value::Number(value));
+    }
+    if let Some(compiled) = state.compiled_functions.get(name) {
+        return execute_vm_function(state, compiled, arg_values, depth + 1);
+    }
+    if let Some(def) = state.function_defs.get(name)
+        && let Some(value) = eval_top_level_function_call(state, def, arg_values, depth + 1)?
+    {
+        return Ok(value);
+    }
+    Err(EvalError::UnsupportedCall)
+}
+
+fn numeric_arg_slice(values: &[Value]) -> Option<Vec<f64>> {
+    values
+        .iter()
+        .map(|value| match value {
+            Value::Number(v) => Some(*v),
+            _ => None,
+        })
+        .collect()
+}
+
+fn numeric_vec3(value: &Value) -> Option<[f64; 3]> {
+    let Value::Object(obj) = value else {
+        return None;
+    };
+    if obj.type_name.as_deref() != Some("vec3") {
+        return None;
+    }
+    Some([
+        numeric_arg(obj.fields.get("x")?).ok()?,
+        numeric_arg(obj.fields.get("y")?).ok()?,
+        numeric_arg(obj.fields.get("z")?).ok()?,
+    ])
+}
+
+fn numeric_capture_args(
+    captures: &[JitCapture],
+    locals: &HashMap<String, Value>,
+) -> Result<Vec<f64>, EvalError> {
+    let mut args = Vec::new();
+    for capture in captures {
+        let value = resolve_local_path(locals, &capture.name)
+            .ok_or_else(|| EvalError::UndefinedIdentifier(capture.name.clone()))?;
+        match capture.kind {
+            crate::jit::JitCaptureKind::Scalar => args.push(numeric_arg(value)?),
+            crate::jit::JitCaptureKind::Vec3 => {
+                let vec = numeric_vec3(value).ok_or(EvalError::UnsupportedCall)?;
+                args.extend_from_slice(&vec);
+            }
+        }
+    }
+    Ok(args)
+}
+
+fn resolve_local_path<'a>(locals: &'a HashMap<String, Value>, path: &str) -> Option<&'a Value> {
+    let mut parts = path.split('.');
+    let first = parts.next()?;
+    let mut value = locals.get(first)?;
+    for part in parts {
+        let Value::Object(obj) = value else {
+            return None;
+        };
+        value = obj.fields.get(part)?;
+    }
+    Some(value)
+}
+
+fn flatten_numeric_locals(prefix: &str, value: &Value, out: &mut HashMap<String, Value>) {
+    match value {
+        Value::Number(_) => {
+            out.insert(prefix.to_string(), value.clone());
+        }
+        Value::Object(obj) => {
+            for (field, nested) in &obj.fields {
+                let key = format!("{prefix}.{field}");
+                flatten_numeric_locals(&key, nested, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_material_body_for_jit(
+    body: &[MaterialFunctionStatement],
+) -> Option<Vec<MaterialFunctionStatement>> {
+    body.iter().map(rewrite_material_stmt_for_jit).collect()
+}
+
+fn rewrite_material_stmt_for_jit(
+    stmt: &MaterialFunctionStatement,
+) -> Option<MaterialFunctionStatement> {
+    Some(match stmt {
+        MaterialFunctionStatement::Binding { name, expr } => MaterialFunctionStatement::Binding {
+            name: name.clone(),
+            expr: rewrite_expr_for_jit(expr)?,
+        },
+        MaterialFunctionStatement::Return { expr } => MaterialFunctionStatement::Return {
+            expr: rewrite_expr_for_jit(expr)?,
+        },
+    })
+}
+
+fn rewrite_expr_for_jit(expr: &Expr) -> Option<Expr> {
+    Some(match expr {
+        Expr::Number(_) | Expr::String(_) | Expr::Ident(_) => expr.clone(),
+        Expr::Array(items) => Expr::Array(
+            items
+                .iter()
+                .map(rewrite_expr_for_jit)
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        Expr::ObjectLiteral { type_name, fields } => Expr::ObjectLiteral {
+            type_name: type_name.clone(),
+            fields: fields
+                .iter()
+                .map(|(name, expr)| Some((name.clone(), rewrite_expr_for_jit(expr)?)))
+                .collect::<Option<Vec<_>>>()?,
+        },
+        Expr::Binary { lhs, op, rhs } => Expr::Binary {
+            lhs: Box::new(rewrite_expr_for_jit(lhs)?),
+            op: *op,
+            rhs: Box::new(rewrite_expr_for_jit(rhs)?),
+        },
+        Expr::Unary { op, expr } => Expr::Unary {
+            op: *op,
+            expr: Box::new(rewrite_expr_for_jit(expr)?),
+        },
+        Expr::Call { callee, args } => Expr::Call {
+            callee: Box::new(rewrite_expr_for_jit(callee)?),
+            args: args
+                .iter()
+                .map(rewrite_expr_for_jit)
+                .collect::<Option<Vec<_>>>()?,
+        },
+        Expr::Member { .. } => Expr::Ident(flatten_member_expr(expr)?),
+    })
+}
+
+fn numeric_vm_args(function: &VmFunction, locals: &HashMap<String, Value>) -> Option<Vec<f64>> {
+    let mut args = Vec::new();
+    let mut seen_locals = std::collections::HashSet::new();
+    for instruction in &function.code {
+        match instruction {
+            VmInstruction::StoreLocal(name) => {
+                seen_locals.insert(name.as_str());
+            }
+            VmInstruction::LoadName(name) => {
+                if function.params.iter().any(|param| param == name)
+                    || seen_locals.contains(name.as_str())
+                {
+                    continue;
+                }
+                let value = locals.get(name)?;
+                args.push(match numeric_arg(value) {
+                    Ok(value) => value,
+                    Err(_) => return None,
+                });
+            }
+            _ => {}
+        }
+    }
+    Some(args)
+}
+
+fn collect_vm_capture_names(function: &VmFunction) -> Vec<String> {
+    let mut captures = Vec::new();
+    let mut seen_locals = std::collections::HashSet::new();
+    for instruction in &function.code {
+        match instruction {
+            VmInstruction::StoreLocal(name) => {
+                seen_locals.insert(name.as_str());
+            }
+            VmInstruction::LoadName(name) => {
+                if function.params.iter().any(|param| param == name)
+                    || seen_locals.contains(name.as_str())
+                    || captures.iter().any(|capture| capture == name)
+                {
+                    continue;
+                }
+                captures.push(name.clone());
+            }
+            _ => {}
+        }
+    }
+    captures
+}
+
+fn execute_vm_function(
+    state: &EvalState,
+    function: &VmFunction,
+    arg_values: &[Value],
+    depth: usize,
+) -> Result<Value, EvalError> {
+    if arg_values.len() != function.params.len() {
+        return Err(EvalError::UnsupportedCall);
+    }
+    if depth >= 32 {
+        return Err(EvalError::MaterialCallDepthExceeded);
+    }
+
+    let mut locals = HashMap::new();
+    for (param, value) in function.params.iter().zip(arg_values.iter()) {
+        locals.insert(param.clone(), value.clone());
+    }
+    let mut stack = Vec::new();
+
+    for instruction in &function.code {
+        match instruction {
+            VmInstruction::PushNumber(v) => stack.push(Value::Number(*v)),
+            VmInstruction::PushString(v) => stack.push(Value::String(v.clone())),
+            VmInstruction::LoadName(name) => {
+                if let Some(value) = locals.get(name) {
+                    stack.push(value.clone());
+                } else if let Some(value) = builtin_symbol_value(name) {
+                    stack.push(value);
+                } else if let Some(binding) = state.bindings.get(name) {
+                    stack.push(binding.value.clone());
+                } else {
+                    return Err(EvalError::UndefinedIdentifier(name.clone()));
+                }
+            }
+            VmInstruction::BuildArray(count) => {
+                if stack.len() < *count {
+                    return Err(EvalError::UnsupportedCall);
+                }
+                let start = stack.len() - *count;
+                let values = stack.drain(start..).collect::<Vec<_>>();
+                stack.push(Value::Array(values));
+            }
+            VmInstruction::BuildObject {
+                type_name,
+                field_names,
+            } => {
+                if stack.len() < field_names.len() {
+                    return Err(EvalError::UnsupportedCall);
+                }
+                let start = stack.len() - field_names.len();
+                let values = stack.drain(start..).collect::<Vec<_>>();
+                let mut fields = HashMap::new();
+                for (name, value) in field_names.iter().cloned().zip(values.into_iter()) {
+                    fields.insert(name, value);
+                }
+                augment_object_literal_fields(state, type_name, &mut fields)?;
+                stack.push(Value::Object(ObjectValue {
+                    type_name: Some(type_name.clone()),
+                    fields,
+                }));
+            }
+            VmInstruction::LoadMember(field) => {
+                let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                let obj = as_object(&value)?;
+                let member = obj
+                    .fields
+                    .get(field)
+                    .cloned()
+                    .ok_or_else(|| EvalError::UndefinedIdentifier(field.clone()))?;
+                stack.push(member);
+            }
+            VmInstruction::Unary(op) => {
+                let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                stack.push(eval_unary(*op, value)?);
+            }
+            VmInstruction::Binary(op) => {
+                let rhs = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                let lhs = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                stack.push(eval_binary(lhs, *op, rhs)?);
+            }
+            VmInstruction::CallNamed { name, argc } => {
+                if stack.len() < *argc {
+                    return Err(EvalError::UnsupportedCall);
+                }
+                let start = stack.len() - *argc;
+                let args = stack.drain(start..).collect::<Vec<_>>();
+                stack.push(eval_named_vm_call(state, name, &args, depth)?);
+            }
+            VmInstruction::StoreLocal(name) => {
+                let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                locals.insert(name.clone(), value);
+            }
+            VmInstruction::Return => {
+                return stack.pop().ok_or(EvalError::UnsupportedCall);
+            }
+        }
+    }
+
+    Err(EvalError::UndefinedIdentifier(
+        "vm function missing return".to_string(),
+    ))
+}
+
 fn eval_top_level_function_call(
     state: &EvalState,
     def: &FunctionDef,
@@ -1666,6 +2648,12 @@ fn eval_top_level_function_call(
     }
     if depth >= 32 {
         return Err(EvalError::MaterialCallDepthExceeded);
+    }
+
+    if let Some(compiled) = state.compiled_functions.get(&def.name) {
+        return Ok(Some(execute_vm_function(
+            state, compiled, arg_values, depth,
+        )?));
     }
 
     let mut locals = HashMap::new();
@@ -2117,15 +3105,38 @@ fn numeric_field(obj: &ObjectValue, names: &[&str]) -> Option<f64> {
     })
 }
 
+fn bounds_from_value(value: &Value, pos: [f64; 3]) -> Option<Bounds3> {
+    match value {
+        Value::Object(_) => {
+            let half = as_vec3(value)?;
+            Some(Bounds3 {
+                min: [pos[0] - half[0], pos[1] - half[1], pos[2] - half[2]],
+                max: [pos[0] + half[0], pos[1] + half[1], pos[2] + half[2]],
+            })
+        }
+        Value::Number(radius) => {
+            let r = radius.abs();
+            Some(Bounds3 {
+                min: [pos[0] - r, pos[1] - r, pos[2] - r],
+                max: [pos[0] + r, pos[1] + r, pos[2] + r],
+            })
+        }
+        _ => None,
+    }
+}
+
 fn object_bounds(value: &Value) -> Option<Bounds3> {
     let obj = as_object(value).ok()?;
+    let pos = object_position(value);
+    if let Some(bounds_value) = obj.fields.get("__bounds") {
+        return bounds_from_value(bounds_value, pos);
+    }
     match obj.type_name.as_deref()? {
         "Sphere" => {
             let r = numeric_field(obj, &["radius", "r"])?;
-            let c = object_position(value);
             Some(Bounds3 {
-                min: [c[0] - r, c[1] - r, c[2] - r],
-                max: [c[0] + r, c[1] + r, c[2] + r],
+                min: [pos[0] - r, pos[1] - r, pos[2] - r],
+                max: [pos[0] + r, pos[1] + r, pos[2] + r],
             })
         }
         "Box" => {
@@ -2141,39 +3152,49 @@ fn object_bounds(value: &Value) -> Option<Bounds3> {
                 [half[0], half[1], -half[2]],
                 [half[0], half[1], half[2]],
             ];
-            Some(transformed_bounds(
-                object_position(value),
-                object_rotation(value),
-                &corners,
-            ))
+            Some(transformed_bounds(pos, object_rotation(value), &corners))
         }
         "Cylinder" => {
             let radius = numeric_field(obj, &["radius", "r"])?;
             let half_height = numeric_field(obj, &["height", "h"])? * 0.5;
-            let c = object_position(value);
             Some(Bounds3 {
-                min: [c[0] - radius, c[1] - half_height, c[2] - radius],
-                max: [c[0] + radius, c[1] + half_height, c[2] + radius],
+                min: [pos[0] - radius, pos[1] - half_height, pos[2] - radius],
+                max: [pos[0] + radius, pos[1] + half_height, pos[2] + radius],
             })
         }
         "Torus" => {
             let major = numeric_field(obj, &["major_radius", "R"])?;
             let minor = numeric_field(obj, &["minor_radius", "r"])?;
-            let c = object_position(value);
             let ring = major + minor;
             Some(Bounds3 {
-                min: [c[0] - ring, c[1] - minor, c[2] - ring],
-                max: [c[0] + ring, c[1] + minor, c[2] + ring],
+                min: [pos[0] - ring, pos[1] - minor, pos[2] - ring],
+                max: [pos[0] + ring, pos[1] + minor, pos[2] + ring],
             })
         }
         "ExtrudePolygon" => {
             let radius = numeric_field(obj, &["radius", "r"])?;
             let half_height = numeric_field(obj, &["height", "h"])? * 0.5;
-            let c = object_position(value);
             Some(Bounds3 {
-                min: [c[0] - radius, c[1] - half_height, c[2] - radius],
-                max: [c[0] + radius, c[1] + half_height, c[2] + radius],
+                min: [pos[0] - radius, pos[1] - half_height, pos[2] - radius],
+                max: [pos[0] + radius, pos[1] + half_height, pos[2] + radius],
             })
+        }
+        "Room" => {
+            let width = numeric_field(obj, &["width"]).unwrap_or(8.0);
+            let height = numeric_field(obj, &["height"]).unwrap_or(4.0);
+            let depth = numeric_field(obj, &["depth"]).unwrap_or(8.0);
+            let half = [width * 0.5, height * 0.5, depth * 0.5];
+            let corners = [
+                [-half[0], -half[1], -half[2]],
+                [-half[0], -half[1], half[2]],
+                [-half[0], half[1], -half[2]],
+                [-half[0], half[1], half[2]],
+                [half[0], -half[1], -half[2]],
+                [half[0], -half[1], half[2]],
+                [half[0], half[1], -half[2]],
+                [half[0], half[1], half[2]],
+            ];
+            Some(transformed_bounds(pos, object_rotation(value), &corners))
         }
         "add" | "intersect" => Some(
             object_bounds(obj.fields.get("lhs")?)?.union(object_bounds(obj.fields.get("rhs")?)?),

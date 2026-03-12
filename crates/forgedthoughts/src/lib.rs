@@ -1,10 +1,12 @@
 mod ast;
 mod eval;
+mod jit;
 mod lexer;
 mod materials;
 mod parser;
 mod render_api;
 mod renderer;
+mod vm;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -17,7 +19,8 @@ pub use eval::{
     Binding, EvalError, EvalState, ObjectValue, Value, eval_environment_function,
     eval_material_function, eval_material_function_with_overrides, eval_material_properties,
     eval_material_properties_with_overrides, eval_program, eval_sdf_function,
-    eval_sdf_zero_arg_function, eval_top_level_function,
+    eval_sdf_function_with_overrides, eval_sdf_zero_arg_function,
+    eval_sdf_zero_arg_function_with_overrides, eval_top_level_function,
 };
 pub use materials::{
     BlendedMaterial, BsdfSample as MaterialBsdfSample, ColorPattern, DielectricMaterial,
@@ -93,6 +96,14 @@ const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
         description: "Custom Forge SDF blob with warped silhouette and conservative bounds helper.",
         tags: &["object", "sdf", "blob", "organic", "procedural"],
         source: include_str!("../library/objects/soft_blob.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Objects,
+        name: "Cupboard",
+        path: "objects/cupboard.ft",
+        description: "Simple parameterized cupboard shell with a front panel openness control.",
+        tags: &["object", "furniture", "cupboard", "storage", "parametric"],
+        source: include_str!("../library/objects/cupboard.ft"),
     },
     BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Scenes,
@@ -1090,8 +1101,9 @@ mod tests {
     use super::{
         CoreError, ObjectValue, Value, eval_environment_function,
         eval_material_function_with_overrides, eval_material_properties_with_overrides,
-        eval_program, eval_sdf_function, eval_sdf_zero_arg_function, eval_top_level_function,
-        load_and_eval_scene, load_program_with_imports, parse_program,
+        eval_program, eval_sdf_function, eval_sdf_function_with_overrides,
+        eval_sdf_zero_arg_function, eval_sdf_zero_arg_function_with_overrides,
+        eval_top_level_function, load_and_eval_scene, load_program_with_imports, parse_program,
     };
     use std::{
         collections::HashMap,
@@ -1403,6 +1415,42 @@ mod tests {
     }
 
     #[test]
+    fn supports_asset_defined_anchor_defaults() {
+        let source = r#"
+            sdf Cabinet {
+              let width = 2.0;
+              let height = 3.0;
+              let depth = 1.0;
+              let anchors = {
+                TopSurface: vec3(0.0, height * 0.5, 0.0)
+              };
+
+              fn bounds() {
+                return vec3(width * 0.5, height * 0.5, depth * 0.5);
+              }
+
+              fn distance(p) {
+                return length(p) - 1.0;
+              }
+            };
+
+            var cabinet = Cabinet {};
+            var vase = Sphere { radius: 0.2 }
+              .attach(cabinet, "TopSurface", Bottom);
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let value = &state.bindings.get("vase").expect("vase binding").value;
+        let Value::Object(obj) = value else {
+            panic!("vase should be an object");
+        };
+        let Value::Object(pos) = obj.fields.get("pos").expect("pos object") else {
+            panic!("pos should be an object");
+        };
+        assert_eq!(pos.fields.get("y"), Some(&Value::Number(1.7)));
+    }
+
+    #[test]
     fn evaluates_custom_sdf_distance_with_helper_functions() {
         let source = r#"
             sdf SoftBlob {
@@ -1449,6 +1497,39 @@ mod tests {
     }
 
     #[test]
+    fn jits_vec3_box_style_sdf_distance() {
+        let source = r#"
+            sdf ShellBox {
+              let width = 1.6;
+              let height = 2.0;
+              let depth = 0.6;
+              let wall_thickness = 0.05;
+
+              fn sd_box(p, half_size) {
+                let q = abs(p) - half_size;
+                let outside = length(max(q, vec3(0.0)));
+                let inside = min(max(q.x, max(q.y, q.z)), 0.0);
+                return outside + inside;
+              }
+
+              fn distance(p) {
+                let half_outer = vec3(width * 0.5, height * 0.5, depth * 0.5);
+                let outer = sd_box(p, half_outer);
+                let inner_half = max(
+                  half_outer - vec3(wall_thickness, wall_thickness, wall_thickness),
+                  vec3(0.001)
+                );
+                let cavity = sd_box(vec3(p.x, p.y, p.z - wall_thickness), inner_half);
+                return max(outer, -cavity);
+              }
+            };
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        assert!(state.jitted_sdf_distance_functions.contains_key("ShellBox"));
+    }
+
+    #[test]
     fn evaluates_top_level_functions() {
         let source = r#"
             fn twice(x) {
@@ -1469,6 +1550,12 @@ mod tests {
         "#;
         let program = parse_program(source).expect("program should parse");
         let state = eval_program(&program).expect("program should evaluate");
+        assert!(state.compiled_functions.contains_key("twice"));
+        assert!(state.compiled_functions.contains_key("add"));
+        assert!(state.compiled_functions.contains_key("accent"));
+        assert!(state.jitted_functions.contains_key("twice"));
+        assert!(state.jitted_functions.contains_key("add"));
+        assert!(!state.jitted_functions.contains_key("accent"));
         assert_eq!(
             eval_top_level_function(&state, "twice", &[Value::Number(4.0)])
                 .expect("function should evaluate"),
@@ -1871,6 +1958,13 @@ mod tests {
         )
         .expect("program should parse");
         let state = eval_program(&program).expect("program should eval");
+        assert!(
+            state
+                .jitted_material_vec3_functions
+                .get("Checker")
+                .and_then(|functions| functions.get("color"))
+                .is_some()
+        );
         let overrides = ObjectValue {
             type_name: Some("Checker".to_string()),
             fields: HashMap::from([
@@ -1929,6 +2023,125 @@ mod tests {
             matches!(color.fields.get("x"), Some(Value::Number(v)) if (*v - 1.0).abs() < 1.0e-6)
         );
         assert!(matches!(color.fields.get("z"), Some(Value::Number(v)) if v.abs() < 1.0e-6));
+    }
+
+    #[test]
+    fn sdf_functions_accept_instance_overrides() {
+        let program = parse_program(
+            r#"
+            sdf SoftBlob {
+              let radius = 1.0;
+              let warp_frequency = 4.0;
+              let warp_amount = 0.16;
+
+              fn bounds() {
+                return vec3(radius + 0.2, radius + warp_amount + 0.2, radius + 0.1);
+              }
+
+              fn warp(p) {
+                return vec3(p.x, p.y + sin(p.x * warp_frequency) * warp_amount, p.z);
+              }
+
+              fn distance(p) {
+                let q = warp(p);
+                return length(q) - radius;
+              }
+            };
+            "#,
+        )
+        .expect("program should parse");
+        let state = eval_program(&program).expect("program should eval");
+        let overrides = ObjectValue {
+            type_name: Some("SoftBlob".to_string()),
+            fields: HashMap::from([
+                ("radius".to_string(), Value::Number(2.0)),
+                (
+                    "warp_frequency".to_string(),
+                    Value::Number(std::f64::consts::PI),
+                ),
+                ("warp_amount".to_string(), Value::Number(0.0)),
+            ]),
+        };
+
+        let distance = eval_sdf_function_with_overrides(
+            &state,
+            "SoftBlob",
+            "distance",
+            Value::Object(ObjectValue {
+                type_name: Some("vec3".to_string()),
+                fields: HashMap::from([
+                    ("x".to_string(), Value::Number(2.0)),
+                    ("y".to_string(), Value::Number(0.0)),
+                    ("z".to_string(), Value::Number(0.0)),
+                ]),
+            }),
+            Some(&overrides),
+        )
+        .expect("distance should evaluate");
+        assert!(matches!(distance, Value::Number(v) if v.abs() < 1.0e-6));
+
+        let bounds = eval_sdf_zero_arg_function_with_overrides(
+            &state,
+            "SoftBlob",
+            "bounds",
+            Some(&overrides),
+        )
+        .expect("bounds should evaluate");
+        let Value::Object(bounds) = bounds else {
+            panic!("bounds should be vec3");
+        };
+        assert!(
+            matches!(bounds.fields.get("x"), Some(Value::Number(v)) if (*v - 2.2).abs() < 1.0e-6)
+        );
+        assert!(
+            matches!(bounds.fields.get("y"), Some(Value::Number(v)) if (*v - 2.2).abs() < 1.0e-6)
+        );
+    }
+
+    #[test]
+    fn jits_scalar_material_hook_with_ctx_members() {
+        let source = r#"
+            material Stripe {
+              model: Metal;
+              fn roughness(ctx) {
+                let phase = sin(ctx.local_position.y * 12.0);
+                let mask = smoothstep(-0.2, 0.2, phase);
+                return mix(0.08, 0.32, mask);
+              }
+            };
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should eval");
+        assert!(
+            state
+                .jitted_material_functions
+                .get("Stripe")
+                .and_then(|functions| functions.get("roughness"))
+                .is_some()
+        );
+
+        let ctx = Value::Object(ObjectValue {
+            type_name: Some("ShadingContext".to_string()),
+            fields: HashMap::from([(
+                "local_position".to_string(),
+                Value::Object(ObjectValue {
+                    type_name: Some("vec3".to_string()),
+                    fields: HashMap::from([
+                        ("x".to_string(), Value::Number(0.0)),
+                        ("y".to_string(), Value::Number(0.25)),
+                        ("z".to_string(), Value::Number(0.0)),
+                    ]),
+                }),
+            )]),
+        });
+
+        let Value::Number(value) =
+            eval_material_function_with_overrides(&state, "Stripe", "roughness", ctx, None)
+                .expect("roughness should evaluate")
+        else {
+            panic!("roughness should be numeric");
+        };
+        assert!(value.is_finite());
     }
 
     fn temp_test_dir(label: &str) -> PathBuf {

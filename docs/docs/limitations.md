@@ -7,7 +7,7 @@ title: Limitations
 
 Current limitations:
 
-- Forge material functions are interpreted, not VM/JIT compiled
+- Some Forge features still fall back to the interpreter when they do not fit the current VM/JIT subset
 - `subsurface` is not yet rendered as true subsurface transport
 - the renderer still contains some backend-specific recursion logic
 - the language is still evolving and should not be treated as stable yet
@@ -17,4 +17,4 @@ Near-term priorities:
 - stabilize the Forge material runtime contract
 - improve renderer correctness around custom BSDFs
 - document the language and material system as they evolve
-- move hot Forge shading code toward a VM and then JIT
+- widen VM/JIT coverage for more Forge shading and procedural code

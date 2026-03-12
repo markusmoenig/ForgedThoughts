@@ -1,0 +1,91 @@
+sdf Cupboard {
+  name: "Cupboard";
+  description: "Simple parameterized cupboard shell with a front panel controlled by open_amount.";
+  tags: ["object", "furniture", "cupboard", "storage", "parametric"];
+  params: [
+    {
+      name: "width",
+      type: "number",
+      description: "Overall cupboard width.",
+      default: 1.6,
+      min: 0.1
+    },
+    {
+      name: "height",
+      type: "number",
+      description: "Overall cupboard height.",
+      default: 2.0,
+      min: 0.1
+    },
+    {
+      name: "depth",
+      type: "number",
+      description: "Overall cupboard depth.",
+      default: 0.6,
+      min: 0.1
+    },
+    {
+      name: "wall_thickness",
+      type: "number",
+      description: "Thickness of the cupboard shell.",
+      default: 0.05,
+      min: 0.005
+    },
+    {
+      name: "open_amount",
+      type: "number",
+      description: "Front panel openness from 0.0 (closed) to 1.0 (fully open/hidden).",
+      default: 0.0,
+      min: 0.0,
+      max: 1.0
+    }
+  ];
+
+  let width = 1.6;
+  let height = 2.0;
+  let depth = 0.6;
+  let wall_thickness = 0.05;
+  let open_amount = 0.0;
+  let anchors = {
+    TopSurface: vec3(0.0, height * 0.5, 0.0),
+    BackRightFoot: vec3(width * 0.5, -height * 0.5, -depth * 0.5),
+    FrontCenter: vec3(0.0, 0.0, depth * 0.5)
+  };
+
+  fn sd_box(p, half_size) {
+    let q = abs(p) - half_size;
+    let outside = length(max(q, vec3(0.0)));
+    let inside = min(max(q.x, max(q.y, q.z)), 0.0);
+    return outside + inside;
+  }
+
+  fn bounds() {
+    return vec3(width * 0.5, height * 0.5, depth * 0.5);
+  }
+
+  fn distance(p) {
+    let half_outer = vec3(width * 0.5, height * 0.5, depth * 0.5);
+    let outer = sd_box(p, half_outer);
+
+    let inner_half = max(
+      half_outer - vec3(wall_thickness, wall_thickness, wall_thickness),
+      vec3(0.001)
+    );
+    let cavity = sd_box(
+      vec3(p.x, p.y, p.z - wall_thickness),
+      inner_half
+    );
+    let shell = max(outer, -cavity);
+
+    let door_thickness = max(wall_thickness * (1.0 - clamp(open_amount, 0.0, 1.0)), 0.001);
+    let door_center_z = depth * 0.5 - door_thickness * 0.5;
+    let door = sd_box(
+      vec3(p.x, p.y, p.z - door_center_z),
+      vec3(width * 0.5, height * 0.5, door_thickness * 0.5)
+    );
+
+    return min(shell, door);
+  }
+};
+
+export { Cupboard };

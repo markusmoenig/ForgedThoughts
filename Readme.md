@@ -303,7 +303,7 @@ Current hit/BSDF context includes values such as:
 - `subsurface` exists as material data, but true subsurface transport is not implemented yet
 - `medium` currently affects transmission through simple Beer-Lambert attenuation
 - Forge-defined `eval/pdf/sample` are currently most useful through the shared material system, but the renderer still has some backend-specific recursion logic
-- Forge material functions are still interpreted, not VM/JIT compiled
+- Forge material functions now use the VM/JIT path for the supported numeric and vec3 subset, with interpreter fallback for the rest
 
 ## Development
 
@@ -320,4 +320,4 @@ The current direction is:
 
 - keep CPU rendering practical for complex SDF scenes
 - push Forge materials from parameter scripting toward self-contained shareable shading code
-- stabilize the Forge material/runtime contract before moving to a VM and later JIT
+- widen VM/JIT coverage and only then decide where a broader compiler path is worth the added complexity

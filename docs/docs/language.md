@@ -43,6 +43,12 @@ Current supported pieces include:
 - custom SDF definitions with `sdf Name { fn distance(p) { ... } }`
 - object layout methods for relative placement
 
+## Execution Today
+
+Forge is JIT-accelerated for performance-sensitive code paths.
+
+In practice, that means hot custom SDF functions and supported dynamic material hooks can run much faster than a purely interpreted implementation, while still keeping authoring in Forge instead of forcing everything into native Rust code.
+
 ## Booleans
 
 Forge uses operators for the hard CSG core:

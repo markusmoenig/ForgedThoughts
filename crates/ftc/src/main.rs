@@ -254,8 +254,14 @@ fn init_logging(verbose: u8) {
     };
 
     let filter = EnvFilter::builder()
-        .with_default_directive(level.into())
-        .from_env_lossy();
+        .with_default_directive(LevelFilter::WARN.into())
+        .from_env_lossy()
+        .add_directive(format!("ftc={level}").parse().expect("valid ftc log level"))
+        .add_directive(
+            format!("forgedthoughts={level}")
+                .parse()
+                .expect("valid forgedthoughts log level"),
+        );
 
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }

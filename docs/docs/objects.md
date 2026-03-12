@@ -16,6 +16,63 @@ Current built-ins include:
 - `Cylinder`
 - `Torus`
 - `ExtrudePolygon`
+- `Room`
+
+Custom Forge SDF assets can also be parameterized and instantiated with per-instance overrides, just like materials:
+
+```forge
+import "SoftBlob";
+
+let blob = SoftBlob {
+  radius: 1.4,
+  warp_frequency: 6.0,
+  warp_amount: 0.22
+};
+```
+
+The same mechanism also works for more semantic library objects:
+
+```forge
+import "Cupboard";
+
+let cupboard = Cupboard {
+  width: 1.8,
+  height: 2.2,
+  depth: 0.65,
+  open_amount: 0.35
+};
+```
+
+Custom object assets can also define their own default anchors inside the asset itself, so instances inherit meaningful placement points like `TopSurface` or `FrontCenter` automatically.
+
+For example, a room scene can place a cupboard into a corner and then attach another object to the cupboard's own anchor:
+
+```forge
+import "Cupboard";
+
+let room = Room {
+  width: 8.0,
+  height: 4.0,
+  depth: 8.0,
+  wall_thickness: 0.18
+};
+
+var cupboard = Cupboard {
+  width: 1.8,
+  height: 2.2,
+  depth: 0.62,
+  open_amount: 0.2
+}
+  .attach(room, BackRightCorner)
+  .offset_x(-0.12)
+  .offset_z(0.12);
+
+var vase = Sphere {
+  radius: 0.18
+}
+  .attach(cupboard, "TopSurface", Bottom)
+  .offset_x(-0.35);
+```
 
 Supported fields today:
 
@@ -98,6 +155,46 @@ let hex = ExtrudePolygon {
 };
 ```
 
+`Room`
+
+- `width`
+- `height`
+- `depth`
+- `wall_thickness`
+- `floor_material`
+- `wall_material`
+- `back_wall_material`
+- `front_wall_material`
+- `left_wall_material`
+- `right_wall_material`
+- `ceiling_material`
+- `show_floor`
+- `show_back_wall`
+- `show_front_wall`
+- `show_left_wall`
+- `show_right_wall`
+- `show_ceiling`
+- `pos.*`
+- `rot.*`
+
+`Room` is a semantic built-in object that expands to a floor and optional walls/ceiling with separate material slots.
+
+```forge
+let room = Room {
+  width: 8.0,
+  height: 4.0,
+  depth: 8.0,
+  wall_thickness: 0.18,
+  floor_material: CheckerFloor {},
+  wall_material: Lambert { color: #f2efe8 },
+  show_back_wall: 1.0,
+  show_right_wall: 1.0,
+  show_front_wall: 0.0,
+  show_left_wall: 0.0,
+  show_ceiling: 0.0
+};
+```
+
 Example:
 
 ```forge
@@ -169,7 +266,7 @@ So for most custom shapes, add `bounds()` early even if it is only approximate.
 
 - custom SDFs currently expose `distance(p)` and optional `bounds()`
 - exact rotated bounds are not computed yet; the current implementation uses a conservative radius from `bounds()`
-- custom SDF distance code is still interpreted, not VM/JIT compiled
+- custom SDF distance code now uses the VM/JIT path for the supported numeric and vec3 subset, with interpreter fallback for the rest
 
 ## Imports and Reuse
 

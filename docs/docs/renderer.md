@@ -38,6 +38,12 @@ That is why the current renderer is not centered on a path tracer. For this proj
 - environment lights and procedural environment backgrounds
 - debug AOVs such as depth, normal, material id, IOR, transmission, Fresnel, and hit distance
 
+## Forge Runtime
+
+Forge is JIT-accelerated where it matters most for rendering, especially for hot custom SDF code and supported material hooks.
+
+That lets performance-sensitive assets stay in Forge instead of forcing every useful object or material into native Rust just to get acceptable render speed.
+
 ## Important Tradeoffs
 
 - `trace` is not a full global-illumination renderer
