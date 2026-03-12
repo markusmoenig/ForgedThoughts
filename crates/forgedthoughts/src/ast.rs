@@ -97,6 +97,10 @@ pub enum Expr {
     Number(f64),
     String(String),
     Array(Vec<Expr>),
+    FunctionLiteral {
+        params: Vec<String>,
+        body: Vec<MaterialFunctionStatement>,
+    },
     Ident(String),
     ObjectLiteral {
         type_name: String,

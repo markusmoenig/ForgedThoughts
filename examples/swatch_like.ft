@@ -57,7 +57,8 @@ front_cut.rot.x = 90.0;
 front_cut.rot.z = 8.0;
 
 var front_trim = Box {
-  size: vec3(1.65, 0.95, 2.6)
+  size: vec3(1.65, 0.95, 2.6),
+  round: 0.06
 };
 front_trim.pos.y = 0.84;
 front_trim.pos.z = 1.18;
@@ -74,14 +75,16 @@ ring.rot.x = 4.0;
 
 // Base pedestal.
 var base = Box {
-  size: vec3(4.25, 0.62, 4.25)
+  size: vec3(4.25, 0.62, 4.25),
+  round: 0.06
 };
 base.pos.y = -1.22;
 
 var base_cap = Box {
-  size: vec3(3.45, 0.18, 3.45)
+  size: vec3(3.45, 0.18, 3.45),
+  round: 0.06
 };
 base_cap.pos.y = -0.82;
 
 let scene_raw = ((top + ring) + base) + base_cap;
-let scene = scene_raw.round(0.06);
+let scene = scene_raw;

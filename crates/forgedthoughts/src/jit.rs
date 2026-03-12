@@ -25,6 +25,17 @@ pub struct JitSdfDistanceFunction {
     pub capture_names: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct JitModifierDistanceFunction {
+    code_ptr: *const u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct JitSdfVec3Function {
+    pub capture_names: Vec<String>,
+    components: [JitFunction; 3],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JitCaptureKind {
     Scalar,
@@ -46,6 +57,10 @@ unsafe impl Send for JitFunction {}
 unsafe impl Sync for JitFunction {}
 unsafe impl Send for JitSdfDistanceFunction {}
 unsafe impl Sync for JitSdfDistanceFunction {}
+unsafe impl Send for JitModifierDistanceFunction {}
+unsafe impl Sync for JitModifierDistanceFunction {}
+unsafe impl Send for JitSdfVec3Function {}
+unsafe impl Sync for JitSdfVec3Function {}
 unsafe impl Send for JitVec3Function {}
 unsafe impl Sync for JitVec3Function {}
 
@@ -64,6 +79,25 @@ impl JitSdfDistanceFunction {
         args.extend_from_slice(&p);
         args.extend_from_slice(captures);
         invoke_code_ptr(self.code_ptr, &args)
+    }
+}
+
+impl JitModifierDistanceFunction {
+    pub fn invoke(&self, d: f64, p: [f64; 3]) -> Option<f64> {
+        invoke_code_ptr(self.code_ptr, &[d, p[0], p[1], p[2]])
+    }
+}
+
+impl JitSdfVec3Function {
+    pub fn invoke(&self, p: [f64; 3], captures: &[f64]) -> Option<[f64; 3]> {
+        let mut args = Vec::with_capacity(3 + captures.len());
+        args.extend_from_slice(&p);
+        args.extend_from_slice(captures);
+        Some([
+            self.components[0].invoke(&args)?,
+            self.components[1].invoke(&args)?,
+            self.components[2].invoke(&args)?,
+        ])
     }
 }
 
@@ -283,6 +317,7 @@ enum SdfJitValue {
 
 struct SdfJitContext<'a, 'b> {
     fb: &'a mut FunctionBuilder<'b>,
+    module: &'a mut JITModule,
     locals: HashMap<String, SdfJitValue>,
     functions: &'a HashMap<String, (Vec<String>, Vec<SdfFunctionStatement>)>,
     captures: &'a HashMap<String, Variable>,
@@ -360,6 +395,7 @@ pub fn compile_sdf_distance_function(def: &SdfDef) -> Option<JitSdfDistanceFunct
 
     let mut jit_ctx = SdfJitContext {
         fb: &mut fb,
+        module: &mut module,
         locals,
         functions: &functions,
         captures: &captures,
@@ -391,6 +427,148 @@ pub fn compile_sdf_distance_function(def: &SdfDef) -> Option<JitSdfDistanceFunct
         code_ptr,
         capture_names,
     })
+}
+
+pub fn compile_sdf_vec3_function(def: &SdfDef, function_name: &str) -> Option<JitSdfVec3Function> {
+    let (params, body) = def.statements.iter().find_map(|stmt| match stmt {
+        SdfStatement::Function { name, params, body }
+            if name == function_name && params.len() == 1 =>
+        {
+            Some((params.clone(), body.clone()))
+        }
+        _ => None,
+    })?;
+
+    let top_level_bindings = def
+        .statements
+        .iter()
+        .filter_map(|stmt| match stmt {
+            SdfStatement::Binding { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let functions = def
+        .statements
+        .iter()
+        .filter_map(|stmt| match stmt {
+            SdfStatement::Function { name, params, body } => {
+                Some((name.clone(), (params.clone(), body.clone())))
+            }
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+    let capture_names =
+        collect_sdf_distance_captures(&params, &body, &top_level_bindings, &functions);
+    if capture_names.len() + 3 > 12 {
+        return None;
+    }
+
+    let x = compile_sdf_vec3_component(
+        def,
+        function_name,
+        &params,
+        &body,
+        &functions,
+        &capture_names,
+        0,
+    )?;
+    let y = compile_sdf_vec3_component(
+        def,
+        function_name,
+        &params,
+        &body,
+        &functions,
+        &capture_names,
+        1,
+    )?;
+    let z = compile_sdf_vec3_component(
+        def,
+        function_name,
+        &params,
+        &body,
+        &functions,
+        &capture_names,
+        2,
+    )?;
+
+    Some(JitSdfVec3Function {
+        capture_names,
+        components: [x, y, z],
+    })
+}
+
+pub fn compile_modifier_distance_function(
+    name: &str,
+    params: &[String],
+    body: &[SdfFunctionStatement],
+) -> Option<JitModifierDistanceFunction> {
+    if params.len() != 2 {
+        return None;
+    }
+    let functions = HashMap::from([(name.to_string(), (params.to_vec(), body.to_vec()))]);
+    let capture_names: Vec<String> = Vec::new();
+    let mut module = create_module()?;
+    let mut sig = module.make_signature();
+    for _ in 0..4 {
+        sig.params.push(AbiParam::new(types::F64));
+    }
+    sig.returns.push(AbiParam::new(types::F64));
+
+    let func_id = module
+        .declare_function(&format!("{name}_modifier_distance"), Linkage::Local, &sig)
+        .ok()?;
+    let mut ctx = module.make_context();
+    ctx.func.signature = sig;
+    ctx.func.signature.call_conv = CallConv::triple_default(module.isa().triple());
+
+    let mut builder_ctx = FunctionBuilderContext::new();
+    let mut fb = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+    let block = fb.create_block();
+    fb.append_block_params_for_function_params(block);
+    fb.switch_to_block(block);
+    fb.seal_block(block);
+
+    let block_params = fb.block_params(block).to_vec();
+    let mut locals = HashMap::new();
+    locals.insert(params[0].clone(), SdfJitValue::Scalar(block_params[0]));
+    locals.insert(
+        params[1].clone(),
+        SdfJitValue::Vec3([block_params[1], block_params[2], block_params[3]]),
+    );
+    let captures = HashMap::new();
+
+    let mut jit_ctx = SdfJitContext {
+        fb: &mut fb,
+        module: &mut module,
+        locals,
+        functions: &functions,
+        captures: &captures,
+    };
+
+    for stmt in body {
+        match stmt {
+            SdfFunctionStatement::Binding { name, expr } => {
+                let value = compile_sdf_expr(expr, &mut jit_ctx)?;
+                jit_ctx.locals.insert(name.clone(), value);
+            }
+            SdfFunctionStatement::Return { expr } => {
+                let value = compile_sdf_expr(expr, &mut jit_ctx)?;
+                let SdfJitValue::Scalar(value) = value else {
+                    return None;
+                };
+                jit_ctx.fb.ins().return_(&[value]);
+            }
+        }
+    }
+
+    fb.finalize();
+    module.define_function(func_id, &mut ctx).ok()?;
+    module.clear_context(&mut ctx);
+    module.finalize_definitions().ok()?;
+    let code_ptr = module.get_finalized_function(func_id);
+    let _leaked_module = Box::leak(Box::new(module));
+    let _ = capture_names;
+    Some(JitModifierDistanceFunction { code_ptr })
 }
 
 #[derive(Clone, Copy)]
@@ -773,6 +951,7 @@ fn collect_sdf_distance_captures(
                     );
                 }
             }
+            Expr::FunctionLiteral { .. } => {}
         }
     }
 
@@ -913,6 +1092,119 @@ fn compile_inline_sdf_function(
     result
 }
 
+fn emit_rotate_vec3(
+    ctx: &mut SdfJitContext<'_, '_>,
+    v: [cranelift_codegen::ir::Value; 3],
+    deg: cranelift_codegen::ir::Value,
+    axis: u8,
+) -> Option<[cranelift_codegen::ir::Value; 3]> {
+    let pi_over_180 = ctx.fb.ins().f64const(std::f64::consts::PI / 180.0);
+    let radians = ctx.fb.ins().fmul(deg, pi_over_180);
+    let s = emit_unary_import_call(ctx.fb, ctx.module, "sin", radians)?;
+    let c = emit_unary_import_call(ctx.fb, ctx.module, "cos", radians)?;
+    match axis {
+        0 => {
+            let cy = ctx.fb.ins().fmul(c, v[1]);
+            let sz = ctx.fb.ins().fmul(s, v[2]);
+            let sy = ctx.fb.ins().fmul(s, v[1]);
+            let cz = ctx.fb.ins().fmul(c, v[2]);
+            Some([v[0], ctx.fb.ins().fsub(cy, sz), ctx.fb.ins().fadd(sy, cz)])
+        }
+        1 => {
+            let cx = ctx.fb.ins().fmul(c, v[0]);
+            let sz = ctx.fb.ins().fmul(s, v[2]);
+            let sx = ctx.fb.ins().fmul(s, v[0]);
+            let cz = ctx.fb.ins().fmul(c, v[2]);
+            Some([ctx.fb.ins().fadd(cx, sz), v[1], ctx.fb.ins().fsub(cz, sx)])
+        }
+        _ => {
+            let cx = ctx.fb.ins().fmul(c, v[0]);
+            let sy = ctx.fb.ins().fmul(s, v[1]);
+            let sx = ctx.fb.ins().fmul(s, v[0]);
+            let cy = ctx.fb.ins().fmul(c, v[1]);
+            Some([ctx.fb.ins().fsub(cx, sy), ctx.fb.ins().fadd(sx, cy), v[2]])
+        }
+    }
+}
+
+fn compile_sdf_vec3_component(
+    def: &SdfDef,
+    function_name: &str,
+    params: &[String],
+    body: &[SdfFunctionStatement],
+    functions: &HashMap<String, (Vec<String>, Vec<SdfFunctionStatement>)>,
+    capture_names: &[String],
+    component: usize,
+) -> Option<JitFunction> {
+    let argc = 3 + capture_names.len();
+    let mut module = create_module()?;
+    let mut sig = module.make_signature();
+    for _ in 0..argc {
+        sig.params.push(AbiParam::new(types::F64));
+    }
+    sig.returns.push(AbiParam::new(types::F64));
+
+    let func_id = module
+        .declare_function(
+            &format!("{}_{}_vec3_{component}", def.name, function_name),
+            Linkage::Local,
+            &sig,
+        )
+        .ok()?;
+    let mut ctx = module.make_context();
+    ctx.func.signature = sig;
+    ctx.func.signature.call_conv = CallConv::triple_default(module.isa().triple());
+
+    let mut builder_ctx = FunctionBuilderContext::new();
+    let mut fb = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+    let block = fb.create_block();
+    fb.append_block_params_for_function_params(block);
+    fb.switch_to_block(block);
+    fb.seal_block(block);
+
+    let block_params = fb.block_params(block).to_vec();
+    let mut locals = HashMap::new();
+    locals.insert(
+        params[0].clone(),
+        SdfJitValue::Vec3([block_params[0], block_params[1], block_params[2]]),
+    );
+
+    let mut captures = HashMap::new();
+    for (index, name) in capture_names.iter().enumerate() {
+        let var = Variable::from_u32(index as u32);
+        fb.declare_var(var, types::F64);
+        fb.def_var(var, block_params[3 + index]);
+        captures.insert(name.clone(), var);
+    }
+
+    let mut jit_ctx = SdfJitContext {
+        fb: &mut fb,
+        module: &mut module,
+        locals,
+        functions,
+        captures: &captures,
+    };
+    for stmt in body {
+        match stmt {
+            SdfFunctionStatement::Binding { name, expr } => {
+                let value = compile_sdf_expr(expr, &mut jit_ctx)?;
+                jit_ctx.locals.insert(name.clone(), value);
+            }
+            SdfFunctionStatement::Return { expr } => {
+                let value = compile_sdf_expr(expr, &mut jit_ctx)?;
+                let component_value = match value {
+                    SdfJitValue::Scalar(value) => value,
+                    SdfJitValue::Vec3(values) => values[component],
+                };
+                jit_ctx.fb.ins().return_(&[component_value]);
+            }
+        }
+    }
+
+    fb.finalize();
+    finalize_scalar_function(module, func_id, ctx, argc)
+}
+
 fn compile_sdf_binary(
     op: BinaryOp,
     lhs: SdfJitValue,
@@ -995,6 +1287,15 @@ fn compile_sdf_builtin(
         ) => {
             let maxed = ctx.fb.ins().fmax(*x, *a);
             Some(SdfJitValue::Scalar(ctx.fb.ins().fmin(maxed, *b)))
+        }
+        ("rotate_x", [SdfJitValue::Vec3(v), SdfJitValue::Scalar(deg)]) => {
+            Some(SdfJitValue::Vec3(emit_rotate_vec3(ctx, *v, *deg, 0)?))
+        }
+        ("rotate_y", [SdfJitValue::Vec3(v), SdfJitValue::Scalar(deg)]) => {
+            Some(SdfJitValue::Vec3(emit_rotate_vec3(ctx, *v, *deg, 1)?))
+        }
+        ("rotate_z", [SdfJitValue::Vec3(v), SdfJitValue::Scalar(deg)]) => {
+            Some(SdfJitValue::Vec3(emit_rotate_vec3(ctx, *v, *deg, 2)?))
         }
         _ => None,
     }
@@ -1083,7 +1384,9 @@ fn infer_material_expr_kind(
                 return None;
             };
             match name.as_str() {
-                "vec3" | "normalize" => Some(JitCaptureKind::Vec3),
+                "vec3" | "normalize" | "rotate_x" | "rotate_y" | "rotate_z" => {
+                    Some(JitCaptureKind::Vec3)
+                }
                 "length" | "step" | "smoothstep" | "sin" | "cos" | "floor" | "ceil" | "sqrt" => {
                     Some(JitCaptureKind::Scalar)
                 }
@@ -1277,6 +1580,7 @@ fn collect_material_vec3_captures(
                     );
                 }
             }
+            Expr::FunctionLiteral { .. } => {}
         }
     }
 
@@ -1558,6 +1862,15 @@ fn compile_material_builtin(
             let maxed = ctx.fb.ins().fmax(*x, *a);
             Some(MaterialJitValue::Scalar(ctx.fb.ins().fmin(maxed, *b)))
         }
+        ("rotate_x", [MaterialJitValue::Vec3(v), MaterialJitValue::Scalar(deg)]) => Some(
+            MaterialJitValue::Vec3(emit_material_rotate_vec3(ctx, *v, *deg, 0)?),
+        ),
+        ("rotate_y", [MaterialJitValue::Vec3(v), MaterialJitValue::Scalar(deg)]) => Some(
+            MaterialJitValue::Vec3(emit_material_rotate_vec3(ctx, *v, *deg, 1)?),
+        ),
+        ("rotate_z", [MaterialJitValue::Vec3(v), MaterialJitValue::Scalar(deg)]) => Some(
+            MaterialJitValue::Vec3(emit_material_rotate_vec3(ctx, *v, *deg, 2)?),
+        ),
         ("mix", [lhs, rhs, MaterialJitValue::Scalar(a)]) => {
             let one = ctx.fb.ins().f64const(1.0);
             let inv = ctx.fb.ins().fsub(one, *a);
@@ -1632,6 +1945,41 @@ fn compile_material_builtin(
             Some(MaterialJitValue::Scalar(ctx.fb.ins().fmul(t2, cubic)))
         }
         _ => None,
+    }
+}
+
+fn emit_material_rotate_vec3(
+    ctx: &mut MaterialJitContext<'_, '_>,
+    v: [cranelift_codegen::ir::Value; 3],
+    deg: cranelift_codegen::ir::Value,
+    axis: u8,
+) -> Option<[cranelift_codegen::ir::Value; 3]> {
+    let pi_over_180 = ctx.fb.ins().f64const(std::f64::consts::PI / 180.0);
+    let radians = ctx.fb.ins().fmul(deg, pi_over_180);
+    let s = emit_unary_import_call(ctx.fb, ctx.module, "sin", radians)?;
+    let c = emit_unary_import_call(ctx.fb, ctx.module, "cos", radians)?;
+    match axis {
+        0 => {
+            let cy = ctx.fb.ins().fmul(c, v[1]);
+            let sz = ctx.fb.ins().fmul(s, v[2]);
+            let sy = ctx.fb.ins().fmul(s, v[1]);
+            let cz = ctx.fb.ins().fmul(c, v[2]);
+            Some([v[0], ctx.fb.ins().fsub(cy, sz), ctx.fb.ins().fadd(sy, cz)])
+        }
+        1 => {
+            let cx = ctx.fb.ins().fmul(c, v[0]);
+            let sz = ctx.fb.ins().fmul(s, v[2]);
+            let sx = ctx.fb.ins().fmul(s, v[0]);
+            let cz = ctx.fb.ins().fmul(c, v[2]);
+            Some([ctx.fb.ins().fadd(cx, sz), v[1], ctx.fb.ins().fsub(cz, sx)])
+        }
+        _ => {
+            let cx = ctx.fb.ins().fmul(c, v[0]);
+            let sy = ctx.fb.ins().fmul(s, v[1]);
+            let sx = ctx.fb.ins().fmul(s, v[0]);
+            let cy = ctx.fb.ins().fmul(c, v[1]);
+            Some([ctx.fb.ins().fsub(cx, sy), ctx.fb.ins().fadd(sx, cy), v[2]])
+        }
     }
 }
 

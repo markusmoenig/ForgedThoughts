@@ -10,10 +10,11 @@ use rayon::prelude::*;
 use thiserror::Error;
 
 use crate::{
-    BlendedMaterial, ColorPattern, EvalState, Material, MaterialKindTag, MaterialParams,
-    MaterialSampleInput, MediumParams, ObjectValue, SubsurfaceParams, Value,
-    eval_environment_function, eval_material_function_with_overrides,
-    eval_material_properties_with_overrides, eval_sdf_function_with_overrides,
+    BlendedMaterial, ColorPattern, EvalState, FunctionValue, Material, MaterialKindTag,
+    MaterialParams, MaterialSampleInput, MediumParams, ObjectValue, SubsurfaceParams, Value,
+    eval_environment_function, eval_function_value, eval_material_function_with_overrides,
+    eval_material_properties_with_overrides, eval_sdf_function_args_with_overrides,
+    eval_sdf_function_with_overrides, eval_sdf_vec3_function_with_overrides,
     eval_sdf_zero_arg_function_with_overrides,
     render_api::{
         Camera, CameraKind, EnvLight, Light, PinholeCamera, PointLight, Spectrum, SphereLight,
@@ -171,12 +172,15 @@ enum SdfNode {
     Sphere {
         transform: PrimitiveTransform,
         radius: f32,
+        shell: f32,
         object_id: u32,
         material_id: u32,
     },
     Box {
         transform: PrimitiveTransform,
         half_size: Vec3,
+        round: f32,
+        shell: f32,
         object_id: u32,
         material_id: u32,
     },
@@ -184,6 +188,8 @@ enum SdfNode {
         transform: PrimitiveTransform,
         radius: f32,
         half_height: f32,
+        round: f32,
+        shell: f32,
         object_id: u32,
         material_id: u32,
     },
@@ -199,6 +205,8 @@ enum SdfNode {
         sides: u32,
         radius: f32,
         half_height: f32,
+        round: f32,
+        shell: f32,
         object_id: u32,
         material_id: u32,
     },
@@ -209,6 +217,18 @@ enum SdfNode {
         bounds_radius: f32,
         object_id: u32,
         material_id: u32,
+    },
+    DomainModifier {
+        base: Box<SdfNode>,
+        runtime: Arc<ModifierFunctionRuntime>,
+        transform: PrimitiveTransform,
+        bounds: Aabb,
+    },
+    DistancePostModifier {
+        base: Box<SdfNode>,
+        runtime: Arc<ModifierFunctionRuntime>,
+        transform: PrimitiveTransform,
+        bounds: Aabb,
     },
     Union {
         lhs: Box<SdfNode>,
@@ -315,13 +335,15 @@ enum SdfNode {
         ra: f32,
         rb: f32,
     },
+    Slice {
+        base: Box<SdfNode>,
+        axis: usize,
+        min: f32,
+        max: f32,
+    },
     Smooth {
         base: Box<SdfNode>,
         k: f32,
-    },
-    Round {
-        base: Box<SdfNode>,
-        r: f32,
     },
 }
 
@@ -329,6 +351,11 @@ struct CustomSdfRuntime {
     state: Arc<EvalState>,
     name: String,
     overrides: ObjectValue,
+}
+
+struct ModifierFunctionRuntime {
+    state: Arc<EvalState>,
+    function: FunctionValue,
 }
 
 #[derive(Clone, Copy)]
@@ -1206,7 +1233,7 @@ fn read_accel_field(obj: &ObjectValue, name: &str) -> Option<AccelMode> {
             2 => Some(AccelMode::Bricks),
             _ => None,
         },
-        Value::String(_) | Value::Array(_) => None,
+        Value::String(_) | Value::Array(_) | Value::Function(_) => None,
     }
 }
 
@@ -1248,16 +1275,21 @@ fn compile_sdf(
     };
     let type_name = object.type_name.as_deref().unwrap_or("anonymous");
 
-    match type_name {
+    let node = match type_name {
         "Sphere" => {
             let transform = read_transform(object);
             let radius = read_number_field(object, &["radius", "r"]).unwrap_or(1.0_f32);
+            let shell = read_number_field(object, &["shell"])
+                .unwrap_or(0.0)
+                .max(0.0)
+                .min(radius);
             let object_id = ctx.alloc_object_id();
             ctx.register_object_transform(object_id, transform);
             let material_id = primitive_material_id(state, object, ctx);
             Ok(SdfNode::Sphere {
                 transform,
                 radius,
+                shell,
                 object_id,
                 material_id,
             })
@@ -1265,12 +1297,23 @@ fn compile_sdf(
         "Box" => {
             let transform = read_transform(object);
             let size = read_vec3_field(object, "size").unwrap_or(Vec3::new(1.0, 1.0, 1.0));
+            let half_size = size.mul(0.5);
+            let round = read_number_field(object, &["round", "rounding"])
+                .unwrap_or(0.0)
+                .max(0.0)
+                .min(half_size.x.min(half_size.y).min(half_size.z));
+            let shell = read_number_field(object, &["shell"])
+                .unwrap_or(0.0)
+                .max(0.0)
+                .min(half_size.x.min(half_size.y).min(half_size.z));
             let object_id = ctx.alloc_object_id();
             ctx.register_object_transform(object_id, transform);
             let material_id = primitive_material_id(state, object, ctx);
             Ok(SdfNode::Box {
                 transform,
-                half_size: size.mul(0.5),
+                half_size,
+                round,
+                shell,
                 object_id,
                 material_id,
             })
@@ -1279,13 +1322,24 @@ fn compile_sdf(
             let transform = read_transform(object);
             let radius = read_number_field(object, &["radius", "r"]).unwrap_or(1.0);
             let height = read_number_field(object, &["height", "h"]).unwrap_or(1.0);
+            let half_height = height * 0.5;
+            let round = read_number_field(object, &["round", "rounding"])
+                .unwrap_or(0.0)
+                .max(0.0)
+                .min(radius.min(half_height));
+            let shell = read_number_field(object, &["shell"])
+                .unwrap_or(0.0)
+                .max(0.0)
+                .min(radius.min(half_height));
             let object_id = ctx.alloc_object_id();
             ctx.register_object_transform(object_id, transform);
             let material_id = primitive_material_id(state, object, ctx);
             Ok(SdfNode::Cylinder {
                 transform,
                 radius,
-                half_height: height * 0.5,
+                half_height,
+                round,
+                shell,
                 object_id,
                 material_id,
             })
@@ -1313,6 +1367,15 @@ fn compile_sdf(
                 .max(3);
             let radius = read_number_field(object, &["radius", "r"]).unwrap_or(1.0);
             let height = read_number_field(object, &["height", "h"]).unwrap_or(1.0);
+            let half_height = height * 0.5;
+            let round = read_number_field(object, &["round", "rounding"])
+                .unwrap_or(0.0)
+                .max(0.0)
+                .min(radius.min(half_height));
+            let shell = read_number_field(object, &["shell"])
+                .unwrap_or(0.0)
+                .max(0.0)
+                .min(radius.min(half_height));
             let object_id = ctx.alloc_object_id();
             ctx.register_object_transform(object_id, transform);
             let material_id = primitive_material_id(state, object, ctx);
@@ -1320,7 +1383,9 @@ fn compile_sdf(
                 transform,
                 sides,
                 radius,
-                half_height: height * 0.5,
+                half_height,
+                round,
+                shell,
                 object_id,
                 material_id,
             })
@@ -1328,23 +1393,24 @@ fn compile_sdf(
         "Room" => compile_room(state, object, ctx),
         custom if state.sdf_defs.contains_key(custom) => {
             if let Some(lowered) = compile_lowered_library_object(state, custom, object, ctx) {
-                return lowered;
+                lowered
+            } else {
+                let transform = read_transform(object);
+                let object_id = ctx.alloc_object_id();
+                ctx.register_object_transform(object_id, transform);
+                let material_id = primitive_material_id(state, object, ctx);
+                Ok(SdfNode::Custom {
+                    transform,
+                    runtime: Arc::new(CustomSdfRuntime {
+                        state: Arc::clone(state),
+                        name: custom.to_string(),
+                        overrides: object.clone(),
+                    }),
+                    bounds_radius: eval_custom_sdf_bounds_radius(state, custom, object),
+                    object_id,
+                    material_id,
+                })
             }
-            let transform = read_transform(object);
-            let object_id = ctx.alloc_object_id();
-            ctx.register_object_transform(object_id, transform);
-            let material_id = primitive_material_id(state, object, ctx);
-            Ok(SdfNode::Custom {
-                transform,
-                runtime: Arc::new(CustomSdfRuntime {
-                    state: Arc::clone(state),
-                    name: custom.to_string(),
-                    overrides: object.clone(),
-                }),
-                bounds_radius: eval_custom_sdf_bounds_radius(state, custom, object),
-                object_id,
-                material_id,
-            })
         }
         "add" => {
             let lhs = compile_sdf(state, required_field(object, "lhs")?, ctx)?;
@@ -1436,6 +1502,69 @@ fn compile_sdf(
                 _ => unreachable!(),
             })
         }
+        "mirror_x" | "mirror_y" | "mirror_z" => {
+            let base_value = required_field(object, "base")?;
+            let lhs = compile_sdf(state, base_value, ctx)?;
+            let axis = match type_name {
+                "mirror_x" => 0,
+                "mirror_y" => 1,
+                _ => 2,
+            };
+            let rhs = compile_sdf_mirrored(state, base_value, ctx, axis)?;
+            Ok(SdfNode::Union {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            })
+        }
+        "repeat_x" | "repeat_y" | "repeat_z" => {
+            let base_value = required_field(object, "base")?;
+            let spacing = match required_field(object, "spacing")? {
+                Value::Number(v) => *v as f32,
+                _ => 0.0,
+            };
+            let count = match required_field(object, "count")? {
+                Value::Number(v) => v.round().max(1.0) as usize,
+                _ => 1,
+            };
+            let axis = match type_name {
+                "repeat_x" => 0,
+                "repeat_y" => 1,
+                _ => 2,
+            };
+            let start = -0.5 * (count.saturating_sub(1) as f32) * spacing;
+            let mut root = compile_sdf_offset(state, base_value, ctx, axis, start)?;
+            for i in 1..count {
+                let part =
+                    compile_sdf_offset(state, base_value, ctx, axis, start + i as f32 * spacing)?;
+                root = SdfNode::Union {
+                    lhs: Box::new(root),
+                    rhs: Box::new(part),
+                };
+            }
+            Ok(root)
+        }
+        "slice_x" | "slice_y" | "slice_z" => {
+            let base = compile_sdf(state, required_field(object, "base")?, ctx)?;
+            let min = match required_field(object, "min")? {
+                Value::Number(v) => *v as f32,
+                _ => f32::NEG_INFINITY,
+            };
+            let max = match required_field(object, "max")? {
+                Value::Number(v) => *v as f32,
+                _ => f32::INFINITY,
+            };
+            let axis = match type_name {
+                "slice_x" => 0,
+                "slice_y" => 1,
+                _ => 2,
+            };
+            Ok(SdfNode::Slice {
+                base: Box::new(base),
+                axis,
+                min,
+                max,
+            })
+        }
         "smooth" => {
             let base = compile_sdf(state, required_field(object, "base")?, ctx)?;
             let k = match required_field(object, "k")? {
@@ -1447,25 +1576,555 @@ fn compile_sdf(
                 k,
             })
         }
-        "round" | "bevel" | "chamfer" => {
-            let base = compile_sdf(state, required_field(object, "base")?, ctx)?;
-            let r = match required_field(object, "r")? {
-                Value::Number(v) => *v as f32,
-                _ => 0.0,
-            };
-            Ok(SdfNode::Round {
-                base: Box::new(base),
-                r,
-            })
-        }
         other => Err(RenderError::UnsupportedObjectType(other.to_string())),
-    }
+    }?;
+
+    apply_object_modifier_hooks(state, object, node)
 }
 
 fn required_field<'a>(obj: &'a ObjectValue, name: &str) -> Result<&'a Value, RenderError> {
     obj.fields.get(name).ok_or_else(|| {
         RenderError::UnsupportedObjectType(obj.type_name.clone().unwrap_or_default())
     })
+}
+
+fn apply_object_modifier_hooks(
+    state: &Arc<EvalState>,
+    object: &ObjectValue,
+    mut node: SdfNode,
+) -> Result<SdfNode, RenderError> {
+    if object.fields.contains_key("domain") || object.fields.contains_key("distance_post") {
+        let (base, transform, bounds) = split_modifier_base(node);
+        node = base;
+        if let Some(Value::Function(function)) = object.fields.get("domain") {
+            node = SdfNode::DomainModifier {
+                base: Box::new(node),
+                runtime: Arc::new(ModifierFunctionRuntime {
+                    state: Arc::clone(state),
+                    function: function.clone(),
+                }),
+                transform,
+                bounds,
+            };
+        }
+        if let Some(Value::Function(function)) = object.fields.get("distance_post") {
+            node = SdfNode::DistancePostModifier {
+                base: Box::new(node),
+                runtime: Arc::new(ModifierFunctionRuntime {
+                    state: Arc::clone(state),
+                    function: function.clone(),
+                }),
+                transform,
+                bounds,
+            };
+        }
+        return Ok(node);
+    }
+
+    if let Some(Value::Function(function)) = object.fields.get("domain") {
+        let bounds = sdf_bounds(&node);
+        node = SdfNode::DomainModifier {
+            base: Box::new(node),
+            runtime: Arc::new(ModifierFunctionRuntime {
+                state: Arc::clone(state),
+                function: function.clone(),
+            }),
+            transform: PrimitiveTransform::identity(),
+            bounds,
+        };
+    }
+    if let Some(Value::Function(function)) = object.fields.get("distance_post") {
+        let bounds = sdf_bounds(&node);
+        node = SdfNode::DistancePostModifier {
+            base: Box::new(node),
+            runtime: Arc::new(ModifierFunctionRuntime {
+                state: Arc::clone(state),
+                function: function.clone(),
+            }),
+            transform: PrimitiveTransform::identity(),
+            bounds,
+        };
+    }
+    Ok(node)
+}
+
+fn split_modifier_base(node: SdfNode) -> (SdfNode, PrimitiveTransform, Aabb) {
+    let bounds = sdf_bounds(&node);
+    match node {
+        SdfNode::Sphere {
+            radius,
+            shell,
+            object_id,
+            material_id,
+            transform,
+        } => (
+            SdfNode::Sphere {
+                transform: PrimitiveTransform::identity(),
+                radius,
+                shell,
+                object_id,
+                material_id,
+            },
+            transform,
+            bounds,
+        ),
+        SdfNode::Box {
+            half_size,
+            round,
+            shell,
+            object_id,
+            material_id,
+            transform,
+        } => (
+            SdfNode::Box {
+                transform: PrimitiveTransform::identity(),
+                half_size,
+                round,
+                shell,
+                object_id,
+                material_id,
+            },
+            transform,
+            bounds,
+        ),
+        SdfNode::Cylinder {
+            radius,
+            half_height,
+            round,
+            shell,
+            object_id,
+            material_id,
+            transform,
+        } => (
+            SdfNode::Cylinder {
+                transform: PrimitiveTransform::identity(),
+                radius,
+                half_height,
+                round,
+                shell,
+                object_id,
+                material_id,
+            },
+            transform,
+            bounds,
+        ),
+        SdfNode::Torus {
+            major_radius,
+            minor_radius,
+            object_id,
+            material_id,
+            transform,
+        } => (
+            SdfNode::Torus {
+                transform: PrimitiveTransform::identity(),
+                major_radius,
+                minor_radius,
+                object_id,
+                material_id,
+            },
+            transform,
+            bounds,
+        ),
+        SdfNode::ExtrudePolygon {
+            sides,
+            radius,
+            half_height,
+            round,
+            shell,
+            object_id,
+            material_id,
+            transform,
+        } => (
+            SdfNode::ExtrudePolygon {
+                transform: PrimitiveTransform::identity(),
+                sides,
+                radius,
+                half_height,
+                round,
+                shell,
+                object_id,
+                material_id,
+            },
+            transform,
+            bounds,
+        ),
+        SdfNode::Custom {
+            runtime,
+            bounds_radius,
+            object_id,
+            material_id,
+            transform,
+        } => (
+            SdfNode::Custom {
+                transform: PrimitiveTransform::identity(),
+                runtime,
+                bounds_radius,
+                object_id,
+                material_id,
+            },
+            transform,
+            bounds,
+        ),
+        other => (other, PrimitiveTransform::identity(), bounds),
+    }
+}
+
+fn eval_modifier_domain(runtime: &ModifierFunctionRuntime, p: Vec3) -> Vec3 {
+    match eval_function_value(&runtime.state, &runtime.function, &[vec3_value_value(p)]) {
+        Ok(Value::Object(obj)) => {
+            let x = read_number_field(&obj, &["x"]).unwrap_or(p.x);
+            let y = read_number_field(&obj, &["y"]).unwrap_or(p.y);
+            let z = read_number_field(&obj, &["z"]).unwrap_or(p.z);
+            Vec3::new(x, y, z)
+        }
+        _ => p,
+    }
+}
+
+fn eval_modifier_distance_post(runtime: &ModifierFunctionRuntime, d: f32, p: Vec3) -> f32 {
+    match eval_function_value(
+        &runtime.state,
+        &runtime.function,
+        &[Value::Number(d as f64), vec3_value_value(p)],
+    ) {
+        Ok(Value::Number(v)) => v as f32,
+        _ => d,
+    }
+}
+
+fn compile_sdf_offset(
+    state: &Arc<EvalState>,
+    value: &Value,
+    ctx: &mut CompileContext,
+    axis: usize,
+    delta: f32,
+) -> Result<SdfNode, RenderError> {
+    let base = compile_sdf(state, value, ctx)?;
+    Ok(remap_sdf_node(base, ctx, |transform| {
+        let mut center = transform.center;
+        match axis {
+            0 => center.x += delta,
+            1 => center.y += delta,
+            _ => center.z += delta,
+        }
+        PrimitiveTransform {
+            center,
+            rot_deg: transform.rot_deg,
+        }
+    }))
+}
+
+fn compile_sdf_mirrored(
+    state: &Arc<EvalState>,
+    value: &Value,
+    ctx: &mut CompileContext,
+    axis: usize,
+) -> Result<SdfNode, RenderError> {
+    let base = compile_sdf(state, value, ctx)?;
+    Ok(remap_sdf_node(base, ctx, |transform| {
+        let mut center = transform.center;
+        let mut rot = transform.rot_deg;
+        match axis {
+            0 => {
+                center.x = -center.x;
+                rot.y = -rot.y;
+                rot.z = -rot.z;
+            }
+            1 => {
+                center.y = -center.y;
+                rot.x = -rot.x;
+                rot.z = -rot.z;
+            }
+            _ => {
+                center.z = -center.z;
+                rot.x = -rot.x;
+                rot.y = -rot.y;
+            }
+        }
+        PrimitiveTransform {
+            center,
+            rot_deg: rot,
+        }
+    }))
+}
+
+fn remap_sdf_node(
+    node: SdfNode,
+    ctx: &mut CompileContext,
+    map_transform: impl Copy + Fn(PrimitiveTransform) -> PrimitiveTransform,
+) -> SdfNode {
+    match node {
+        SdfNode::Sphere {
+            transform,
+            radius,
+            shell,
+            material_id,
+            ..
+        } => {
+            let transform = map_transform(transform);
+            let object_id = ctx.alloc_object_id();
+            ctx.register_object_transform(object_id, transform);
+            SdfNode::Sphere {
+                transform,
+                radius,
+                shell,
+                object_id,
+                material_id,
+            }
+        }
+        SdfNode::Box {
+            transform,
+            half_size,
+            round,
+            shell,
+            material_id,
+            ..
+        } => {
+            let transform = map_transform(transform);
+            let object_id = ctx.alloc_object_id();
+            ctx.register_object_transform(object_id, transform);
+            SdfNode::Box {
+                transform,
+                half_size,
+                round,
+                shell,
+                object_id,
+                material_id,
+            }
+        }
+        SdfNode::Cylinder {
+            transform,
+            radius,
+            half_height,
+            round,
+            shell,
+            material_id,
+            ..
+        } => {
+            let transform = map_transform(transform);
+            let object_id = ctx.alloc_object_id();
+            ctx.register_object_transform(object_id, transform);
+            SdfNode::Cylinder {
+                transform,
+                radius,
+                half_height,
+                round,
+                shell,
+                object_id,
+                material_id,
+            }
+        }
+        SdfNode::Torus {
+            transform,
+            major_radius,
+            minor_radius,
+            material_id,
+            ..
+        } => {
+            let transform = map_transform(transform);
+            let object_id = ctx.alloc_object_id();
+            ctx.register_object_transform(object_id, transform);
+            SdfNode::Torus {
+                transform,
+                major_radius,
+                minor_radius,
+                object_id,
+                material_id,
+            }
+        }
+        SdfNode::ExtrudePolygon {
+            transform,
+            sides,
+            radius,
+            half_height,
+            round,
+            shell,
+            material_id,
+            ..
+        } => {
+            let transform = map_transform(transform);
+            let object_id = ctx.alloc_object_id();
+            ctx.register_object_transform(object_id, transform);
+            SdfNode::ExtrudePolygon {
+                transform,
+                sides,
+                radius,
+                half_height,
+                round,
+                shell,
+                object_id,
+                material_id,
+            }
+        }
+        SdfNode::Custom {
+            transform,
+            runtime,
+            bounds_radius,
+            material_id,
+            ..
+        } => {
+            let transform = map_transform(transform);
+            let object_id = ctx.alloc_object_id();
+            ctx.register_object_transform(object_id, transform);
+            SdfNode::Custom {
+                transform,
+                runtime,
+                bounds_radius,
+                object_id,
+                material_id,
+            }
+        }
+        SdfNode::DomainModifier {
+            base,
+            runtime,
+            transform,
+            ..
+        } => {
+            let transform = map_transform(transform);
+            let bounds = transformed_modifier_bounds(base.as_ref(), transform);
+            SdfNode::DomainModifier {
+                base,
+                runtime,
+                transform,
+                bounds,
+            }
+        }
+        SdfNode::DistancePostModifier {
+            base,
+            runtime,
+            transform,
+            ..
+        } => {
+            let transform = map_transform(transform);
+            let bounds = transformed_modifier_bounds(base.as_ref(), transform);
+            SdfNode::DistancePostModifier {
+                base,
+                runtime,
+                transform,
+                bounds,
+            }
+        }
+        SdfNode::Union { lhs, rhs } => SdfNode::Union {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+        },
+        SdfNode::Intersect { lhs, rhs } => SdfNode::Intersect {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+        },
+        SdfNode::Subtract { lhs, rhs } => SdfNode::Subtract {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+        },
+        SdfNode::UnionRound { lhs, rhs, r } => SdfNode::UnionRound {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+        },
+        SdfNode::UnionChamfer { lhs, rhs, r } => SdfNode::UnionChamfer {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+        },
+        SdfNode::UnionColumns { lhs, rhs, r, n } => SdfNode::UnionColumns {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+            n,
+        },
+        SdfNode::UnionStairs { lhs, rhs, r, n } => SdfNode::UnionStairs {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+            n,
+        },
+        SdfNode::UnionSoft { lhs, rhs, r } => SdfNode::UnionSoft {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+        },
+        SdfNode::IntersectRound { lhs, rhs, r } => SdfNode::IntersectRound {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+        },
+        SdfNode::IntersectChamfer { lhs, rhs, r } => SdfNode::IntersectChamfer {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+        },
+        SdfNode::IntersectColumns { lhs, rhs, r, n } => SdfNode::IntersectColumns {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+            n,
+        },
+        SdfNode::IntersectStairs { lhs, rhs, r, n } => SdfNode::IntersectStairs {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+            n,
+        },
+        SdfNode::DiffRound { lhs, rhs, r } => SdfNode::DiffRound {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+        },
+        SdfNode::DiffChamfer { lhs, rhs, r } => SdfNode::DiffChamfer {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+        },
+        SdfNode::DiffColumns { lhs, rhs, r, n } => SdfNode::DiffColumns {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+            n,
+        },
+        SdfNode::DiffStairs { lhs, rhs, r, n } => SdfNode::DiffStairs {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+            n,
+        },
+        SdfNode::Pipe { lhs, rhs, r } => SdfNode::Pipe {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+        },
+        SdfNode::Engrave { lhs, rhs, r } => SdfNode::Engrave {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            r,
+        },
+        SdfNode::Groove { lhs, rhs, ra, rb } => SdfNode::Groove {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            ra,
+            rb,
+        },
+        SdfNode::Tongue { lhs, rhs, ra, rb } => SdfNode::Tongue {
+            lhs: Box::new(remap_sdf_node(*lhs, ctx, map_transform)),
+            rhs: Box::new(remap_sdf_node(*rhs, ctx, map_transform)),
+            ra,
+            rb,
+        },
+        SdfNode::Slice {
+            base,
+            axis,
+            min,
+            max,
+        } => SdfNode::Slice {
+            base: Box::new(remap_sdf_node(*base, ctx, map_transform)),
+            axis,
+            min,
+            max,
+        },
+        SdfNode::Smooth { base, k } => SdfNode::Smooth {
+            base: Box::new(remap_sdf_node(*base, ctx, map_transform)),
+            k,
+        },
+    }
 }
 
 fn primitive_material_id(
@@ -1496,6 +2155,21 @@ fn room_material_id(
         return ctx.intern_material(material);
     }
     ctx.intern_material(ctx.default_material)
+}
+
+fn transformed_modifier_bounds(base: &SdfNode, transform: PrimitiveTransform) -> Aabb {
+    let local_bounds = sdf_bounds(base);
+    let local_center = local_bounds.centroid();
+    let local_radius = local_bounds.extent().mul(0.5).length();
+    let center = transform
+        .center
+        .add(transform_offset(transform, local_center));
+    let r = Vec3::new(local_radius, local_radius, local_radius);
+    Aabb {
+        min: center.sub(r),
+        max: center.add(r),
+    }
+    .expand(0.1)
 }
 
 fn object_material_id(
@@ -1576,12 +2250,14 @@ enum LoweredNodeSpec {
     Box {
         offset: Vec3,
         half_size: Vec3,
+        round: f32,
         material_id: u32,
     },
     Cylinder {
         offset: Vec3,
         radius: f32,
         half_height: f32,
+        round: f32,
         material_id: u32,
     },
     Sphere {
@@ -1613,6 +2289,7 @@ fn instantiate_lowered_node(
         LoweredNodeSpec::Box {
             offset,
             half_size,
+            round,
             material_id,
         } => {
             let transform = offset_transform(base_transform, offset);
@@ -1621,6 +2298,8 @@ fn instantiate_lowered_node(
             Ok(SdfNode::Box {
                 transform,
                 half_size,
+                round,
+                shell: 0.0,
                 object_id,
                 material_id,
             })
@@ -1629,6 +2308,7 @@ fn instantiate_lowered_node(
             offset,
             radius,
             half_height,
+            round,
             material_id,
         } => {
             let transform = offset_transform(base_transform, offset);
@@ -1638,6 +2318,8 @@ fn instantiate_lowered_node(
                 transform,
                 radius,
                 half_height,
+                round,
+                shell: 0.0,
                 object_id,
                 material_id,
             })
@@ -1653,6 +2335,7 @@ fn instantiate_lowered_node(
             Ok(SdfNode::Sphere {
                 transform,
                 radius,
+                shell: 0.0,
                 object_id,
                 material_id,
             })
@@ -1709,6 +2392,7 @@ fn lower_table_asset(
     parts.push(LoweredNodeSpec::Box {
         offset: Vec3::new(0.0, top_center_y, 0.0),
         half_size: Vec3::new(width * 0.5, top_thickness * 0.5, depth * 0.5),
+        round: 0.0,
         material_id: top_material_id,
     });
 
@@ -1722,6 +2406,7 @@ fn lower_table_asset(
                 offset: Vec3::new(sx * leg_x, leg_center_y, sz * leg_z),
                 radius: leg_radius,
                 half_height: leg_half_height,
+                round: 0.0,
                 material_id: leg_material_id,
             });
         }
@@ -1755,6 +2440,7 @@ fn lower_cupboard_asset(
     let outer = LoweredNodeSpec::Box {
         offset: Vec3::new(0.0, 0.0, 0.0),
         half_size: Vec3::new(width * 0.5, height * 0.5, depth * 0.5),
+        round: 0.0,
         material_id: body_material_id,
     };
 
@@ -1766,6 +2452,7 @@ fn lower_cupboard_asset(
     let cavity = LoweredNodeSpec::Box {
         offset: Vec3::new(0.0, 0.0, -wall_thickness),
         half_size: inner_half,
+        round: 0.0,
         material_id: body_material_id,
     };
 
@@ -1778,6 +2465,7 @@ fn lower_cupboard_asset(
     let door = LoweredNodeSpec::Box {
         offset: Vec3::new(0.0, 0.0, depth * 0.5 - door_thickness * 0.5),
         half_size: Vec3::new(width * 0.5, height * 0.5, door_thickness * 0.5),
+        round: 0.0,
         material_id: door_material_id,
     };
 
@@ -1858,18 +2546,21 @@ fn lower_lamp_asset(
             offset: Vec3::new(0.0, base_center_y, 0.0),
             radius: base_radius,
             half_height: base_height * 0.5,
+            round: 0.0,
             material_id: base_material_id,
         },
         LoweredNodeSpec::Cylinder {
             offset: Vec3::new(0.0, stem_center_y, 0.0),
             radius: stem_radius,
             half_height: stem_half_height,
+            round: 0.0,
             material_id: stem_material_id,
         },
         LoweredNodeSpec::Cylinder {
             offset: Vec3::new(0.0, shade_center_y, 0.0),
             radius: shade_radius,
             half_height: shade_height * 0.5,
+            round: 0.0,
             material_id: shade_material_id,
         },
         LoweredNodeSpec::Sphere {
@@ -1932,6 +2623,8 @@ fn compile_room(
         parts.push(SdfNode::Box {
             transform: part_transform,
             half_size: Vec3::new(width * 0.5, wall_thickness * 0.5, depth * 0.5),
+            round: 0.0,
+            shell: 0.0,
             object_id,
             material_id: floor_material_id,
         });
@@ -1949,6 +2642,8 @@ fn compile_room(
         parts.push(SdfNode::Box {
             transform: part_transform,
             half_size: Vec3::new(width * 0.5, wall_thickness * 0.5, depth * 0.5),
+            round: 0.0,
+            shell: 0.0,
             object_id,
             material_id: ceiling_material_id,
         });
@@ -1966,6 +2661,8 @@ fn compile_room(
         parts.push(SdfNode::Box {
             transform: part_transform,
             half_size: Vec3::new(width * 0.5, height * 0.5, wall_thickness * 0.5),
+            round: 0.0,
+            shell: 0.0,
             object_id,
             material_id: back_material_id,
         });
@@ -1983,6 +2680,8 @@ fn compile_room(
         parts.push(SdfNode::Box {
             transform: part_transform,
             half_size: Vec3::new(width * 0.5, height * 0.5, wall_thickness * 0.5),
+            round: 0.0,
+            shell: 0.0,
             object_id,
             material_id: front_material_id,
         });
@@ -2000,6 +2699,8 @@ fn compile_room(
         parts.push(SdfNode::Box {
             transform: part_transform,
             half_size: Vec3::new(wall_thickness * 0.5, height * 0.5, depth * 0.5),
+            round: 0.0,
+            shell: 0.0,
             object_id,
             material_id: left_material_id,
         });
@@ -2017,6 +2718,8 @@ fn compile_room(
         parts.push(SdfNode::Box {
             transform: part_transform,
             half_size: Vec3::new(wall_thickness * 0.5, height * 0.5, depth * 0.5),
+            round: 0.0,
+            shell: 0.0,
             object_id,
             material_id: right_material_id,
         });
@@ -2031,6 +2734,8 @@ fn compile_room(
         return Ok(SdfNode::Box {
             transform,
             half_size: Vec3::new(0.001, 0.001, 0.001),
+            round: 0.0,
+            shell: 0.0,
             object_id,
             material_id,
         });
@@ -2550,6 +3255,8 @@ fn sdf_center(node: &SdfNode) -> Vec3 {
         SdfNode::Torus { transform, .. } => transform.center,
         SdfNode::ExtrudePolygon { transform, .. } => transform.center,
         SdfNode::Custom { transform, .. } => transform.center,
+        SdfNode::DomainModifier { transform, .. }
+        | SdfNode::DistancePostModifier { transform, .. } => transform.center,
         SdfNode::Union { lhs, rhs } => {
             let l = sdf_center(lhs);
             let r = sdf_center(rhs);
@@ -2578,8 +3285,8 @@ fn sdf_center(node: &SdfNode) -> Vec3 {
         | SdfNode::Engrave { lhs, .. }
         | SdfNode::Groove { lhs, .. }
         | SdfNode::Tongue { lhs, .. } => sdf_center(lhs),
+        SdfNode::Slice { base, .. } => sdf_center(base),
         SdfNode::Smooth { base, .. } => sdf_center(base),
-        SdfNode::Round { base, .. } => sdf_center(base),
     }
 }
 
@@ -2951,6 +3658,9 @@ fn resolve_surface_normal_from_node(node: &SdfNode, p: Vec3, epsilon: f32) -> Op
         | SdfNode::Torus { .. }
         | SdfNode::ExtrudePolygon { .. }
         | SdfNode::Custom { .. } => Some(estimate_node_normal(node, p, epsilon)),
+        SdfNode::DomainModifier { .. } | SdfNode::DistancePostModifier { .. } => {
+            Some(estimate_node_normal(node, p, epsilon))
+        }
         SdfNode::Union { lhs, rhs } => {
             let l = sdf_distance_info(lhs, p);
             let r = sdf_distance_info(rhs, p);
@@ -2998,9 +3708,8 @@ fn resolve_surface_normal_from_node(node: &SdfNode, p: Vec3, epsilon: f32) -> Op
         SdfNode::Groove { lhs, rhs, ra, rb } | SdfNode::Tongue { lhs, rhs, ra, rb } => {
             blend_surface_normals(lhs, rhs, p, epsilon, ra.max(*rb), true)
         }
-        SdfNode::Smooth { base, .. } | SdfNode::Round { base, .. } => {
-            resolve_surface_normal_from_node(base, p, epsilon)
-        }
+        SdfNode::Slice { base, .. } => resolve_surface_normal_from_node(base, p, epsilon),
+        SdfNode::Smooth { base, .. } => resolve_surface_normal_from_node(base, p, epsilon),
     }
 }
 
@@ -3486,7 +4195,7 @@ fn bsdf_context_value(
     {
         Value::Object(obj) => obj.fields,
         Value::Number(_) => unreachable!(),
-        Value::String(_) | Value::Array(_) => unreachable!(),
+        Value::String(_) | Value::Array(_) | Value::Function(_) => unreachable!(),
     };
     fields.insert("normal".to_string(), vec3_value_value(bsdf_ctx.normal));
     fields.insert("wo".to_string(), vec3_value_value(bsdf_ctx.wo));
@@ -3806,8 +4515,42 @@ fn sdf_bounds(node: &SdfNode) -> Aabb {
         | SdfNode::Engrave { lhs, rhs, .. }
         | SdfNode::Groove { lhs, rhs, .. }
         | SdfNode::Tongue { lhs, rhs, .. } => sdf_bounds(lhs).union(sdf_bounds(rhs)),
+        SdfNode::Slice {
+            base,
+            axis,
+            min,
+            max,
+        } => {
+            let mut bounds = sdf_bounds(base);
+            match axis {
+                0 => {
+                    bounds.min.x = bounds.min.x.max(*min);
+                    bounds.max.x = bounds.max.x.min(*max);
+                    if bounds.max.x < bounds.min.x {
+                        bounds.max.x = bounds.min.x;
+                    }
+                }
+                1 => {
+                    bounds.min.y = bounds.min.y.max(*min);
+                    bounds.max.y = bounds.max.y.min(*max);
+                    if bounds.max.y < bounds.min.y {
+                        bounds.max.y = bounds.min.y;
+                    }
+                }
+                _ => {
+                    bounds.min.z = bounds.min.z.max(*min);
+                    bounds.max.z = bounds.max.z.min(*max);
+                    if bounds.max.z < bounds.min.z {
+                        bounds.max.z = bounds.min.z;
+                    }
+                }
+            }
+            bounds
+        }
+        SdfNode::DomainModifier { bounds, .. } | SdfNode::DistancePostModifier { bounds, .. } => {
+            *bounds
+        }
         SdfNode::Smooth { base, k } => sdf_bounds(base).expand(*k * 0.1),
-        SdfNode::Round { base, r } => sdf_bounds(base).expand(r.abs()),
     }
 }
 
@@ -3839,31 +4582,60 @@ fn point_aabb_lower_bound(p: Vec3, aabb: Aabb) -> f32 {
 fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
     match node {
         SdfNode::Sphere {
-            transform, radius, ..
-        } => to_local(p, *transform).length() - *radius,
+            transform,
+            radius,
+            shell,
+            ..
+        } => {
+            let d = to_local(p, *transform).length() - *radius;
+            if *shell > 0.0 {
+                d.max(-(d + *shell))
+            } else {
+                d
+            }
+        }
         SdfNode::Box {
             transform,
             half_size,
+            round,
+            shell,
             ..
         } => {
-            let q = to_local(p, *transform).abs().sub(*half_size);
+            let inner_half = Vec3::new(
+                (half_size.x - *round).max(0.0),
+                (half_size.y - *round).max(0.0),
+                (half_size.z - *round).max(0.0),
+            );
+            let q = to_local(p, *transform).abs().sub(inner_half);
             let outside = Vec3::new(q.x.max(0.0), q.y.max(0.0), q.z.max(0.0)).length();
             let inside = q.x.max(q.y).max(q.z).min(0.0);
-            outside + inside
+            let d = outside + inside - *round;
+            if *shell > 0.0 {
+                d.max(-(d + *shell))
+            } else {
+                d
+            }
         }
         SdfNode::Cylinder {
             transform,
             radius,
             half_height,
+            round,
+            shell,
             ..
         } => {
             let q = to_local(p, *transform);
             let radial = (q.x * q.x + q.z * q.z).sqrt();
-            let dx = radial - *radius;
-            let dy = q.y.abs() - *half_height;
+            let dx = radial - (*radius - *round).max(0.0);
+            let dy = q.y.abs() - (*half_height - *round).max(0.0);
             let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
             let inside = dx.max(dy).min(0.0);
-            outside + inside
+            let d = outside + inside - *round;
+            if *shell > 0.0 {
+                d.max(-(d + *shell))
+            } else {
+                d
+            }
         }
         SdfNode::Torus {
             transform,
@@ -3880,14 +4652,25 @@ fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
             sides,
             radius,
             half_height,
+            round,
+            shell,
             ..
         } => {
             let q = to_local(p, *transform);
-            let radial = sd_regular_ngon(Vec3::new(q.x, 0.0, q.z), *sides, *radius);
-            let dy = q.y.abs() - *half_height;
+            let radial = sd_regular_ngon(
+                Vec3::new(q.x, 0.0, q.z),
+                *sides,
+                (*radius - *round).max(0.0),
+            );
+            let dy = q.y.abs() - (*half_height - *round).max(0.0);
             let outside = (radial.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
             let inside = radial.max(dy).min(0.0);
-            outside + inside
+            let d = outside + inside - *round;
+            if *shell > 0.0 {
+                d.max(-(d + *shell))
+            } else {
+                d
+            }
         }
         SdfNode::Custom {
             transform,
@@ -3913,9 +4696,11 @@ fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
         | SdfNode::Pipe { .. }
         | SdfNode::Engrave { .. }
         | SdfNode::Groove { .. }
-        | SdfNode::Tongue { .. } => point_aabb_lower_bound(p, sdf_bounds(node)),
+        | SdfNode::Tongue { .. }
+        | SdfNode::Slice { .. }
+        | SdfNode::DomainModifier { .. }
+        | SdfNode::DistancePostModifier { .. } => point_aabb_lower_bound(p, sdf_bounds(node)),
         SdfNode::Smooth { base, k } => sdf_lower_bound(base, p) - *k * 0.1,
-        SdfNode::Round { base, r } => sdf_lower_bound(base, p) - r.abs(),
     }
 }
 
@@ -3924,12 +4709,18 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
         SdfNode::Sphere {
             transform,
             radius,
+            shell,
             object_id,
             material_id,
         } => {
             let q = to_local(p, *transform);
+            let d = q.length() - *radius;
             DistanceInfo {
-                distance: q.length() - *radius,
+                distance: if *shell > 0.0 {
+                    d.max(-(d + *shell))
+                } else {
+                    d
+                },
                 object_id: *object_id,
                 material_id: *material_id,
             }
@@ -3937,14 +4728,26 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
         SdfNode::Box {
             transform,
             half_size,
+            round,
+            shell,
             object_id,
             material_id,
         } => {
-            let q = to_local(p, *transform).abs().sub(*half_size);
+            let inner_half = Vec3::new(
+                (half_size.x - *round).max(0.0),
+                (half_size.y - *round).max(0.0),
+                (half_size.z - *round).max(0.0),
+            );
+            let q = to_local(p, *transform).abs().sub(inner_half);
             let outside = Vec3::new(q.x.max(0.0), q.y.max(0.0), q.z.max(0.0)).length();
             let inside = q.x.max(q.y).max(q.z).min(0.0);
+            let d = outside + inside - *round;
             DistanceInfo {
-                distance: outside + inside,
+                distance: if *shell > 0.0 {
+                    d.max(-(d + *shell))
+                } else {
+                    d
+                },
                 object_id: *object_id,
                 material_id: *material_id,
             }
@@ -3953,17 +4756,24 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             transform,
             radius,
             half_height,
+            round,
+            shell,
             object_id,
             material_id,
         } => {
             let q = to_local(p, *transform);
             let radial = (q.x * q.x + q.z * q.z).sqrt();
-            let dx = radial - *radius;
-            let dy = q.y.abs() - *half_height;
+            let dx = radial - (*radius - *round).max(0.0);
+            let dy = q.y.abs() - (*half_height - *round).max(0.0);
             let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
             let inside = dx.max(dy).min(0.0);
+            let d = outside + inside - *round;
             DistanceInfo {
-                distance: outside + inside,
+                distance: if *shell > 0.0 {
+                    d.max(-(d + *shell))
+                } else {
+                    d
+                },
                 object_id: *object_id,
                 material_id: *material_id,
             }
@@ -3988,16 +4798,27 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             sides,
             radius,
             half_height,
+            round,
+            shell,
             object_id,
             material_id,
         } => {
             let q = to_local(p, *transform);
-            let radial = sd_regular_ngon(Vec3::new(q.x, 0.0, q.z), *sides, *radius);
-            let dy = q.y.abs() - *half_height;
+            let radial = sd_regular_ngon(
+                Vec3::new(q.x, 0.0, q.z),
+                *sides,
+                (*radius - *round).max(0.0),
+            );
+            let dy = q.y.abs() - (*half_height - *round).max(0.0);
             let outside = (radial.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
             let inside = radial.max(dy).min(0.0);
+            let d = outside + inside - *round;
             DistanceInfo {
-                distance: outside + inside,
+                distance: if *shell > 0.0 {
+                    d.max(-(d + *shell))
+                } else {
+                    d
+                },
                 object_id: *object_id,
                 material_id: *material_id,
             }
@@ -4015,6 +4836,26 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
                 object_id: *object_id,
                 material_id: *material_id,
             }
+        }
+        SdfNode::DomainModifier {
+            base,
+            runtime,
+            transform,
+            ..
+        } => {
+            let q = to_local(p, *transform);
+            sdf_distance_info(base, eval_modifier_domain(runtime, q))
+        }
+        SdfNode::DistancePostModifier {
+            base,
+            runtime,
+            transform,
+            ..
+        } => {
+            let q = to_local(p, *transform);
+            let mut info = sdf_distance_info(base, q);
+            info.distance = eval_modifier_distance_post(runtime, info.distance, q);
+            info
         }
         SdfNode::Union { lhs, rhs } => {
             let lhs_lb = sdf_lower_bound(lhs, p);
@@ -4238,14 +5079,25 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
                 ..l
             }
         }
+        SdfNode::Slice {
+            base,
+            axis,
+            min,
+            max,
+        } => {
+            let mut info = sdf_distance_info(base, p);
+            let coord = match axis {
+                0 => p.x,
+                1 => p.y,
+                _ => p.z,
+            };
+            let slab = (min - coord).max(coord - max);
+            info.distance = info.distance.max(slab);
+            info
+        }
         SdfNode::Smooth { base, k } => {
             let mut info = sdf_distance_info(base, p);
             info.distance -= *k * 0.1;
-            info
-        }
-        SdfNode::Round { base, r } => {
-            let mut info = sdf_distance_info(base, p);
-            info.distance -= *r;
             info
         }
     }
@@ -4362,16 +5214,44 @@ fn op_tongue(a: f32, b: f32, ra: f32, rb: f32) -> f32 {
 }
 
 fn eval_custom_sdf_distance(runtime: &CustomSdfRuntime, p: Vec3) -> f32 {
+    let domain_value = eval_sdf_vec3_function_with_overrides(
+        &runtime.state,
+        &runtime.name,
+        "domain",
+        vec3_value_value(p),
+        Some(&runtime.overrides),
+    )
+    .ok();
+    let domain_p = match domain_value {
+        Some(Value::Object(obj)) => {
+            let x = read_number_field(&obj, &["x"]).unwrap_or(p.x);
+            let y = read_number_field(&obj, &["y"]).unwrap_or(p.y);
+            let z = read_number_field(&obj, &["z"]).unwrap_or(p.z);
+            Vec3::new(x, y, z)
+        }
+        _ => p,
+    };
     let value = eval_sdf_function_with_overrides(
         &runtime.state,
         &runtime.name,
         "distance",
-        vec3_value_value(p),
+        vec3_value_value(domain_p),
         Some(&runtime.overrides),
     );
-    match value {
+    let distance = match value {
         Ok(Value::Number(v)) => v as f32,
         _ => 1.0e6,
+    };
+    let post = eval_sdf_function_args_with_overrides(
+        &runtime.state,
+        &runtime.name,
+        "distance_post",
+        vec![Value::Number(distance as f64), vec3_value_value(domain_p)],
+        Some(&runtime.overrides),
+    );
+    match post {
+        Ok(Value::Number(v)) => v as f32,
+        _ => distance,
     }
 }
 
@@ -4847,7 +5727,7 @@ fn read_spectrum_field(obj: &ObjectValue, name: &str) -> Option<Spectrum> {
             let b = read_number_field(v, &["b", "z"])?;
             Some(Spectrum::rgb(r, g, b))
         }
-        Value::String(_) | Value::Array(_) => None,
+        Value::String(_) | Value::Array(_) | Value::Function(_) => None,
     }
 }
 
@@ -4948,7 +5828,7 @@ fn vec3_from_value(value: &Value) -> Option<Vec3> {
             let z = read_number_field(obj, &["z", "b"])?;
             Some(Vec3::new(x, y, z))
         }
-        Value::String(_) | Value::Array(_) => None,
+        Value::String(_) | Value::Array(_) | Value::Function(_) => None,
     }
 }
 
@@ -5059,6 +5939,9 @@ fn resolve_material_from_node(
                 view_dir,
             ))
         }
+        SdfNode::DomainModifier { base, .. } | SdfNode::DistancePostModifier { base, .. } => {
+            resolve_material_from_node(base, setup, hit, view_dir)
+        }
         SdfNode::Union { lhs, rhs } => {
             let l = sdf_distance_info(lhs, hit.position);
             let r = sdf_distance_info(rhs, hit.position);
@@ -5111,9 +5994,8 @@ fn resolve_material_from_node(
         SdfNode::Groove { lhs, rhs, ra, rb } | SdfNode::Tongue { lhs, rhs, ra, rb } => {
             blend_node_materials(lhs, rhs, setup, hit, view_dir, ra.max(*rb), true)
         }
-        SdfNode::Smooth { base, .. } | SdfNode::Round { base, .. } => {
-            resolve_material_from_node(base, setup, hit, view_dir)
-        }
+        SdfNode::Slice { base, .. } => resolve_material_from_node(base, setup, hit, view_dir),
+        SdfNode::Smooth { base, .. } => resolve_material_from_node(base, setup, hit, view_dir),
     }
 }
 
@@ -5176,7 +6058,7 @@ fn resolve_split_material_from_node(
         SdfNode::Groove { lhs, rhs, ra, rb } | SdfNode::Tongue { lhs, rhs, ra, rb } => {
             split_node_materials(lhs, rhs, setup, hit, view_dir, ra.max(*rb), true)
         }
-        SdfNode::Smooth { base, .. } | SdfNode::Round { base, .. } => {
+        SdfNode::Smooth { base, .. } => {
             resolve_split_material_from_node(base, setup, hit, view_dir)
         }
         _ => None,
@@ -5696,7 +6578,7 @@ fn spectrum_from_value(value: &Value) -> Option<Spectrum> {
             let b = read_number_field(obj, &["b", "z"])?;
             Some(Spectrum::rgb(r, g, b))
         }
-        Value::String(_) | Value::Array(_) => None,
+        Value::String(_) | Value::Array(_) | Value::Function(_) => None,
     }
 }
 
@@ -5732,6 +6614,7 @@ mod tests {
             jitted_material_functions: HashMap::new(),
             jitted_material_vec3_functions: HashMap::new(),
             jitted_sdf_distance_functions: HashMap::new(),
+            jitted_sdf_vec3_functions: HashMap::new(),
             jitted_sdf_functions: HashMap::new(),
             compiled_sdf_functions: HashMap::new(),
             material_defs: HashMap::new(),

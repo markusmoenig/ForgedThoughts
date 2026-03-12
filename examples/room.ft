@@ -78,6 +78,10 @@ let accent_mat = Metal {
   roughness: 0.28
 };
 
+let statue_mat = Lambert {
+  color: #8f949c
+};
+
 let render = RenderSettings {
   width: 800,
   height: 800,
@@ -156,4 +160,15 @@ var vase = Sphere {
   .offset_x(-0.35)
   .offset_z(0.08);
 
-let scene = room + cupboard + table + lamp + vase;
+let statue = Box {
+  size: vec3(0.55, 1.5, 0.42),
+  material: statue_mat
+}
+  .left_of(table, 1.35)
+  .align_z(table, Center)
+  .align_y(table, Bottom)
+  .offset_z(-0.2)
+  .slice_y(-0.01, 0.01)
+  .repeat_y(0.03, 42.0);
+
+let scene = room + cupboard + table + lamp + vase + statue;

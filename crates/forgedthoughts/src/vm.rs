@@ -107,6 +107,7 @@ fn compile_expr(expr: &Expr, code: &mut Vec<VmInstruction>) -> Option<()> {
             compile_expr(expr, code)?;
             code.push(VmInstruction::Unary(*op));
         }
+        Expr::FunctionLiteral { .. } => return None,
     }
     Some(())
 }
@@ -125,9 +126,6 @@ fn is_unsupported_method_name(name: &str) -> bool {
     matches!(
         name,
         "smooth"
-            | "round"
-            | "bevel"
-            | "chamfer"
             | "union_round"
             | "union_chamfer"
             | "union_columns"

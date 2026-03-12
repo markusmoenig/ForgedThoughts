@@ -1,0 +1,59 @@
+let camera = Camera {
+  origin: vec3(0.0, 1.2, 4.6),
+  target: vec3(0.0, 0.7, 0.0),
+  fov_y: 24.0
+};
+
+let key = SphereLight {
+  position: vec3(2.0, 3.4, 2.8),
+  radius: 0.6,
+  color: #fff0d8,
+  intensity: 80.0,
+  samples: 4
+};
+
+environment Sky {
+  fn color(dir) {
+    let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    return mix(#edf2fb, #7aa8ff, pow(t, 0.7));
+  }
+};
+
+let wall_mat = Lambert {
+  color: #efede7
+};
+
+let statue_mat = Lambert {
+  color: #c9ccd1
+};
+
+let render = RenderSettings {
+  width: 200,
+  height: 200,
+  max_steps: 320,
+  max_dist: 30.0,
+  epsilon: 0.0002,
+  step_scale: 0.7,
+  accel: Bvh{}
+};
+
+var floor = Box {
+  size: vec3(6.0, 0.4, 6.0),
+  material: wall_mat
+};
+floor.pos.y = -0.2;
+
+var statue = Box {
+  size: vec3(0.55, 1.5, 0.42),
+  material: statue_mat
+}
+  .attach(floor, Top);
+statue.domain = fn(p) {
+  return rotate_y(p, p.y * 18.0);
+};
+statue.distance_post = fn(d, p) {
+  let bands = sin((p.y + 0.75) * 115.0) * 0.0045;
+  return abs(d + bands) - 0.028;
+};
+
+let scene = floor + statue;

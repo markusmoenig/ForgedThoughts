@@ -16,10 +16,11 @@ use std::{
 
 pub use ast::{BinaryOp, Expr, Program, Statement, UnaryOp};
 pub use eval::{
-    Binding, EvalError, EvalState, ObjectValue, Value, eval_environment_function,
-    eval_material_function, eval_material_function_with_overrides, eval_material_properties,
-    eval_material_properties_with_overrides, eval_program, eval_sdf_function,
-    eval_sdf_function_with_overrides, eval_sdf_zero_arg_function,
+    Binding, EvalError, EvalState, FunctionValue, ObjectValue, Value, eval_environment_function,
+    eval_function_value, eval_material_function, eval_material_function_with_overrides,
+    eval_material_properties, eval_material_properties_with_overrides, eval_program,
+    eval_sdf_function, eval_sdf_function_args_with_overrides, eval_sdf_function_with_overrides,
+    eval_sdf_vec3_function_with_overrides, eval_sdf_zero_arg_function,
     eval_sdf_zero_arg_function_with_overrides, eval_top_level_function,
 };
 pub use materials::{
@@ -1020,6 +1021,7 @@ fn expr_dependencies(expr: &Expr, local_scope: &HashSet<String>) -> HashSet<Stri
         Expr::Unary { expr, .. } => {
             deps.extend(expr_dependencies(expr, local_scope));
         }
+        Expr::FunctionLiteral { .. } => {}
         Expr::Number(_) => {}
     }
     deps
@@ -1093,6 +1095,7 @@ fn namespace_expr(
             op,
             expr: Box::new(namespace_expr(*expr, alias, top_level_names, local_scope)),
         },
+        Expr::FunctionLiteral { params, body } => Expr::FunctionLiteral { params, body },
         Expr::Number(_) => expr,
     }
 }
@@ -1117,7 +1120,8 @@ mod tests {
     use super::{
         CoreError, ObjectValue, Value, eval_environment_function,
         eval_material_function_with_overrides, eval_material_properties_with_overrides,
-        eval_program, eval_sdf_function, eval_sdf_function_with_overrides,
+        eval_program, eval_sdf_function, eval_sdf_function_args_with_overrides,
+        eval_sdf_function_with_overrides, eval_sdf_vec3_function_with_overrides,
         eval_sdf_zero_arg_function, eval_sdf_zero_arg_function_with_overrides,
         eval_top_level_function, load_and_eval_scene, load_program_with_imports, parse_program,
     };
@@ -1234,20 +1238,21 @@ mod tests {
     }
 
     #[test]
-    fn supports_round_operator_calls() {
+    fn supports_primitive_round_fields() {
         let source = r#"
-            var s = Sphere{};
-            let r = s.round(0.1);
+            let b = Box {
+              size: vec3(1.0, 2.0, 3.0),
+              round: 0.1
+            };
         "#;
         let program = parse_program(source).expect("program should parse");
         let state = eval_program(&program).expect("program should evaluate");
-        let value = &state.bindings.get("r").expect("r binding").value;
+        let value = &state.bindings.get("b").expect("b binding").value;
         let Value::Object(obj) = value else {
-            panic!("r should be an object");
+            panic!("b should be an object");
         };
-        assert_eq!(obj.type_name.as_deref(), Some("round"));
-        assert!(obj.fields.contains_key("base"));
-        assert_eq!(obj.fields.get("r"), Some(&Value::Number(0.1)));
+        assert_eq!(obj.type_name.as_deref(), Some("Box"));
+        assert_eq!(obj.fields.get("round"), Some(&Value::Number(0.1)));
     }
 
     #[test]
@@ -1408,6 +1413,58 @@ mod tests {
         };
         assert_eq!(pos.fields.get("x"), Some(&Value::Number(1.25)));
         assert_eq!(rot.fields.get("z"), Some(&Value::Number(15.0)));
+    }
+
+    #[test]
+    fn supports_layout_face_to_calls() {
+        let source = r#"
+            var target = Sphere { radius: 0.5 };
+            target.pos.x = 1.0;
+            target.pos.y = 1.0;
+
+            var box = Box { size: vec3(1.0) }
+              .face_to(target);
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let value = &state.bindings.get("box").expect("box binding").value;
+        let Value::Object(obj) = value else {
+            panic!("box should be an object");
+        };
+        let Value::Object(rot) = obj.fields.get("rot").expect("rot object") else {
+            panic!("rot should be an object");
+        };
+        assert_eq!(rot.fields.get("x"), Some(&Value::Number(-45.0)));
+        assert_eq!(rot.fields.get("y"), Some(&Value::Number(90.0)));
+    }
+
+    #[test]
+    fn supports_domain_helper_member_operators() {
+        let source = r#"
+            let sphere = Sphere { radius: 0.5 };
+            let mirrored = sphere.mirror_x();
+            let repeated = sphere.repeat_x(1.5, 3.0);
+            let sliced = sphere.slice_y(-0.25, 0.25);
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+
+        let Value::Object(mirrored) = &state.bindings.get("mirrored").expect("mirrored").value
+        else {
+            panic!("mirrored should be an object");
+        };
+        assert_eq!(mirrored.type_name.as_deref(), Some("mirror_x"));
+
+        let Value::Object(repeated) = &state.bindings.get("repeated").expect("repeated").value
+        else {
+            panic!("repeated should be an object");
+        };
+        assert_eq!(repeated.type_name.as_deref(), Some("repeat_x"));
+
+        let Value::Object(sliced) = &state.bindings.get("sliced").expect("sliced").value else {
+            panic!("sliced should be an object");
+        };
+        assert_eq!(sliced.type_name.as_deref(), Some("slice_y"));
     }
 
     #[test]
@@ -1600,6 +1657,102 @@ mod tests {
         let program = parse_program(source).expect("program should parse");
         let state = eval_program(&program).expect("program should evaluate");
         assert!(state.jitted_sdf_distance_functions.contains_key("ShellBox"));
+    }
+
+    #[test]
+    fn supports_programmable_sdf_domain_and_distance_post_hooks() {
+        let source = r#"
+            sdf TwistedShell {
+              let radius = 0.5;
+              let thickness = 0.05;
+
+              fn domain(p) {
+                return rotate_y(p, p.y * 90.0);
+              }
+
+              fn distance(p) {
+                return length(p) - radius;
+              }
+
+              fn distance_post(d, p) {
+                return abs(d) - thickness;
+              }
+            };
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        assert!(
+            state
+                .jitted_sdf_vec3_functions
+                .get("TwistedShell")
+                .and_then(|functions| functions.get("domain"))
+                .is_some()
+        );
+        let domain = eval_sdf_vec3_function_with_overrides(
+            &state,
+            "TwistedShell",
+            "domain",
+            Value::Object(ObjectValue {
+                type_name: Some("vec3".to_string()),
+                fields: HashMap::from([
+                    ("x".to_string(), Value::Number(1.0)),
+                    ("y".to_string(), Value::Number(1.0)),
+                    ("z".to_string(), Value::Number(0.0)),
+                ]),
+            }),
+            None,
+        )
+        .expect("domain evaluation should succeed");
+        let Value::Object(obj) = domain else {
+            panic!("domain should return vec3");
+        };
+        assert!(obj.fields.contains_key("x"));
+
+        let post = eval_sdf_function_args_with_overrides(
+            &state,
+            "TwistedShell",
+            "distance_post",
+            vec![
+                Value::Number(0.2),
+                Value::Object(ObjectValue {
+                    type_name: Some("vec3".to_string()),
+                    fields: HashMap::from([
+                        ("x".to_string(), Value::Number(0.0)),
+                        ("y".to_string(), Value::Number(0.0)),
+                        ("z".to_string(), Value::Number(0.0)),
+                    ]),
+                }),
+            ],
+            None,
+        )
+        .expect("distance_post should evaluate");
+        assert_eq!(post, Value::Number(0.15000000000000002));
+    }
+
+    #[test]
+    fn supports_object_level_modifier_function_assignments() {
+        let source = r#"
+            var statue = Box { size: vec3(1.0, 2.0, 1.0) };
+            statue.domain = fn(p) {
+              return rotate_y(p, p.y * 10.0);
+            };
+            statue.distance_post = fn(d, p) {
+              return abs(d + sin(p.y * 20.0) * 0.01) - 0.02;
+            };
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let Value::Object(statue) = &state.bindings.get("statue").expect("statue").value else {
+            panic!("statue should be an object");
+        };
+        assert!(matches!(
+            statue.fields.get("domain"),
+            Some(Value::Function(_))
+        ));
+        assert!(matches!(
+            statue.fields.get("distance_post"),
+            Some(Value::Function(_))
+        ));
     }
 
     #[test]

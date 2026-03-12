@@ -126,6 +126,15 @@ table.legs.material = Metal { color: #2b3138, roughness: 0.22 };
 
 var vase = Sphere { radius: 0.18 }
   .attach(table.top, Top);
+
+var lamp = Lamp {}
+  .attach(cupboard.body, Top, Bottom)
+  .face_to(table.top);
+
+let rib = Box { size: vec3(0.2, 1.0, 0.4) };
+let columns = rib.repeat_x(0.6, 5.0);
+let mirrored = columns.mirror_z();
+let clipped = mirrored.slice_y(-0.4, 0.4);
 ```
 
 Supported language pieces today include:
@@ -140,7 +149,7 @@ Supported language pieces today include:
 - hex color literals like `#ff0000` and `#f00`
 - material definitions with local bindings and functions
 - environment definitions with local bindings and functions
-- custom SDF definitions with `sdf Name { fn distance(p) { ... } }`
+- custom SDF definitions with programmable hooks like `distance(p)`, optional `domain(p)`, and optional `distance_post(d, p)`
 - hard booleans with `+`, `-`, and `&`
 - named `hg_sdf`-style boolean variants like `union_round`, `diff_chamfer`, and `intersect_stairs`
 
@@ -230,6 +239,42 @@ let scene = SoftBlob {};
 ```
 
 `fn bounds()` is optional, but it matters for performance. Without it, custom SDFs fall back to a very conservative bound and acceleration quality drops sharply.
+
+Custom SDFs can also use programmable modifier hooks:
+
+```forge
+sdf TwistStatue {
+  fn bounds() {
+    return vec3(0.4, 0.9, 0.4);
+  }
+
+  fn domain(p) {
+    return rotate_y(p, p.y * 18.0);
+  }
+
+  fn distance(p) {
+    return length(p) - 0.5;
+  }
+
+  fn distance_post(d, p) {
+    return abs(d + sin(p.y * 120.0) * 0.004) - 0.03;
+  }
+}
+```
+
+Ordinary objects can use the same idea directly:
+
+```forge
+var statue = Box { size: vec3(0.55, 1.5, 0.42) };
+
+statue.domain = fn(p) {
+  return rotate_y(p, p.y * 18.0);
+};
+
+statue.distance_post = fn(d, p) {
+  return abs(d + sin((p.y + 0.75) * 115.0) * 0.0045) - 0.028;
+};
+```
 
 Example procedural environment:
 

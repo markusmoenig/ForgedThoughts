@@ -131,11 +131,29 @@ var vase = Sphere {
   .offset_x(-0.35);
 ```
 
+Forge also has a first object-level modeling-helper layer for symmetry, repetition, and clipping:
+
+```forge
+let rib = Box { size: vec3(0.2, 1.0, 0.4) };
+let columns = rib.repeat_x(0.6, 5.0);
+let mirrored = columns.mirror_z();
+let clipped = mirrored.slice_y(-0.4, 0.4);
+```
+
+Orientation-aware layout can then aim an asset toward another object or anchor:
+
+```forge
+var wall_lamp = Lamp {}
+  .attach(cupboard.body, Top, Bottom)
+  .face_to(table.top);
+```
+
 Supported fields today:
 
 `Sphere`
 
 - `radius` or `r`
+- `shell`
 - `pos.x`, `pos.y`, `pos.z` or legacy `x`, `y`, `z`
 - `rot.x`, `rot.y`, `rot.z` or legacy `rot_x`, `rot_y`, `rot_z`
 - `material`
@@ -143,6 +161,7 @@ Supported fields today:
 ```forge
 let ball = Sphere {
   radius: 1.0,
+  shell: 0.04,
   material: Metal {
     color: #ebc757,
     roughness: 0.18
@@ -153,13 +172,17 @@ let ball = Sphere {
 `Box`
 
 - `size: vec3(...)`
+- `round` for edge rounding that preserves the intended overall size
+- `shell` for hollowing the form inward while keeping the outer dimensions
 - `pos.*`
 - `rot.*`
 - `material`
 
 ```forge
 let block = Box {
-  size: vec3(1.2, 0.8, 1.2)
+  size: vec3(1.2, 0.8, 1.2),
+  round: 0.08,
+  shell: 0.04
 };
 ```
 
@@ -167,6 +190,8 @@ let block = Box {
 
 - `radius` or `r`
 - `height` or `h`
+- `round`
+- `shell`
 - `pos.*`
 - `rot.*`
 - `material`
@@ -174,7 +199,9 @@ let block = Box {
 ```forge
 let column = Cylinder {
   radius: 0.5,
-  height: 2.4
+  height: 2.4,
+  round: 0.04,
+  shell: 0.03
 };
 ```
 
@@ -198,6 +225,8 @@ let ring = Torus {
 - `sides` or `n` with a minimum of `3`
 - `radius` or `r`
 - `height` or `h`
+- `round`
+- `shell`
 - `pos.*`
 - `rot.*`
 - `material`
@@ -208,7 +237,9 @@ This is a regular N-gon extruded along the Y axis.
 let hex = ExtrudePolygon {
   sides: 6,
   radius: 0.8,
-  height: 0.35
+  height: 0.35,
+  round: 0.03,
+  shell: 0.02
 };
 ```
 
@@ -267,14 +298,6 @@ let scene = sphere;
 
 Transforms are currently driven with nested properties like `pos.x`, `pos.y`, `rot.x`, and `rot.z`. For relational placement like “on top of floor” or “right of sphere”, see the layout section in [Language](./language.md#layout).
 
-Rounding is not yet a native primitive field like `Box { rounding: 0.2 }`. Right now rounded or beveled shapes are created with shape operators such as `.round(r)`.
-
-## Shape Operators
-
-For simple profile changes on a single shape, Forge supports:
-
-- `shape.round(r)` for rounded/beveled forms
-
 For boolean composition, see the dedicated [Booleans](./booleans.md) page.
 
 ## Custom SDFs
@@ -306,6 +329,44 @@ Rules:
 - `p` is evaluated in local/object space
 - helper functions can be reused inside the SDF block
 - `fn bounds()` is optional but strongly recommended
+- optional `fn domain(p)` can transform point space before `distance(p)`
+- optional `fn distance_post(d, p)` can modify the computed distance afterward
+
+Example programmable modifier pattern:
+
+```forge
+sdf TwistStatue {
+  fn bounds() {
+    return vec3(0.4, 0.9, 0.4);
+  }
+
+  fn domain(p) {
+    return rotate_y(p, p.y * 18.0);
+  }
+
+  fn distance(p) {
+    return length(p) - 0.5;
+  }
+
+  fn distance_post(d, p) {
+    return abs(d + sin(p.y * 120.0) * 0.004) - 0.03;
+  }
+}
+```
+
+The same programmable hooks can be attached directly to ordinary objects without wrapping them in a full `sdf` asset:
+
+```forge
+var statue = Box { size: vec3(0.55, 1.5, 0.42) };
+
+statue.domain = fn(p) {
+  return rotate_y(p, p.y * 18.0);
+};
+
+statue.distance_post = fn(d, p) {
+  return abs(d + sin((p.y + 0.75) * 115.0) * 0.0045) - 0.028;
+};
+```
 
 ## Why `bounds()` Matters
 

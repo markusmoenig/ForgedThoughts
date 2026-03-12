@@ -40,7 +40,7 @@ Current supported pieces include:
 - named SDF boolean variants such as `union_round`, `diff_chamfer`, and `intersect_stairs`
 - material definitions with local bindings and functions
 - environment definitions with local bindings and functions
-- custom SDF definitions with `sdf Name { fn distance(p) { ... } }`
+- custom SDF definitions with programmable hooks like `distance(p)`, optional `domain(p)`, and optional `distance_post(d, p)`
 - object layout methods for relative placement
 - semantic part material assignment like `table.legs.material = ...`
 - semantic part placement like `vase.attach(table.top, Top)`
@@ -68,6 +68,46 @@ let shape =
     .union_round(ring, 0.08)
     .diff_chamfer(cut, 0.04)
     .intersect_stairs(mask, 0.12, 6.0);
+```
+
+## Modeling Helpers
+
+Forge now has a first domain-helper slice for object-level SDF composition:
+
+- `mirror_x()`, `mirror_y()`, `mirror_z()`
+- `repeat_x(spacing, count)`, `repeat_y(...)`, `repeat_z(...)`
+- `slice_x(min, max)`, `slice_y(...)`, `slice_z(...)`
+
+These helpers are lowered into native renderer structures before marching, so they do not depend on the interpreted hot path.
+
+```forge
+let rib = Box { size: vec3(0.2, 1.0, 0.4) };
+
+let columns = rib.repeat_x(0.6, 5.0);
+let mirrored = columns.mirror_z();
+let clipped = mirrored.slice_y(-0.4, 0.4);
+```
+
+For fully programmable shaping inside custom SDFs, use SDF hooks instead:
+
+- `fn domain(p)` transforms point space before `distance(p)`
+- `fn distance_post(d, p)` modifies the computed distance afterward
+- built-ins like `rotate_x/y/z(v, deg)` work in those hooks and stay on the JIT-accelerated path when they fit the supported subset
+
+You can also attach programmable hooks directly to ordinary objects:
+
+```forge
+var statue = Box {
+  size: vec3(0.55, 1.5, 0.42)
+};
+
+statue.domain = fn(p) {
+  return rotate_y(p, p.y * 18.0);
+};
+
+statue.distance_post = fn(d, p) {
+  return abs(d + sin((p.y + 0.75) * 115.0) * 0.0045) - 0.028;
+};
 ```
 
 ## Functions
@@ -116,6 +156,7 @@ Current layout methods include:
 - `right_of`, `left_of`, `on_top_of`, `below`, `in_front_of`, `behind`
 - `offset_x/y/z`
 - `rotate_x/y/z`
+- `face_to(other[, Anchor])` to orient local forward (`+Z`) toward another object or anchor
 
 Example:
 
@@ -135,6 +176,7 @@ var box = Box {
   .right_of(sphere, -0.8)
   .align_z(sphere, Center)
   .attach(floor, Top + 0.3)
+  .face_to(sphere)
   .rotate_z(10.0);
 ```
 
@@ -178,6 +220,7 @@ Semantics:
 - explicit string anchors align named local anchor points between assets
 - `align_*` only affects one axis at a time
 - `right_of` and similar helpers only define that one relative direction
+- `face_to(...)` sets `rot.x` and `rot.y` so local `+Z` points toward the target
 - extra offsets are still explicit
 
 So `right_of(a, -0.8)` does not silently imply matching `y` or `z`.

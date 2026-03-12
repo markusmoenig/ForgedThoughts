@@ -131,6 +131,7 @@ fn render_value(value: &Value) -> String {
             out.push('}');
             out
         }
+        Value::Function(_) => "Function(<anonymous>)".to_string(),
     }
 }
 

@@ -484,6 +484,17 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
+        if self.matches_kind(TokenKind::Fn) {
+            let params = self.parse_function_params()?;
+            let body = if self.matches_kind(TokenKind::Equal) {
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                vec![MaterialFunctionStatement::Return { expr }]
+            } else {
+                self.parse_material_function_body()?
+            };
+            return Ok(Expr::FunctionLiteral { params, body });
+        }
         if self.matches_kind(TokenKind::LParen) {
             let expr = self.parse_expr()?;
             self.expect_kind(TokenKind::RParen, ")")?;

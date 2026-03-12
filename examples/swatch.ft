@@ -58,7 +58,8 @@ var base = Cylinder {
   radius: 1.1,
   pos: vec3(0),
   material: Gold {},
-  height: 0.3
+  height: 0.3,
+  round: 0.05
 };
 
 var base_cut = Cylinder {
@@ -68,4 +69,4 @@ var base_cut = Cylinder {
   height: 0.4
 };
 
-let scene = (floor + (base-base_cut).round(0.05));
+let scene = floor + (base - base_cut);

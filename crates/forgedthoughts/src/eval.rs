@@ -7,8 +7,9 @@ use crate::ast::{
     MaterialStatement, Program, SdfDef, SdfFunctionStatement, SdfStatement, Statement, UnaryOp,
 };
 use crate::jit::{
-    JitCapture, JitFunction, JitSdfDistanceFunction, JitVec3Function, compile_jit_function,
-    compile_material_vec3_function, compile_sdf_distance_function,
+    JitCapture, JitFunction, JitModifierDistanceFunction, JitSdfDistanceFunction,
+    JitSdfVec3Function, JitVec3Function, compile_jit_function, compile_material_vec3_function,
+    compile_modifier_distance_function, compile_sdf_distance_function, compile_sdf_vec3_function,
 };
 use crate::vm::{VmFunction, VmInstruction, compile_function};
 
@@ -18,12 +19,32 @@ pub enum Value {
     String(String),
     Array(Vec<Value>),
     Object(ObjectValue),
+    Function(FunctionValue),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObjectValue {
     pub type_name: Option<String>,
     pub fields: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionValue {
+    pub params: Vec<String>,
+    pub body: Vec<MaterialFunctionStatement>,
+    pub captures: HashMap<String, Value>,
+    pub compiled: Option<VmFunction>,
+    pub jitted_vec3: Option<JitSdfVec3Function>,
+    pub jitted_distance_post: Option<JitModifierDistanceFunction>,
+}
+
+impl PartialEq for FunctionValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.params == other.params
+            && self.body == other.body
+            && self.captures == other.captures
+            && self.compiled == other.compiled
+    }
 }
 
 impl ObjectValue {
@@ -52,6 +73,7 @@ pub struct EvalState {
     pub jitted_material_vec3_functions:
         HashMap<String, HashMap<String, (Vec<JitCapture>, JitVec3Function)>>,
     pub jitted_sdf_distance_functions: HashMap<String, JitSdfDistanceFunction>,
+    pub jitted_sdf_vec3_functions: HashMap<String, HashMap<String, JitSdfVec3Function>>,
     pub jitted_sdf_functions: HashMap<String, HashMap<String, JitFunction>>,
     pub compiled_sdf_functions: HashMap<String, HashMap<String, VmFunction>>,
     pub material_defs: HashMap<String, MaterialDef>,
@@ -117,6 +139,7 @@ pub fn eval_program(program: &Program) -> Result<EvalState, EvalError> {
         jitted_material_functions: HashMap::new(),
         jitted_material_vec3_functions: HashMap::new(),
         jitted_sdf_distance_functions: HashMap::new(),
+        jitted_sdf_vec3_functions: HashMap::new(),
         jitted_sdf_functions: HashMap::new(),
         compiled_sdf_functions: HashMap::new(),
         material_defs: HashMap::new(),
@@ -235,6 +258,7 @@ fn eval_statement(stmt: &Statement, state: &mut EvalState) -> Result<(), EvalErr
             }
             let mut compiled = HashMap::new();
             let mut jitted = HashMap::new();
+            let mut jitted_vec3 = HashMap::new();
             for stmt in &def.statements {
                 if let SdfStatement::Function { name, params, body } = stmt
                     && let Some(vm) = crate::vm::compile_function_parts(params, body)
@@ -247,11 +271,22 @@ fn eval_statement(stmt: &Statement, state: &mut EvalState) -> Result<(), EvalErr
                     }
                     compiled.insert(name.clone(), vm);
                 }
+                if jit_enabled()
+                    && let SdfStatement::Function { name, .. } = stmt
+                    && let Some(compiled_jit) = compile_sdf_vec3_function(def, name)
+                {
+                    jitted_vec3.insert(name.clone(), compiled_jit);
+                }
             }
             if !compiled.is_empty() {
                 state
                     .compiled_sdf_functions
                     .insert(def.name.clone(), compiled);
+            }
+            if !jitted_vec3.is_empty() {
+                state
+                    .jitted_sdf_vec3_functions
+                    .insert(def.name.clone(), jitted_vec3);
             }
             if !jitted.is_empty() {
                 state.jitted_sdf_functions.insert(def.name.clone(), jitted);
@@ -377,6 +412,14 @@ fn eval_expr_in_material_scope(
             }
             Ok(Value::Array(values))
         }
+        Expr::FunctionLiteral { params, body } => Ok(Value::Function(FunctionValue {
+            params: params.clone(),
+            body: body.clone(),
+            captures: locals.clone(),
+            compiled: crate::vm::compile_function_parts(params, body),
+            jitted_vec3: compile_function_literal_vec3(params, body, locals),
+            jitted_distance_post: compile_function_literal_distance_post(params, body, locals),
+        })),
         Expr::Ident(name) => {
             if let Some(value) = locals.get(name) {
                 return Ok(value.clone());
@@ -791,15 +834,6 @@ fn build_sdf_member_value(
             };
             ("smooth", vec![("base", base), ("k", Value::Number(k))])
         }
-        "round" | "bevel" | "chamfer" => {
-            if args.len() != 1 {
-                return Err(EvalError::UnsupportedCall);
-            }
-            let Value::Number(r) = args[0] else {
-                return Err(EvalError::UnsupportedCall);
-            };
-            ("round", vec![("base", base), ("r", Value::Number(r))])
-        }
         "union_round" | "union_chamfer" | "union_soft" => {
             if args.len() != 2 {
                 return Err(EvalError::UnsupportedCall);
@@ -944,6 +978,50 @@ fn build_sdf_member_value(
                 ],
             )
         }
+        "mirror_x" | "mirror_y" | "mirror_z" => {
+            if !args.is_empty() {
+                return Err(EvalError::UnsupportedCall);
+            }
+            (field, vec![("base", base)])
+        }
+        "repeat_x" | "repeat_y" | "repeat_z" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(spacing) = args[0] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            let Value::Number(count) = args[1] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            (
+                field,
+                vec![
+                    ("base", base),
+                    ("spacing", Value::Number(spacing)),
+                    ("count", Value::Number(count)),
+                ],
+            )
+        }
+        "slice_x" | "slice_y" | "slice_z" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(min) = args[0] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            let Value::Number(max) = args[1] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            (
+                field,
+                vec![
+                    ("base", base),
+                    ("min", Value::Number(min)),
+                    ("max", Value::Number(max)),
+                ],
+            )
+        }
         _ => return Ok(None),
     };
 
@@ -1037,6 +1115,13 @@ fn build_layout_member_value(
         "offset_x" => offset_object_axis(base, 0, unary_numeric_args(&args)?)?,
         "offset_y" => offset_object_axis(base, 1, unary_numeric_args(&args)?)?,
         "offset_z" => offset_object_axis(base, 2, unary_numeric_args(&args)?)?,
+        "face_to" => {
+            if args.len() != 1 && args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let target_anchor = args.get(1);
+            face_object_to(base, args[0].clone(), target_anchor)?
+        }
         _ => return Ok(None),
     };
     Ok(Some(value))
@@ -1061,6 +1146,7 @@ fn is_layout_member_operator(field: &str) -> bool {
             | "offset_x"
             | "offset_y"
             | "offset_z"
+            | "face_to"
     )
 }
 
@@ -1068,9 +1154,6 @@ fn is_sdf_member_operator(field: &str) -> bool {
     matches!(
         field,
         "smooth"
-            | "round"
-            | "bevel"
-            | "chamfer"
             | "union_round"
             | "union_chamfer"
             | "union_columns"
@@ -1088,6 +1171,15 @@ fn is_sdf_member_operator(field: &str) -> bool {
             | "engrave"
             | "groove"
             | "tongue"
+            | "mirror_x"
+            | "mirror_y"
+            | "mirror_z"
+            | "repeat_x"
+            | "repeat_y"
+            | "repeat_z"
+            | "slice_x"
+            | "slice_y"
+            | "slice_z"
     )
 }
 
@@ -1111,6 +1203,16 @@ fn eval_call(
     material_runtime: Option<MaterialRuntime<'_>>,
     top_level_depth: usize,
 ) -> Result<Value, EvalError> {
+    if !matches!(callee, Expr::Ident(_) | Expr::Member { .. }) {
+        let callee_value =
+            eval_expr_in_material_scope(callee, state, locals, material_runtime, top_level_depth)?;
+        let arg_values = eval_arg_values(args, state, locals, material_runtime, top_level_depth)?;
+        if let Value::Function(function) = callee_value {
+            return eval_function_value(state, &function, &arg_values);
+        }
+        return Err(EvalError::UnsupportedCall);
+    }
+
     match callee {
         Expr::Ident(name) => {
             let arg_values =
@@ -1196,6 +1298,198 @@ fn eval_call(
         }
         _ => Err(EvalError::UnsupportedCall),
     }
+}
+
+pub fn eval_function_value(
+    state: &EvalState,
+    function: &FunctionValue,
+    arg_values: &[Value],
+) -> Result<Value, EvalError> {
+    if arg_values.len() != function.params.len() {
+        return Err(EvalError::UnsupportedCall);
+    }
+
+    let mut locals = function.captures.clone();
+    for (param, value) in function.params.iter().zip(arg_values.iter()) {
+        locals.insert(param.clone(), value.clone());
+    }
+
+    if let Some(jitted) = &function.jitted_vec3
+        && function.params.len() == 1
+        && let Some(p) = as_broadcastable_vec3(&arg_values[0])
+        && let Some(out) = jitted.invoke(p, &[])
+    {
+        return Ok(vec3_value(out));
+    }
+
+    if let Some(jitted) = &function.jitted_distance_post
+        && function.params.len() == 2
+        && let Value::Number(d) = arg_values[0]
+        && let Some(p) = as_broadcastable_vec3(&arg_values[1])
+        && let Some(out) = jitted.invoke(d, p)
+    {
+        return Ok(Value::Number(out));
+    }
+
+    if let Some(compiled) = &function.compiled {
+        let mut stack = Vec::new();
+        for instruction in &compiled.code {
+            match instruction {
+                VmInstruction::PushNumber(v) => stack.push(Value::Number(*v)),
+                VmInstruction::PushString(v) => stack.push(Value::String(v.clone())),
+                VmInstruction::LoadName(name) => {
+                    if let Some(value) = locals.get(name) {
+                        stack.push(value.clone());
+                    } else if let Some(value) = builtin_symbol_value(name) {
+                        stack.push(value);
+                    } else if let Some(binding) = state.bindings.get(name) {
+                        stack.push(binding.value.clone());
+                    } else {
+                        return Err(EvalError::UndefinedIdentifier(name.clone()));
+                    }
+                }
+                VmInstruction::BuildArray(count) => {
+                    if stack.len() < *count {
+                        return Err(EvalError::UnsupportedCall);
+                    }
+                    let start = stack.len() - *count;
+                    let values = stack.drain(start..).collect::<Vec<_>>();
+                    stack.push(Value::Array(values));
+                }
+                VmInstruction::BuildObject {
+                    type_name,
+                    field_names,
+                } => {
+                    if stack.len() < field_names.len() {
+                        return Err(EvalError::UnsupportedCall);
+                    }
+                    let start = stack.len() - field_names.len();
+                    let values = stack.drain(start..).collect::<Vec<_>>();
+                    let mut fields = HashMap::new();
+                    for (name, value) in field_names.iter().cloned().zip(values.into_iter()) {
+                        fields.insert(name, value);
+                    }
+                    augment_object_literal_fields(state, type_name, &mut fields)?;
+                    stack.push(Value::Object(ObjectValue {
+                        type_name: Some(type_name.clone()),
+                        fields,
+                    }));
+                }
+                VmInstruction::LoadMember(field) => {
+                    let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                    let obj = as_object(&value)?;
+                    let member = obj
+                        .fields
+                        .get(field)
+                        .cloned()
+                        .ok_or_else(|| EvalError::UndefinedIdentifier(field.clone()))?;
+                    stack.push(member);
+                }
+                VmInstruction::Unary(op) => {
+                    let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                    stack.push(eval_unary(*op, value)?);
+                }
+                VmInstruction::Binary(op) => {
+                    let rhs = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                    let lhs = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                    stack.push(eval_binary(lhs, *op, rhs)?);
+                }
+                VmInstruction::CallNamed { name, argc } => {
+                    if stack.len() < *argc {
+                        return Err(EvalError::UnsupportedCall);
+                    }
+                    let start = stack.len() - *argc;
+                    let args = stack.drain(start..).collect::<Vec<_>>();
+                    if let Some(value) = eval_ident_call(name, &args)? {
+                        stack.push(value);
+                    } else if let Some(def) = state.function_defs.get(name)
+                        && let Some(value) = eval_top_level_function_call(state, def, &args, 1)?
+                    {
+                        stack.push(value);
+                    } else {
+                        return Err(EvalError::UnsupportedCall);
+                    }
+                }
+                VmInstruction::StoreLocal(name) => {
+                    let value = stack.pop().ok_or(EvalError::UnsupportedCall)?;
+                    locals.insert(name.clone(), value);
+                }
+                VmInstruction::Return => return stack.pop().ok_or(EvalError::UnsupportedCall),
+            }
+        }
+        return Err(EvalError::UndefinedIdentifier(
+            "vm function literal missing return".to_string(),
+        ));
+    }
+
+    for stmt in &function.body {
+        match stmt {
+            MaterialFunctionStatement::Binding { name, expr } => {
+                let value = eval_expr_in_material_scope(expr, state, &locals, None, 0)?;
+                locals.insert(name.clone(), value);
+            }
+            MaterialFunctionStatement::Return { expr } => {
+                return eval_expr_in_material_scope(expr, state, &locals, None, 0);
+            }
+        }
+    }
+
+    Err(EvalError::UnsupportedCall)
+}
+
+fn compile_function_literal_vec3(
+    params: &[String],
+    body: &[MaterialFunctionStatement],
+    captures: &HashMap<String, Value>,
+) -> Option<JitSdfVec3Function> {
+    if !jit_enabled() || !captures.is_empty() || params.len() != 1 {
+        return None;
+    }
+    let sdf_body = body
+        .iter()
+        .map(|stmt| match stmt {
+            MaterialFunctionStatement::Binding { name, expr } => SdfFunctionStatement::Binding {
+                name: name.clone(),
+                expr: expr.clone(),
+            },
+            MaterialFunctionStatement::Return { expr } => {
+                SdfFunctionStatement::Return { expr: expr.clone() }
+            }
+        })
+        .collect::<Vec<_>>();
+    let def = SdfDef {
+        name: "__anon_modifier__".to_string(),
+        metadata: vec![],
+        statements: vec![SdfStatement::Function {
+            name: "__anon__".to_string(),
+            params: params.to_vec(),
+            body: sdf_body,
+        }],
+    };
+    compile_sdf_vec3_function(&def, "__anon__")
+}
+
+fn compile_function_literal_distance_post(
+    params: &[String],
+    body: &[MaterialFunctionStatement],
+    captures: &HashMap<String, Value>,
+) -> Option<JitModifierDistanceFunction> {
+    if !jit_enabled() || !captures.is_empty() || params.len() != 2 {
+        return None;
+    }
+    let sdf_body = body
+        .iter()
+        .map(|stmt| match stmt {
+            MaterialFunctionStatement::Binding { name, expr } => SdfFunctionStatement::Binding {
+                name: name.clone(),
+                expr: expr.clone(),
+            },
+            MaterialFunctionStatement::Return { expr } => {
+                SdfFunctionStatement::Return { expr: expr.clone() }
+            }
+        })
+        .collect::<Vec<_>>();
+    compile_modifier_distance_function("__anon__", params, &sdf_body)
 }
 
 fn eval_arg_values(
@@ -1449,6 +1743,38 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                 vec3_value([v[0] / len, v[1] / len, v[2] / len])
             }
         }
+        "rotate_x" | "rotate_y" | "rotate_z" => {
+            if args.len() != 2 {
+                return Err(EvalError::InvalidBuiltinArity {
+                    name: if name == "rotate_x" {
+                        "rotate_x"
+                    } else if name == "rotate_y" {
+                        "rotate_y"
+                    } else {
+                        "rotate_z"
+                    },
+                    expected: 2,
+                    got: args.len(),
+                });
+            }
+            let v = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args(if name == "rotate_x" {
+                "rotate_x"
+            } else if name == "rotate_y" {
+                "rotate_y"
+            } else {
+                "rotate_z"
+            }))?;
+            let Value::Number(deg) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs(if name == "rotate_x" {
+                    "rotate_x"
+                } else if name == "rotate_y" {
+                    "rotate_y"
+                } else {
+                    "rotate_z"
+                }));
+            };
+            vec3_value(rotate_vec3(v, deg, name))
+        }
         _ => return Ok(None),
     };
     Ok(Some(value))
@@ -1655,6 +1981,31 @@ pub fn eval_sdf_function(
     eval_sdf_function_with_overrides(state, sdf_name, function_name, arg_value, None)
 }
 
+pub fn eval_sdf_vec3_function_with_overrides(
+    state: &EvalState,
+    sdf_name: &str,
+    function_name: &str,
+    arg_value: Value,
+    overrides: Option<&ObjectValue>,
+) -> Result<Value, EvalError> {
+    if let Some(jitted) = state
+        .jitted_sdf_vec3_functions
+        .get(sdf_name)
+        .and_then(|functions| functions.get(function_name))
+        && let Some(p) = numeric_vec3(&arg_value)
+    {
+        let mut captures = Vec::with_capacity(jitted.capture_names.len());
+        for name in &jitted.capture_names {
+            let value = eval_sdf_binding_with_overrides(state, sdf_name, name, overrides)?;
+            captures.push(numeric_arg(&value)?);
+        }
+        if let Some(value) = jitted.invoke(p, &captures) {
+            return Ok(vec3_value(value));
+        }
+    }
+    eval_sdf_function_with_overrides(state, sdf_name, function_name, arg_value, overrides)
+}
+
 pub fn eval_sdf_function_with_overrides(
     state: &EvalState,
     sdf_name: &str,
@@ -1662,9 +2013,26 @@ pub fn eval_sdf_function_with_overrides(
     arg_value: Value,
     overrides: Option<&ObjectValue>,
 ) -> Result<Value, EvalError> {
+    eval_sdf_function_args_with_overrides(
+        state,
+        sdf_name,
+        function_name,
+        vec![arg_value],
+        overrides,
+    )
+}
+
+pub fn eval_sdf_function_args_with_overrides(
+    state: &EvalState,
+    sdf_name: &str,
+    function_name: &str,
+    arg_values: Vec<Value>,
+    overrides: Option<&ObjectValue>,
+) -> Result<Value, EvalError> {
     if function_name == "distance"
         && let Some(jitted) = state.jitted_sdf_distance_functions.get(sdf_name)
-        && let Some(p) = numeric_vec3(&arg_value)
+        && arg_values.len() == 1
+        && let Some(p) = numeric_vec3(&arg_values[0])
     {
         let mut captures = Vec::with_capacity(jitted.capture_names.len());
         for name in &jitted.capture_names {
@@ -1699,12 +2067,12 @@ pub fn eval_sdf_function_with_overrides(
             sdf_name,
             function_name,
             compiled,
-            vec![arg_value],
+            arg_values,
             overrides,
             0,
         );
     }
-    eval_sdf_function_body(state, def, &params, &body, &[arg_value], overrides, 0)
+    eval_sdf_function_body(state, def, &params, &body, &arg_values, overrides, 0)
 }
 
 pub fn eval_sdf_zero_arg_function(
@@ -2067,6 +2435,14 @@ fn eval_sdf_expr(
             }
             Ok(Value::Array(values))
         }
+        Expr::FunctionLiteral { params, body } => Ok(Value::Function(FunctionValue {
+            params: params.clone(),
+            body: body.clone(),
+            captures: locals.clone(),
+            compiled: crate::vm::compile_function_parts(params, body),
+            jitted_vec3: compile_function_literal_vec3(params, body, locals),
+            jitted_distance_post: compile_function_literal_distance_post(params, body, locals),
+        })),
         Expr::Ident(name) => {
             if let Some(value) = locals.get(name) {
                 return Ok(value.clone());
@@ -2721,6 +3097,7 @@ fn rewrite_expr_for_jit(expr: &Expr) -> Option<Expr> {
                 .collect::<Option<Vec<_>>>()?,
         },
         Expr::Member { .. } => Expr::Ident(flatten_member_expr(expr)?),
+        Expr::FunctionLiteral { .. } => return None,
     })
 }
 
@@ -3305,6 +3682,42 @@ fn offset_object_axis(mut value: Value, axis: usize, delta: f64) -> Result<Value
     Ok(value)
 }
 
+fn face_object_to(
+    mut value: Value,
+    other: Value,
+    target_anchor: Option<&Value>,
+) -> Result<Value, EvalError> {
+    let self_bounds = object_bounds(&value).ok_or(EvalError::UnsupportedLayoutObject)?;
+    let target = if let Some(anchor_value) = target_anchor {
+        let anchor = anchor_spec(anchor_value).ok_or(EvalError::UnsupportedCall)?;
+        object_anchor_point(&other, &anchor.name)
+            .ok_or(EvalError::UnsupportedCall)?
+            .point
+    } else {
+        object_bounds(&other)
+            .ok_or(EvalError::UnsupportedLayoutObject)?
+            .center()
+    };
+    let origin = self_bounds.center();
+    let dx = target[0] - origin[0];
+    let dy = target[1] - origin[1];
+    let dz = target[2] - origin[2];
+    let horizontal = (dx * dx + dz * dz).sqrt();
+    let yaw = dx.atan2(dz).to_degrees();
+    let pitch = (-dy).atan2(horizontal.max(1.0e-9)).to_degrees();
+
+    let obj = as_object_mut(&mut value)?;
+    let mut rot = obj
+        .fields
+        .get("rot")
+        .and_then(as_vec3)
+        .unwrap_or([0.0, 0.0, 0.0]);
+    rot[0] = pitch;
+    rot[1] = yaw;
+    obj.fields.insert("rot".to_string(), vec3_value(rot));
+    Ok(value)
+}
+
 fn rotate_xyz(p: [f64; 3], rot_deg: [f64; 3]) -> [f64; 3] {
     let (sx, cx) = rot_deg[0].to_radians().sin_cos();
     let (sy, cy) = rot_deg[1].to_radians().sin_cos();
@@ -3321,6 +3734,16 @@ fn rotate_xyz(p: [f64; 3], rot_deg: [f64; 3]) -> [f64; 3] {
     let px3 = px2 * cz - py2 * sz;
     let py3 = px2 * sz + py2 * cz;
     [px3, py3, pz2]
+}
+
+fn rotate_vec3(v: [f64; 3], deg: f64, axis: &str) -> [f64; 3] {
+    let r = deg.to_radians();
+    let (s, c) = r.sin_cos();
+    match axis {
+        "rotate_x" => [v[0], c * v[1] - s * v[2], s * v[1] + c * v[2]],
+        "rotate_y" => [c * v[0] + s * v[2], v[1], -s * v[0] + c * v[2]],
+        _ => [c * v[0] - s * v[1], s * v[0] + c * v[1], v[2]],
+    }
 }
 
 fn transformed_bounds(center: [f64; 3], rot_deg: [f64; 3], corners: &[[f64; 3]]) -> Bounds3 {
@@ -3445,16 +3868,72 @@ fn object_bounds(value: &Value) -> Option<Bounds3> {
         | "groove" | "tongue" => Some(
             object_bounds(obj.fields.get("lhs")?)?.union(object_bounds(obj.fields.get("rhs")?)?),
         ),
+        "mirror_x" | "mirror_y" | "mirror_z" => {
+            let base = object_bounds(obj.fields.get("base")?)?;
+            let axis = match obj.type_name.as_deref()? {
+                "mirror_x" => 0,
+                "mirror_y" => 1,
+                _ => 2,
+            };
+            Some(base.union(mirror_bounds_axis(base, axis)))
+        }
+        "repeat_x" | "repeat_y" | "repeat_z" => {
+            let base = object_bounds(obj.fields.get("base")?)?;
+            let spacing = numeric_field(obj, &["spacing"]).unwrap_or(0.0);
+            let count = numeric_field(obj, &["count"])
+                .unwrap_or(1.0)
+                .round()
+                .max(1.0) as usize;
+            let axis = match obj.type_name.as_deref()? {
+                "repeat_x" => 0,
+                "repeat_y" => 1,
+                _ => 2,
+            };
+            let start = -0.5 * (count.saturating_sub(1) as f64) * spacing;
+            let mut bounds = offset_bounds_axis(base, axis, start);
+            for i in 1..count {
+                bounds = bounds.union(offset_bounds_axis(base, axis, start + i as f64 * spacing));
+            }
+            Some(bounds)
+        }
+        "slice_x" | "slice_y" | "slice_z" => {
+            let mut base = object_bounds(obj.fields.get("base")?)?;
+            let min = numeric_field(obj, &["min"]).unwrap_or(f64::NEG_INFINITY);
+            let max = numeric_field(obj, &["max"]).unwrap_or(f64::INFINITY);
+            let axis = match obj.type_name.as_deref()? {
+                "slice_x" => 0,
+                "slice_y" => 1,
+                _ => 2,
+            };
+            base.min[axis] = base.min[axis].max(min);
+            base.max[axis] = base.max[axis].min(max);
+            if base.max[axis] < base.min[axis] {
+                base.max[axis] = base.min[axis];
+            }
+            Some(base)
+        }
         "smooth" => Some(
             object_bounds(obj.fields.get("base")?)?
                 .expand(numeric_field(obj, &["k"]).unwrap_or(0.0) * 0.1),
         ),
-        "round" => Some(
-            object_bounds(obj.fields.get("base")?)?
-                .expand(numeric_field(obj, &["r"]).unwrap_or(0.0).abs()),
-        ),
         _ => None,
     }
+}
+
+fn mirror_bounds_axis(bounds: Bounds3, axis: usize) -> Bounds3 {
+    let mut min = bounds.min;
+    let mut max = bounds.max;
+    min[axis] = -bounds.max[axis];
+    max[axis] = -bounds.min[axis];
+    Bounds3 { min, max }
+}
+
+fn offset_bounds_axis(bounds: Bounds3, axis: usize, delta: f64) -> Bounds3 {
+    let mut min = bounds.min;
+    let mut max = bounds.max;
+    min[axis] += delta;
+    max[axis] += delta;
+    Bounds3 { min, max }
 }
 
 fn attach_object(
