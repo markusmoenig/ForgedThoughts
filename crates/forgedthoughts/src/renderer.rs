@@ -213,8 +213,7 @@ enum SdfNode {
     Custom {
         transform: PrimitiveTransform,
         runtime: Arc<CustomSdfRuntime>,
-        #[allow(dead_code)]
-        bounds_radius: f32,
+        bounds_half_extents: Vec3,
         object_id: u32,
         material_id: u32,
     },
@@ -606,6 +605,8 @@ trait Accelerator {
 
     fn distance_info(&self, p: Vec3) -> DistanceInfo;
 
+    fn lower_bound(&self, p: Vec3) -> f32;
+
     fn scene_bounds(&self) -> Aabb;
 
     fn distance(&self, p: Vec3) -> f32 {
@@ -617,6 +618,34 @@ trait Accelerator {
 struct AccelLeaf {
     bounds: Aabb,
     node: SdfNode,
+}
+
+const CUSTOM_LEAF_FAR_LOWER_BOUND_MIN: f32 = 0.05;
+const CUSTOM_LEAF_FAR_LOWER_BOUND_MAX: f32 = 0.5;
+const CUSTOM_LEAF_FAR_LOWER_BOUND_SCALE: f32 = 0.1;
+
+fn accel_leaf_distance_info(leaf: &AccelLeaf, p: Vec3) -> DistanceInfo {
+    if let SdfNode::Custom {
+        object_id,
+        material_id,
+        ..
+    } = &leaf.node
+    {
+        let lb = point_aabb_lower_bound(p, leaf.bounds);
+        let far_threshold = (leaf.bounds.extent().length() * CUSTOM_LEAF_FAR_LOWER_BOUND_SCALE)
+            .clamp(
+                CUSTOM_LEAF_FAR_LOWER_BOUND_MIN,
+                CUSTOM_LEAF_FAR_LOWER_BOUND_MAX,
+            );
+        if lb > far_threshold {
+            return DistanceInfo {
+                distance: lb,
+                object_id: *object_id,
+                material_id: *material_id,
+            };
+        }
+    }
+    sdf_distance_info(&leaf.node, p)
 }
 
 fn collect_accel_leaves(node: &SdfNode, out: &mut Vec<AccelLeaf>) {
@@ -716,7 +745,7 @@ fn bvh_distance_info(
     match node {
         BvhNode::Leaf { leaf_index, .. } => {
             let leaf = &leaves[*leaf_index];
-            let info = sdf_distance_info(&leaf.node, p);
+            let info = accel_leaf_distance_info(leaf, p);
             if info.distance < *best {
                 *best = info.distance;
             }
@@ -744,6 +773,42 @@ fn bvh_distance_info(
                 };
             }
             best_info
+        }
+    }
+}
+
+fn bvh_lower_bound(node: &BvhNode, p: Vec3, best: &mut f32) -> Option<f32> {
+    let node_lb = point_aabb_lower_bound(p, node.bounds());
+    if node_lb > *best {
+        return None;
+    }
+    match node {
+        BvhNode::Leaf { bounds, .. } => {
+            let lb = point_aabb_lower_bound(p, *bounds);
+            if lb < *best {
+                *best = lb;
+            }
+            Some(lb)
+        }
+        BvhNode::Inner { lhs, rhs, .. } => {
+            let lhs_lb = point_aabb_lower_bound(p, lhs.bounds());
+            let rhs_lb = point_aabb_lower_bound(p, rhs.bounds());
+            let (first, second) = if lhs_lb <= rhs_lb {
+                (lhs.as_ref(), rhs.as_ref())
+            } else {
+                (rhs.as_ref(), lhs.as_ref())
+            };
+            let mut best_lb = if point_aabb_lower_bound(p, first.bounds()) <= *best {
+                bvh_lower_bound(first, p, best)
+            } else {
+                None
+            };
+            if point_aabb_lower_bound(p, second.bounds()) <= *best
+                && let Some(lb) = bvh_lower_bound(second, p, best)
+            {
+                best_lb = Some(best_lb.map_or(lb, |current| current.min(lb)));
+            }
+            best_lb
         }
     }
 }
@@ -823,7 +888,7 @@ impl BrickGrid {
                             if lb > best {
                                 continue;
                             }
-                            let info = sdf_distance_info(&leaf.node, p);
+                            let info = accel_leaf_distance_info(leaf, p);
                             if info.distance < best {
                                 best = info.distance;
                                 best_info = Some(info);
@@ -834,6 +899,49 @@ impl BrickGrid {
             }
         }
         best_info.unwrap_or_else(|| sdf_distance_info(&leaves[0].node, p))
+    }
+
+    fn lower_bound(&self, leaves: &[AccelLeaf], p: Vec3) -> f32 {
+        let origin = brick_cell_coords(self.bounds, self.dims, p);
+        let max_shell = self.dims[0].max(self.dims[1]).max(self.dims[2]);
+        let mut best = f32::INFINITY;
+        let mut visited = std::collections::HashSet::new();
+        for shell in 0..max_shell {
+            let shell_lb = brick_shell_lower_bound(self.bounds, self.dims, origin, shell, p);
+            if shell_lb > best {
+                break;
+            }
+            for z in origin[2].saturating_sub(shell)..=(origin[2] + shell).min(self.dims[2] - 1) {
+                for y in origin[1].saturating_sub(shell)..=(origin[1] + shell).min(self.dims[1] - 1)
+                {
+                    for x in
+                        origin[0].saturating_sub(shell)..=(origin[0] + shell).min(self.dims[0] - 1)
+                    {
+                        if shell > 0
+                            && x > origin[0].saturating_sub(shell)
+                            && x < (origin[0] + shell).min(self.dims[0] - 1)
+                            && y > origin[1].saturating_sub(shell)
+                            && y < (origin[1] + shell).min(self.dims[1] - 1)
+                            && z > origin[2].saturating_sub(shell)
+                            && z < (origin[2] + shell).min(self.dims[2] - 1)
+                        {
+                            continue;
+                        }
+                        let idx = brick_cell_index(self.dims, [x, y, z]);
+                        for &leaf_index in &self.cells[idx] {
+                            if !visited.insert(leaf_index) {
+                                continue;
+                            }
+                            let lb = point_aabb_lower_bound(p, leaves[leaf_index].bounds);
+                            if lb < best {
+                                best = lb;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        best
     }
 }
 
@@ -920,6 +1028,10 @@ impl Accelerator for NaiveAccel {
         sdf_distance_info(&self.scene.root, p)
     }
 
+    fn lower_bound(&self, p: Vec3) -> f32 {
+        sdf_lower_bound(&self.scene.root, p)
+    }
+
     fn scene_bounds(&self) -> Aabb {
         self.bounds
     }
@@ -955,6 +1067,14 @@ impl Accelerator for BvhAccel {
             .unwrap_or_else(|| sdf_distance_info(&self.scene.root, p))
     }
 
+    fn lower_bound(&self, p: Vec3) -> f32 {
+        let mut best = f32::INFINITY;
+        self.root
+            .as_ref()
+            .and_then(|root| bvh_lower_bound(root, p, &mut best))
+            .unwrap_or_else(|| sdf_lower_bound(&self.scene.root, p))
+    }
+
     fn scene_bounds(&self) -> Aabb {
         self.bounds
     }
@@ -986,6 +1106,13 @@ impl Accelerator for BricksAccel {
             .as_ref()
             .map(|grid| grid.distance_info(&self.leaves, p))
             .unwrap_or_else(|| sdf_distance_info(&self.scene.root, p))
+    }
+
+    fn lower_bound(&self, p: Vec3) -> f32 {
+        self.grid
+            .as_ref()
+            .map(|grid| grid.lower_bound(&self.leaves, p))
+            .unwrap_or_else(|| sdf_lower_bound(&self.scene.root, p))
     }
 
     fn scene_bounds(&self) -> Aabb {
@@ -1406,7 +1533,7 @@ fn compile_sdf(
                         name: custom.to_string(),
                         overrides: object.clone(),
                     }),
-                    bounds_radius: eval_custom_sdf_bounds_radius(state, custom, object),
+                    bounds_half_extents: eval_custom_sdf_bounds_half_extents(state, custom, object),
                     object_id,
                     material_id,
                 })
@@ -1750,7 +1877,7 @@ fn split_modifier_base(node: SdfNode) -> (SdfNode, PrimitiveTransform, Aabb) {
         ),
         SdfNode::Custom {
             runtime,
-            bounds_radius,
+            bounds_half_extents,
             object_id,
             material_id,
             transform,
@@ -1758,7 +1885,7 @@ fn split_modifier_base(node: SdfNode) -> (SdfNode, PrimitiveTransform, Aabb) {
             SdfNode::Custom {
                 transform: PrimitiveTransform::identity(),
                 runtime,
-                bounds_radius,
+                bounds_half_extents,
                 object_id,
                 material_id,
             },
@@ -1959,7 +2086,7 @@ fn remap_sdf_node(
         SdfNode::Custom {
             transform,
             runtime,
-            bounds_radius,
+            bounds_half_extents,
             material_id,
             ..
         } => {
@@ -1969,7 +2096,7 @@ fn remap_sdf_node(
             SdfNode::Custom {
                 transform,
                 runtime,
-                bounds_radius,
+                bounds_half_extents,
                 object_id,
                 material_id,
             }
@@ -3908,7 +4035,12 @@ fn shadow_visibility(
             return visibility.clamp(0.0, 1.0);
         }
         let p = origin.add(dir.mul(t));
-        let h = accel.distance(p).abs();
+        let lower = accel.lower_bound(p).abs();
+        let h = if lower > (epsilon * 8.0).max(0.02) {
+            lower
+        } else {
+            accel.distance(p).abs()
+        };
         if h < epsilon * 4.0 {
             return 0.0;
         }
@@ -4485,15 +4617,28 @@ fn sdf_bounds(node: &SdfNode) -> Aabb {
         }
         SdfNode::Custom {
             transform,
-            bounds_radius,
+            bounds_half_extents,
             ..
         } => {
-            let r = (*bounds_radius).max(1.0e-3);
-            let rv = Vec3::new(r, r, r);
-            Aabb {
-                min: transform.center.sub(rv),
-                max: transform.center.add(rv),
+            let half = *bounds_half_extents;
+            let corners = [
+                Vec3::new(-half.x, -half.y, -half.z),
+                Vec3::new(-half.x, -half.y, half.z),
+                Vec3::new(-half.x, half.y, -half.z),
+                Vec3::new(-half.x, half.y, half.z),
+                Vec3::new(half.x, -half.y, -half.z),
+                Vec3::new(half.x, -half.y, half.z),
+                Vec3::new(half.x, half.y, -half.z),
+                Vec3::new(half.x, half.y, half.z),
+            ];
+            let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+            let mut max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+            for corner in corners {
+                let world = transform.center.add(transform_offset(*transform, corner));
+                min = Vec3::new(min.x.min(world.x), min.y.min(world.y), min.z.min(world.z));
+                max = Vec3::new(max.x.max(world.x), max.y.max(world.y), max.z.max(world.z));
             }
+            Aabb { min, max }
         }
         SdfNode::Union { lhs, rhs } => sdf_bounds(lhs).union(sdf_bounds(rhs)),
         SdfNode::Intersect { lhs, rhs } => sdf_bounds(lhs).union(sdf_bounds(rhs)),
@@ -4674,9 +4819,15 @@ fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
         }
         SdfNode::Custom {
             transform,
-            bounds_radius,
+            bounds_half_extents,
             ..
-        } => to_local(p, *transform).length() - *bounds_radius,
+        } => point_aabb_lower_bound(
+            to_local(p, *transform),
+            Aabb {
+                min: bounds_half_extents.mul(-1.0),
+                max: *bounds_half_extents,
+            },
+        ),
         SdfNode::Union { lhs, rhs } => sdf_lower_bound(lhs, p).min(sdf_lower_bound(rhs, p)),
         SdfNode::Intersect { lhs, rhs } => sdf_lower_bound(lhs, p).max(sdf_lower_bound(rhs, p)),
         SdfNode::Subtract { lhs, .. } => sdf_lower_bound(lhs, p),
@@ -5255,17 +5406,28 @@ fn eval_custom_sdf_distance(runtime: &CustomSdfRuntime, p: Vec3) -> f32 {
     }
 }
 
-fn eval_custom_sdf_bounds_radius(state: &EvalState, name: &str, overrides: &ObjectValue) -> f32 {
+fn eval_custom_sdf_bounds_half_extents(
+    state: &EvalState,
+    name: &str,
+    overrides: &ObjectValue,
+) -> Vec3 {
     let value = eval_sdf_zero_arg_function_with_overrides(state, name, "bounds", Some(overrides));
     match value {
         Ok(Value::Object(obj)) => {
             let x = read_number_field(&obj, &["x"]).unwrap_or(0.0);
             let y = read_number_field(&obj, &["y"]).unwrap_or(0.0);
             let z = read_number_field(&obj, &["z"]).unwrap_or(0.0);
-            Vec3::new(x, y, z).length().max(1.0e-3)
+            Vec3::new(
+                x.abs().max(1.0e-3),
+                y.abs().max(1.0e-3),
+                z.abs().max(1.0e-3),
+            )
         }
-        Ok(Value::Number(radius)) => (radius as f32).abs().max(1.0e-3),
-        _ => 10_000.0,
+        Ok(Value::Number(radius)) => {
+            let r = (radius as f32).abs().max(1.0e-3);
+            Vec3::new(r, r, r)
+        }
+        _ => Vec3::new(10_000.0, 10_000.0, 10_000.0),
     }
 }
 

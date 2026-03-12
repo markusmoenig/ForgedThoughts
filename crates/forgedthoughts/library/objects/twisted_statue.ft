@@ -1,0 +1,92 @@
+sdf TwistedStatue {
+  name: "TwistedStatue";
+  description: "Procedural twisted shell statue with fine horizontal banding for sculptural accents.";
+  tags: ["object", "statue", "sculpture", "procedural", "decor"];
+  params: [
+    {
+      name: "width",
+      type: "number",
+      description: "Overall width of the statue body.",
+      default: 0.55,
+      min: 0.05
+    },
+    {
+      name: "height",
+      type: "number",
+      description: "Overall height of the statue body.",
+      default: 1.5,
+      min: 0.1
+    },
+    {
+      name: "depth",
+      type: "number",
+      description: "Overall depth of the statue body.",
+      default: 0.42,
+      min: 0.05
+    },
+    {
+      name: "twist",
+      type: "number",
+      description: "Twist amount applied along the height.",
+      default: 18.0
+    },
+    {
+      name: "band_frequency",
+      type: "number",
+      description: "Frequency of the horizontal banding.",
+      default: 115.0,
+      min: 0.0
+    },
+    {
+      name: "band_amplitude",
+      type: "number",
+      description: "Amplitude of the fine banding perturbation.",
+      default: 0.0045,
+      min: 0.0
+    },
+    {
+      name: "thickness",
+      type: "number",
+      description: "Shell thickness of the twisted statue.",
+      default: 0.028,
+      min: 0.001
+    }
+  ];
+
+  let width = 0.55;
+  let height = 1.5;
+  let depth = 0.42;
+  let twist = 18.0;
+  let band_frequency = 115.0;
+  let band_amplitude = 0.0045;
+  let thickness = 0.028;
+  let anchors = {
+    TopSurface: vec3(0.0, height * 0.5, 0.0),
+    Bottom: vec3(0.0, -height * 0.5, 0.0),
+    FrontCenter: vec3(0.0, 0.0, depth * 0.5)
+  };
+
+  fn sd_box(p, half_size) {
+    let q = abs(p) - half_size;
+    let outside = length(max(q, vec3(0.0)));
+    let inside = min(max(q.x, max(q.y, q.z)), 0.0);
+    return outside + inside;
+  }
+
+  fn bounds() {
+    let half = vec3(width * 0.5, height * 0.5, depth * 0.5);
+    let max_radius = max(half.x, half.z);
+    let twisted_radius = length(vec3(max_radius, 0.0, max_radius));
+    return vec3(twisted_radius + thickness, half.y + thickness, twisted_radius + thickness);
+  }
+
+  fn distance(p) {
+    let half = vec3(width * 0.5, height * 0.5, depth * 0.5);
+    let q = rotate_y(p, p.y * twist);
+    let d = sd_box(q, half);
+    let bands = sin((p.y + half.y) * band_frequency) * band_amplitude;
+    return abs(d + bands) - thickness;
+  }
+};
+
+export { TwistedStatue };

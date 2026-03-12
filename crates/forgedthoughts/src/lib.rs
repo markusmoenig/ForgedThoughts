@@ -123,6 +123,14 @@ const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
         source: include_str!("../library/objects/lamp.ft"),
     },
     BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Objects,
+        name: "TwistedStatue",
+        path: "objects/twisted_statue.ft",
+        description: "Procedural twisted shell statue with fine horizontal banding for sculptural accents.",
+        tags: &["object", "statue", "sculpture", "procedural", "decor"],
+        source: include_str!("../library/objects/twisted_statue.ft"),
+    },
+    BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Scenes,
         name: "Studio",
         path: "scenes/studio.ft",

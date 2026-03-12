@@ -1277,6 +1277,37 @@ fn compile_sdf_builtin(
             let sum = ctx.fb.ins().fadd(sum_xy, z2);
             Some(SdfJitValue::Scalar(ctx.fb.ins().sqrt(sum)))
         }
+        ("normalize", [SdfJitValue::Vec3(values)]) => {
+            let x2 = ctx.fb.ins().fmul(values[0], values[0]);
+            let y2 = ctx.fb.ins().fmul(values[1], values[1]);
+            let z2 = ctx.fb.ins().fmul(values[2], values[2]);
+            let sum_xy = ctx.fb.ins().fadd(x2, y2);
+            let sum = ctx.fb.ins().fadd(sum_xy, z2);
+            let len = ctx.fb.ins().sqrt(sum);
+            let eps = ctx.fb.ins().f64const(1.0e-9);
+            let safe_len = ctx.fb.ins().fmax(len, eps);
+            Some(SdfJitValue::Vec3([
+                ctx.fb.ins().fdiv(values[0], safe_len),
+                ctx.fb.ins().fdiv(values[1], safe_len),
+                ctx.fb.ins().fdiv(values[2], safe_len),
+            ]))
+        }
+        ("sin", [SdfJitValue::Scalar(v)]) => {
+            emit_unary_import_call(ctx.fb, ctx.module, "sin", *v).map(SdfJitValue::Scalar)
+        }
+        ("cos", [SdfJitValue::Scalar(v)]) => {
+            emit_unary_import_call(ctx.fb, ctx.module, "cos", *v).map(SdfJitValue::Scalar)
+        }
+        ("step", [SdfJitValue::Scalar(edge), SdfJitValue::Scalar(x)]) => {
+            let cond = ctx.fb.ins().fcmp(
+                cranelift_codegen::ir::condcodes::FloatCC::LessThan,
+                *x,
+                *edge,
+            );
+            let zero = ctx.fb.ins().f64const(0.0);
+            let one = ctx.fb.ins().f64const(1.0);
+            Some(SdfJitValue::Scalar(ctx.fb.ins().select(cond, zero, one)))
+        }
         (
             "clamp",
             [
@@ -1288,6 +1319,79 @@ fn compile_sdf_builtin(
             let maxed = ctx.fb.ins().fmax(*x, *a);
             Some(SdfJitValue::Scalar(ctx.fb.ins().fmin(maxed, *b)))
         }
+        ("mix", [lhs, rhs, SdfJitValue::Scalar(a)]) => {
+            let one = ctx.fb.ins().f64const(1.0);
+            let inv = ctx.fb.ins().fsub(one, *a);
+            match (lhs, rhs) {
+                (SdfJitValue::Scalar(x), SdfJitValue::Scalar(y)) => {
+                    let lhs = ctx.fb.ins().fmul(*x, inv);
+                    let rhs = ctx.fb.ins().fmul(*y, *a);
+                    Some(SdfJitValue::Scalar(ctx.fb.ins().fadd(lhs, rhs)))
+                }
+                (SdfJitValue::Vec3(x), SdfJitValue::Vec3(y)) => {
+                    let x0 = ctx.fb.ins().fmul(x[0], inv);
+                    let y0 = ctx.fb.ins().fmul(y[0], *a);
+                    let x1 = ctx.fb.ins().fmul(x[1], inv);
+                    let y1 = ctx.fb.ins().fmul(y[1], *a);
+                    let x2 = ctx.fb.ins().fmul(x[2], inv);
+                    let y2 = ctx.fb.ins().fmul(y[2], *a);
+                    Some(SdfJitValue::Vec3([
+                        ctx.fb.ins().fadd(x0, y0),
+                        ctx.fb.ins().fadd(x1, y1),
+                        ctx.fb.ins().fadd(x2, y2),
+                    ]))
+                }
+                (SdfJitValue::Vec3(x), SdfJitValue::Scalar(y)) => {
+                    let x0 = ctx.fb.ins().fmul(x[0], inv);
+                    let y0 = ctx.fb.ins().fmul(*y, *a);
+                    let x1 = ctx.fb.ins().fmul(x[1], inv);
+                    let y1 = ctx.fb.ins().fmul(*y, *a);
+                    let x2 = ctx.fb.ins().fmul(x[2], inv);
+                    let y2 = ctx.fb.ins().fmul(*y, *a);
+                    Some(SdfJitValue::Vec3([
+                        ctx.fb.ins().fadd(x0, y0),
+                        ctx.fb.ins().fadd(x1, y1),
+                        ctx.fb.ins().fadd(x2, y2),
+                    ]))
+                }
+                (SdfJitValue::Scalar(x), SdfJitValue::Vec3(y)) => {
+                    let x0 = ctx.fb.ins().fmul(*x, inv);
+                    let y0 = ctx.fb.ins().fmul(y[0], *a);
+                    let x1 = ctx.fb.ins().fmul(*x, inv);
+                    let y1 = ctx.fb.ins().fmul(y[1], *a);
+                    let x2 = ctx.fb.ins().fmul(*x, inv);
+                    let y2 = ctx.fb.ins().fmul(y[2], *a);
+                    Some(SdfJitValue::Vec3([
+                        ctx.fb.ins().fadd(x0, y0),
+                        ctx.fb.ins().fadd(x1, y1),
+                        ctx.fb.ins().fadd(x2, y2),
+                    ]))
+                }
+            }
+        }
+        ("smoothstep", [edge0, edge1, x]) => {
+            let (SdfJitValue::Scalar(edge0), SdfJitValue::Scalar(edge1), SdfJitValue::Scalar(x)) =
+                (edge0, edge1, x)
+            else {
+                return None;
+            };
+            let span = ctx.fb.ins().fsub(*edge1, *edge0);
+            let x_minus_edge0 = ctx.fb.ins().fsub(*x, *edge0);
+            let t = ctx.fb.ins().fdiv(x_minus_edge0, span);
+            let zero = ctx.fb.ins().f64const(0.0);
+            let one = ctx.fb.ins().f64const(1.0);
+            let t_max = ctx.fb.ins().fmax(t, zero);
+            let t = ctx.fb.ins().fmin(t_max, one);
+            let t2 = ctx.fb.ins().fmul(t, t);
+            let three = ctx.fb.ins().f64const(3.0);
+            let two = ctx.fb.ins().f64const(2.0);
+            let two_t = ctx.fb.ins().fmul(two, t);
+            let cubic = ctx.fb.ins().fsub(three, two_t);
+            Some(SdfJitValue::Scalar(ctx.fb.ins().fmul(t2, cubic)))
+        }
+        ("floor", [SdfJitValue::Scalar(v)]) => Some(SdfJitValue::Scalar(ctx.fb.ins().floor(*v))),
+        ("ceil", [SdfJitValue::Scalar(v)]) => Some(SdfJitValue::Scalar(ctx.fb.ins().ceil(*v))),
+        ("sqrt", [SdfJitValue::Scalar(v)]) => Some(SdfJitValue::Scalar(ctx.fb.ins().sqrt(*v))),
         ("rotate_x", [SdfJitValue::Vec3(v), SdfJitValue::Scalar(deg)]) => {
             Some(SdfJitValue::Vec3(emit_rotate_vec3(ctx, *v, *deg, 0)?))
         }

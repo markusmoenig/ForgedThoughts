@@ -1,4 +1,8 @@
-use std::{collections::HashMap, env};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    sync::{Mutex, OnceLock},
+};
 
 use thiserror::Error;
 
@@ -159,6 +163,26 @@ fn jit_enabled() -> bool {
         env::var("FORGEDTHOUGHTS_DISABLE_JIT").ok().as_deref(),
         Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
     )
+}
+
+fn jit_trace_enabled() -> bool {
+    matches!(
+        env::var("FORGEDTHOUGHTS_TRACE_JIT").ok().as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
+}
+
+fn trace_jit_once(kind: &str, name: &str, detail: &str) {
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    if !jit_trace_enabled() {
+        return;
+    }
+    let key = format!("{kind}:{name}:{detail}");
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut seen = seen.lock().expect("jit trace mutex poisoned");
+    if seen.insert(key) {
+        eprintln!("[forge-jit] {kind} {name}: {detail}");
+    }
 }
 
 fn eval_statement(stmt: &Statement, state: &mut EvalState) -> Result<(), EvalError> {
@@ -2000,9 +2024,15 @@ pub fn eval_sdf_vec3_function_with_overrides(
             captures.push(numeric_arg(&value)?);
         }
         if let Some(value) = jitted.invoke(p, &captures) {
+            trace_jit_once("sdf-vec3", &format!("{sdf_name}.{function_name}"), "jit");
             return Ok(vec3_value(value));
         }
     }
+    trace_jit_once(
+        "sdf-vec3",
+        &format!("{sdf_name}.{function_name}"),
+        "fallback",
+    );
     eval_sdf_function_with_overrides(state, sdf_name, function_name, arg_value, overrides)
 }
 
@@ -2040,6 +2070,11 @@ pub fn eval_sdf_function_args_with_overrides(
             captures.push(numeric_arg(&value)?);
         }
         if let Some(value) = jitted.invoke(p, &captures) {
+            trace_jit_once(
+                "sdf-distance",
+                &format!("{sdf_name}.{function_name}"),
+                "jit",
+            );
             return Ok(Value::Number(value));
         }
     }
@@ -2062,6 +2097,7 @@ pub fn eval_sdf_function_args_with_overrides(
         .get(sdf_name)
         .and_then(|functions| functions.get(function_name))
     {
+        trace_jit_once("sdf-vm", &format!("{sdf_name}.{function_name}"), "vm");
         return execute_sdf_vm_function(
             state,
             sdf_name,
@@ -2072,6 +2108,11 @@ pub fn eval_sdf_function_args_with_overrides(
             0,
         );
     }
+    trace_jit_once(
+        "sdf-interp",
+        &format!("{sdf_name}.{function_name}"),
+        "interp",
+    );
     eval_sdf_function_body(state, def, &params, &body, &arg_values, overrides, 0)
 }
 

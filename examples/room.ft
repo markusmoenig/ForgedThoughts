@@ -2,6 +2,7 @@ import "CheckerFloor";
 import "Cupboard";
 import "Lamp";
 import "Table";
+import "TwistedStatue";
 
 let camera = Camera {
   origin: vec3(1.0, 1.8, 8.2),
@@ -160,15 +161,19 @@ var vase = Sphere {
   .offset_x(-0.35)
   .offset_z(0.08);
 
-let statue = Box {
-  size: vec3(0.55, 1.5, 0.42),
+let statue = TwistedStatue {
+  width: 0.55,
+  height: 1.5,
+  depth: 0.42,
+  twist: 18.0,
+  band_frequency: 115.0,
+  band_amplitude: 0.0045,
+  thickness: 0.028,
   material: statue_mat
 }
   .left_of(table, 1.35)
   .align_z(table, Center)
   .align_y(table, Bottom)
-  .offset_z(-0.2)
-  .slice_y(-0.01, 0.01)
-  .repeat_y(0.03, 42.0);
+  .offset_z(-0.2);
 
 let scene = room + cupboard + table + lamp + vase + statue;
