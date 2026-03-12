@@ -1,5 +1,6 @@
 import "CheckerFloor";
 import "Cupboard";
+import "Table";
 
 let camera = Camera {
   origin: vec3(0.0, 1.8, 8.2),
@@ -43,6 +44,10 @@ let cupboard_mat = Lambert {
   color: #c8b59a
 };
 
+let table_mat = Lambert {
+  color: #7a4c35
+};
+
 let accent_mat = Metal {
   color: #d4af37,
   roughness: 0.28
@@ -55,7 +60,6 @@ let render = RenderSettings {
   max_dist: 80.0,
   epsilon: 0.0002,
   step_scale: 0.7,
-  accel: Bvh{}
 };
 
 let room = Room {
@@ -88,11 +92,25 @@ var cupboard = Cupboard {
   .offset_x(-0.12)
   .offset_z(0.12);
 
+var table = Table {
+  width: 1.7,
+  depth: 0.9,
+  height: 0.78,
+  top_thickness: 0.08,
+  leg_radius: 0.05,
+  leg_inset: 0.14,
+  material: table_mat
+}
+  .attach(room, BackRightCorner)
+  .offset_x(-2.1)
+  .offset_z(1.35);
+
 var vase = Sphere {
   radius: 0.18,
   material: accent_mat
 }
-  .attach(cupboard, "TopSurface", Bottom)
-  .offset_x(-0.35);
+  .attach(table, "TopSurface", Bottom)
+  .offset_x(-0.35)
+  .offset_z(0.08);
 
-let scene = room + cupboard + vase;
+let scene = room + cupboard + table + vase;

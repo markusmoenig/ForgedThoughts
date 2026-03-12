@@ -386,7 +386,7 @@ fn run_render_once(scene_path: &Path, params: &RenderParams) -> ExitCode {
             let accel = params
                 .accel
                 .or(scene_settings.accel)
-                .unwrap_or(AccelMode::Naive);
+                .unwrap_or(AccelMode::Bvh);
             info!(
                 scene = %scene_path.display(),
                 bindings = state.bindings.len(),
@@ -634,7 +634,7 @@ fn run_ray_once(scene_path: &Path, params: &RayParams) -> ExitCode {
             let accel = params
                 .accel
                 .or(scene_settings.accel)
-                .unwrap_or(AccelMode::Naive);
+                .unwrap_or(AccelMode::Bvh);
             let output_path = params
                 .output
                 .as_deref()

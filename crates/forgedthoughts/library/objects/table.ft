@@ -1,0 +1,111 @@
+sdf Table {
+  name: "Table";
+  description: "Parameterized table with a rectangular top and four round legs for room and layout scenes.";
+  tags: ["object", "furniture", "table", "surface", "parametric"];
+  params: [
+    {
+      name: "width",
+      type: "number",
+      description: "Overall table width.",
+      default: 1.8,
+      min: 0.2
+    },
+    {
+      name: "depth",
+      type: "number",
+      description: "Overall table depth.",
+      default: 0.9,
+      min: 0.2
+    },
+    {
+      name: "height",
+      type: "number",
+      description: "Overall table height from floor to tabletop.",
+      default: 0.76,
+      min: 0.1
+    },
+    {
+      name: "top_thickness",
+      type: "number",
+      description: "Thickness of the tabletop slab.",
+      default: 0.08,
+      min: 0.01
+    },
+    {
+      name: "leg_radius",
+      type: "number",
+      description: "Radius of the round legs.",
+      default: 0.05,
+      min: 0.005
+    },
+    {
+      name: "leg_inset",
+      type: "number",
+      description: "Inset of each leg from the tabletop edge.",
+      default: 0.12,
+      min: 0.0
+    }
+  ];
+
+  let width = 1.8;
+  let depth = 0.9;
+  let height = 0.76;
+  let top_thickness = 0.08;
+  let leg_radius = 0.05;
+  let leg_inset = 0.12;
+  let anchors = {
+    TopSurface: vec3(0.0, height * 0.5, 0.0),
+    UnderTop: vec3(0.0, height * 0.5 - top_thickness, 0.0),
+    FrontRightFoot: vec3(width * 0.5 - leg_inset, -height * 0.5, depth * 0.5 - leg_inset),
+    BackLeftFoot: vec3(-width * 0.5 + leg_inset, -height * 0.5, -depth * 0.5 + leg_inset)
+  };
+
+  fn sd_box(p, half_size) {
+    let q = abs(p) - half_size;
+    let outside = length(max(q, vec3(0.0)));
+    let inside = min(max(q.x, max(q.y, q.z)), 0.0);
+    return outside + inside;
+  }
+
+  fn sd_capped_cylinder_y(p, half_height, radius) {
+    let radial = length(vec3(p.x, 0.0, p.z));
+    let dx = radial - radius;
+    let dy = abs(p.y) - half_height;
+    let outside = length(vec3(max(dx, 0.0), max(dy, 0.0), 0.0));
+    let inside = min(max(dx, dy), 0.0);
+    return outside + inside;
+  }
+
+  fn leg(px, pz, p) {
+    return sd_capped_cylinder_y(
+      vec3(p.x - px, p.y + top_thickness * 0.5, p.z - pz),
+      max((height - top_thickness) * 0.5, 0.001),
+      leg_radius
+    );
+  }
+
+  fn bounds() {
+    return vec3(width * 0.5, height * 0.5, depth * 0.5);
+  }
+
+  fn distance(p) {
+    let top_center_y = height * 0.5 - top_thickness * 0.5;
+    let top = sd_box(
+      vec3(p.x, p.y - top_center_y, p.z),
+      vec3(width * 0.5, top_thickness * 0.5, depth * 0.5)
+    );
+
+    let leg_x = max(width * 0.5 - leg_inset, leg_radius);
+    let leg_z = max(depth * 0.5 - leg_inset, leg_radius);
+
+    let leg0 = leg(leg_x, leg_z, p);
+    let leg1 = leg(-leg_x, leg_z, p);
+    let leg2 = leg(leg_x, -leg_z, p);
+    let leg3 = leg(-leg_x, -leg_z, p);
+
+    let legs = min(min(leg0, leg1), min(leg2, leg3));
+    return min(top, legs);
+  }
+};
+
+export { Table };

@@ -419,6 +419,14 @@ struct Aabb {
 
 #[allow(dead_code)]
 impl Aabb {
+    fn centroid(self) -> Vec3 {
+        self.min.add(self.max).mul(0.5)
+    }
+
+    fn extent(self) -> Vec3 {
+        self.max.sub(self.min)
+    }
+
     fn union(self, rhs: Self) -> Self {
         Self {
             min: self.min.min(rhs.min),
@@ -567,6 +575,298 @@ trait Accelerator {
     }
 }
 
+#[derive(Clone)]
+struct AccelLeaf {
+    bounds: Aabb,
+    node: SdfNode,
+}
+
+fn collect_accel_leaves(node: &SdfNode, out: &mut Vec<AccelLeaf>) {
+    match node {
+        SdfNode::Union { lhs, rhs } => {
+            collect_accel_leaves(lhs, out);
+            collect_accel_leaves(rhs, out);
+        }
+        _ => out.push(AccelLeaf {
+            bounds: sdf_bounds(node),
+            node: node.clone(),
+        }),
+    }
+}
+
+#[derive(Clone)]
+enum BvhNode {
+    Leaf {
+        bounds: Aabb,
+        leaf_index: usize,
+    },
+    Inner {
+        bounds: Aabb,
+        lhs: Box<BvhNode>,
+        rhs: Box<BvhNode>,
+    },
+}
+
+impl BvhNode {
+    fn bounds(&self) -> Aabb {
+        match self {
+            Self::Leaf { bounds, .. } | Self::Inner { bounds, .. } => *bounds,
+        }
+    }
+}
+
+fn build_bvh(leaves: &[AccelLeaf], indices: &[usize]) -> Option<BvhNode> {
+    if indices.is_empty() {
+        return None;
+    }
+    if indices.len() == 1 {
+        let idx = indices[0];
+        return Some(BvhNode::Leaf {
+            bounds: leaves[idx].bounds,
+            leaf_index: idx,
+        });
+    }
+
+    let mut bounds = leaves[indices[0]].bounds;
+    for &idx in &indices[1..] {
+        bounds = bounds.union(leaves[idx].bounds);
+    }
+    let extent = bounds.extent();
+    let axis = if extent.x >= extent.y && extent.x >= extent.z {
+        0
+    } else if extent.y >= extent.z {
+        1
+    } else {
+        2
+    };
+
+    let mut sorted = indices.to_vec();
+    sorted.sort_by(|&a, &b| {
+        let ca = leaf_centroid_axis(leaves[a].bounds, axis);
+        let cb = leaf_centroid_axis(leaves[b].bounds, axis);
+        ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mid = sorted.len() / 2;
+    let lhs = build_bvh(leaves, &sorted[..mid])?;
+    let rhs = build_bvh(leaves, &sorted[mid..])?;
+    Some(BvhNode::Inner {
+        bounds,
+        lhs: Box::new(lhs),
+        rhs: Box::new(rhs),
+    })
+}
+
+fn leaf_centroid_axis(bounds: Aabb, axis: usize) -> f32 {
+    let c = bounds.centroid();
+    match axis {
+        0 => c.x,
+        1 => c.y,
+        _ => c.z,
+    }
+}
+
+fn bvh_distance_info(
+    node: &BvhNode,
+    leaves: &[AccelLeaf],
+    p: Vec3,
+    best: &mut f32,
+) -> Option<DistanceInfo> {
+    let node_lb = point_aabb_lower_bound(p, node.bounds());
+    if node_lb > *best {
+        return None;
+    }
+    match node {
+        BvhNode::Leaf { leaf_index, .. } => {
+            let leaf = &leaves[*leaf_index];
+            let info = sdf_distance_info(&leaf.node, p);
+            if info.distance < *best {
+                *best = info.distance;
+            }
+            Some(info)
+        }
+        BvhNode::Inner { lhs, rhs, .. } => {
+            let lhs_lb = point_aabb_lower_bound(p, lhs.bounds());
+            let rhs_lb = point_aabb_lower_bound(p, rhs.bounds());
+            let (first, first_lb, second, second_lb) = if lhs_lb <= rhs_lb {
+                (lhs.as_ref(), lhs_lb, rhs.as_ref(), rhs_lb)
+            } else {
+                (rhs.as_ref(), rhs_lb, lhs.as_ref(), lhs_lb)
+            };
+            let mut best_info = if first_lb <= *best {
+                bvh_distance_info(first, leaves, p, best)
+            } else {
+                None
+            };
+            if second_lb <= *best
+                && let Some(info) = bvh_distance_info(second, leaves, p, best)
+            {
+                best_info = match best_info {
+                    Some(current) if current.distance <= info.distance => Some(current),
+                    _ => Some(info),
+                };
+            }
+            best_info
+        }
+    }
+}
+
+struct BrickGrid {
+    bounds: Aabb,
+    dims: [usize; 3],
+    cells: Vec<Vec<usize>>,
+}
+
+impl BrickGrid {
+    fn from_leaves(bounds: Aabb, leaves: &[AccelLeaf]) -> Option<Self> {
+        if leaves.is_empty() {
+            return None;
+        }
+        let leaf_count = leaves.len().max(1) as f32;
+        let dim = leaf_count.cbrt().ceil().max(1.0) as usize;
+        let dims = [dim, dim, dim];
+        let mut cells = vec![Vec::new(); dims[0] * dims[1] * dims[2]];
+        for (leaf_index, leaf) in leaves.iter().enumerate() {
+            let min_idx = brick_cell_coords(bounds, dims, leaf.bounds.min);
+            let max_idx = brick_cell_coords(bounds, dims, leaf.bounds.max);
+            for z in min_idx[2]..=max_idx[2] {
+                for y in min_idx[1]..=max_idx[1] {
+                    for x in min_idx[0]..=max_idx[0] {
+                        let idx = brick_cell_index(dims, [x, y, z]);
+                        cells[idx].push(leaf_index);
+                    }
+                }
+            }
+        }
+        for cell in &mut cells {
+            cell.sort_unstable();
+            cell.dedup();
+        }
+        Some(Self {
+            bounds,
+            dims,
+            cells,
+        })
+    }
+
+    fn distance_info(&self, leaves: &[AccelLeaf], p: Vec3) -> DistanceInfo {
+        let origin = brick_cell_coords(self.bounds, self.dims, p);
+        let max_shell = self.dims[0].max(self.dims[1]).max(self.dims[2]);
+        let mut best = f32::INFINITY;
+        let mut best_info = None;
+        let mut visited = std::collections::HashSet::new();
+        for shell in 0..max_shell {
+            let shell_lb = brick_shell_lower_bound(self.bounds, self.dims, origin, shell, p);
+            if shell_lb > best {
+                break;
+            }
+            for z in origin[2].saturating_sub(shell)..=(origin[2] + shell).min(self.dims[2] - 1) {
+                for y in origin[1].saturating_sub(shell)..=(origin[1] + shell).min(self.dims[1] - 1)
+                {
+                    for x in
+                        origin[0].saturating_sub(shell)..=(origin[0] + shell).min(self.dims[0] - 1)
+                    {
+                        if shell > 0
+                            && x > origin[0].saturating_sub(shell)
+                            && x < (origin[0] + shell).min(self.dims[0] - 1)
+                            && y > origin[1].saturating_sub(shell)
+                            && y < (origin[1] + shell).min(self.dims[1] - 1)
+                            && z > origin[2].saturating_sub(shell)
+                            && z < (origin[2] + shell).min(self.dims[2] - 1)
+                        {
+                            continue;
+                        }
+                        let idx = brick_cell_index(self.dims, [x, y, z]);
+                        for &leaf_index in &self.cells[idx] {
+                            if !visited.insert(leaf_index) {
+                                continue;
+                            }
+                            let leaf = &leaves[leaf_index];
+                            let lb = point_aabb_lower_bound(p, leaf.bounds);
+                            if lb > best {
+                                continue;
+                            }
+                            let info = sdf_distance_info(&leaf.node, p);
+                            if info.distance < best {
+                                best = info.distance;
+                                best_info = Some(info);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        best_info.unwrap_or_else(|| sdf_distance_info(&leaves[0].node, p))
+    }
+}
+
+fn brick_cell_index(dims: [usize; 3], coords: [usize; 3]) -> usize {
+    coords[0] + dims[0] * (coords[1] + dims[1] * coords[2])
+}
+
+fn brick_cell_coords(bounds: Aabb, dims: [usize; 3], p: Vec3) -> [usize; 3] {
+    let extent = bounds.extent();
+    let coord = |value: f32, min: f32, extent: f32, dim: usize| {
+        if extent <= 1.0e-6 {
+            return 0;
+        }
+        (((value - min) / extent).clamp(0.0, 0.999_999) * dim as f32) as usize
+    };
+    [
+        coord(p.x, bounds.min.x, extent.x, dims[0]),
+        coord(p.y, bounds.min.y, extent.y, dims[1]),
+        coord(p.z, bounds.min.z, extent.z, dims[2]),
+    ]
+}
+
+fn brick_cell_aabb(bounds: Aabb, dims: [usize; 3], coords: [usize; 3]) -> Aabb {
+    let extent = bounds.extent();
+    let size = Vec3::new(
+        extent.x / dims[0].max(1) as f32,
+        extent.y / dims[1].max(1) as f32,
+        extent.z / dims[2].max(1) as f32,
+    );
+    let min = Vec3::new(
+        bounds.min.x + size.x * coords[0] as f32,
+        bounds.min.y + size.y * coords[1] as f32,
+        bounds.min.z + size.z * coords[2] as f32,
+    );
+    Aabb {
+        min,
+        max: min.add(size),
+    }
+}
+
+fn brick_shell_lower_bound(
+    bounds: Aabb,
+    dims: [usize; 3],
+    origin: [usize; 3],
+    shell: usize,
+    p: Vec3,
+) -> f32 {
+    if shell == 0 {
+        return 0.0;
+    }
+    let min_coords = [
+        origin[0].saturating_sub(shell),
+        origin[1].saturating_sub(shell),
+        origin[2].saturating_sub(shell),
+    ];
+    let max_coords = [
+        (origin[0] + shell).min(dims[0] - 1),
+        (origin[1] + shell).min(dims[1] - 1),
+        (origin[2] + shell).min(dims[2] - 1),
+    ];
+    let min_aabb = brick_cell_aabb(bounds, dims, min_coords);
+    let max_aabb = brick_cell_aabb(bounds, dims, max_coords);
+    point_aabb_lower_bound(
+        p,
+        Aabb {
+            min: min_aabb.min,
+            max: max_aabb.max,
+        },
+    )
+}
+
 struct NaiveAccel {
     scene: CompiledScene,
     bounds: Aabb,
@@ -590,16 +890,31 @@ impl Accelerator for NaiveAccel {
 struct BvhAccel {
     scene: CompiledScene,
     bounds: Aabb,
+    leaves: Vec<AccelLeaf>,
+    root: Option<BvhNode>,
 }
 
 impl Accelerator for BvhAccel {
     fn from_scene(scene: CompiledScene) -> Self {
         let bounds = sdf_bounds(&scene.root);
-        Self { scene, bounds }
+        let mut leaves = Vec::new();
+        collect_accel_leaves(&scene.root, &mut leaves);
+        let indices = (0..leaves.len()).collect::<Vec<_>>();
+        let root = build_bvh(&leaves, &indices);
+        Self {
+            scene,
+            bounds,
+            leaves,
+            root,
+        }
     }
 
     fn distance_info(&self, p: Vec3) -> DistanceInfo {
-        sdf_distance_info(&self.scene.root, p)
+        let mut best = f32::INFINITY;
+        self.root
+            .as_ref()
+            .and_then(|root| bvh_distance_info(root, &self.leaves, p, &mut best))
+            .unwrap_or_else(|| sdf_distance_info(&self.scene.root, p))
     }
 
     fn scene_bounds(&self) -> Aabb {
@@ -610,16 +925,29 @@ impl Accelerator for BvhAccel {
 struct BricksAccel {
     scene: CompiledScene,
     bounds: Aabb,
+    leaves: Vec<AccelLeaf>,
+    grid: Option<BrickGrid>,
 }
 
 impl Accelerator for BricksAccel {
     fn from_scene(scene: CompiledScene) -> Self {
         let bounds = sdf_bounds(&scene.root);
-        Self { scene, bounds }
+        let mut leaves = Vec::new();
+        collect_accel_leaves(&scene.root, &mut leaves);
+        let grid = BrickGrid::from_leaves(bounds, &leaves);
+        Self {
+            scene,
+            bounds,
+            leaves,
+            grid,
+        }
     }
 
     fn distance_info(&self, p: Vec3) -> DistanceInfo {
-        sdf_distance_info(&self.scene.root, p)
+        self.grid
+            .as_ref()
+            .map(|grid| grid.distance_info(&self.leaves, p))
+            .unwrap_or_else(|| sdf_distance_info(&self.scene.root, p))
     }
 
     fn scene_bounds(&self) -> Aabb {
@@ -852,6 +1180,25 @@ pub fn extract_scene_render_settings(state: &EvalState) -> SceneRenderSettings {
     out
 }
 
+fn read_accel_field(obj: &ObjectValue, name: &str) -> Option<AccelMode> {
+    let value = obj.fields.get(name)?;
+    match value {
+        Value::Object(v) => match v.type_name.as_deref() {
+            Some("Naive") | Some("naive") => Some(AccelMode::Naive),
+            Some("Bvh") | Some("bvh") => Some(AccelMode::Bvh),
+            Some("Bricks") | Some("bricks") => Some(AccelMode::Bricks),
+            _ => None,
+        },
+        Value::Number(n) => match *n as i32 {
+            0 => Some(AccelMode::Naive),
+            1 => Some(AccelMode::Bvh),
+            2 => Some(AccelMode::Bricks),
+            _ => None,
+        },
+        Value::String(_) | Value::Array(_) => None,
+    }
+}
+
 fn find_scene_root(state: &EvalState) -> Option<&Value> {
     for key in ["scene", "result", "b", "s"] {
         if let Some(binding) = state.bindings.get(key) {
@@ -968,6 +1315,9 @@ fn compile_sdf(
         }
         "Room" => compile_room(state, object, ctx),
         custom if state.sdf_defs.contains_key(custom) => {
+            if let Some(lowered) = compile_lowered_library_object(state, custom, object, ctx) {
+                return lowered;
+            }
             let transform = read_transform(object);
             let object_id = ctx.alloc_object_id();
             ctx.register_object_transform(object_id, transform);
@@ -1144,6 +1494,195 @@ fn room_flag(obj: &ObjectValue, name: &str, default: bool) -> bool {
             _ => None,
         })
         .unwrap_or(default)
+}
+
+fn compile_lowered_library_object(
+    state: &Arc<EvalState>,
+    name: &str,
+    object: &ObjectValue,
+    ctx: &mut CompileContext,
+) -> Option<Result<SdfNode, RenderError>> {
+    match name {
+        "Table" => Some(compile_table(state, object, ctx)),
+        "Cupboard" => Some(compile_cupboard(state, object, ctx)),
+        _ => None,
+    }
+}
+
+fn transform_offset(transform: PrimitiveTransform, offset: Vec3) -> Vec3 {
+    rotate_z(
+        rotate_y(rotate_x(offset, transform.rot_deg.x), transform.rot_deg.y),
+        transform.rot_deg.z,
+    )
+}
+
+fn offset_transform(transform: PrimitiveTransform, offset: Vec3) -> PrimitiveTransform {
+    PrimitiveTransform {
+        center: transform.center.add(transform_offset(transform, offset)),
+        rot_deg: transform.rot_deg,
+    }
+}
+
+fn make_box_part(
+    ctx: &mut CompileContext,
+    transform: PrimitiveTransform,
+    half_size: Vec3,
+    material_id: u32,
+) -> SdfNode {
+    let object_id = ctx.alloc_object_id();
+    ctx.register_object_transform(object_id, transform);
+    SdfNode::Box {
+        transform,
+        half_size,
+        object_id,
+        material_id,
+    }
+}
+
+fn make_cylinder_part(
+    ctx: &mut CompileContext,
+    transform: PrimitiveTransform,
+    radius: f32,
+    half_height: f32,
+    material_id: u32,
+) -> SdfNode {
+    let object_id = ctx.alloc_object_id();
+    ctx.register_object_transform(object_id, transform);
+    SdfNode::Cylinder {
+        transform,
+        radius,
+        half_height,
+        object_id,
+        material_id,
+    }
+}
+
+fn compile_table(
+    state: &Arc<EvalState>,
+    object: &ObjectValue,
+    ctx: &mut CompileContext,
+) -> Result<SdfNode, RenderError> {
+    let transform = read_transform(object);
+    let width = read_number_field(object, &["width"])
+        .unwrap_or(1.8)
+        .max(0.2);
+    let depth = read_number_field(object, &["depth"])
+        .unwrap_or(0.9)
+        .max(0.2);
+    let height = read_number_field(object, &["height"])
+        .unwrap_or(0.76)
+        .max(0.1);
+    let top_thickness = read_number_field(object, &["top_thickness"])
+        .unwrap_or(0.08)
+        .clamp(0.01, height.max(0.01));
+    let leg_radius = read_number_field(object, &["leg_radius"])
+        .unwrap_or(0.05)
+        .max(0.005);
+    let leg_inset = read_number_field(object, &["leg_inset"])
+        .unwrap_or(0.12)
+        .max(0.0);
+    let material_id = primitive_material_id(state, object, ctx);
+
+    let mut parts = Vec::new();
+    let top_center_y = height * 0.5 - top_thickness * 0.5;
+    parts.push(make_box_part(
+        ctx,
+        offset_transform(transform, Vec3::new(0.0, top_center_y, 0.0)),
+        Vec3::new(width * 0.5, top_thickness * 0.5, depth * 0.5),
+        material_id,
+    ));
+
+    let leg_half_height = ((height - top_thickness) * 0.5).max(0.001);
+    let leg_center_y = -height * 0.5 + leg_half_height;
+    let leg_x = (width * 0.5 - leg_inset).max(leg_radius);
+    let leg_z = (depth * 0.5 - leg_inset).max(leg_radius);
+    for &sx in &[-1.0_f32, 1.0] {
+        for &sz in &[-1.0_f32, 1.0] {
+            parts.push(make_cylinder_part(
+                ctx,
+                offset_transform(transform, Vec3::new(sx * leg_x, leg_center_y, sz * leg_z)),
+                leg_radius,
+                leg_half_height,
+                material_id,
+            ));
+        }
+    }
+
+    let mut parts = parts.into_iter();
+    let Some(mut root) = parts.next() else {
+        return Err(RenderError::UnsupportedObjectType("Table".to_string()));
+    };
+    for part in parts {
+        root = SdfNode::Union {
+            lhs: Box::new(root),
+            rhs: Box::new(part),
+        };
+    }
+    Ok(root)
+}
+
+fn compile_cupboard(
+    state: &Arc<EvalState>,
+    object: &ObjectValue,
+    ctx: &mut CompileContext,
+) -> Result<SdfNode, RenderError> {
+    let transform = read_transform(object);
+    let width = read_number_field(object, &["width"])
+        .unwrap_or(1.6)
+        .max(0.1);
+    let height = read_number_field(object, &["height"])
+        .unwrap_or(2.0)
+        .max(0.1);
+    let depth = read_number_field(object, &["depth"])
+        .unwrap_or(0.6)
+        .max(0.1);
+    let wall_thickness = read_number_field(object, &["wall_thickness"])
+        .unwrap_or(0.05)
+        .max(0.005);
+    let open_amount = read_number_field(object, &["open_amount"])
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let material_id = primitive_material_id(state, object, ctx);
+
+    let outer = make_box_part(
+        ctx,
+        transform,
+        Vec3::new(width * 0.5, height * 0.5, depth * 0.5),
+        material_id,
+    );
+
+    let inner_half = Vec3::new(
+        (width * 0.5 - wall_thickness).max(0.001),
+        (height * 0.5 - wall_thickness).max(0.001),
+        (depth * 0.5 - wall_thickness).max(0.001),
+    );
+    let cavity = make_box_part(
+        ctx,
+        offset_transform(transform, Vec3::new(0.0, 0.0, -wall_thickness)),
+        inner_half,
+        material_id,
+    );
+
+    let shell = SdfNode::Subtract {
+        lhs: Box::new(outer),
+        rhs: Box::new(cavity),
+    };
+
+    let door_thickness = (wall_thickness * (1.0 - open_amount)).max(0.001);
+    let door = make_box_part(
+        ctx,
+        offset_transform(
+            transform,
+            Vec3::new(0.0, 0.0, depth * 0.5 - door_thickness * 0.5),
+        ),
+        Vec3::new(width * 0.5, height * 0.5, door_thickness * 0.5),
+        material_id,
+    );
+
+    Ok(SdfNode::Union {
+        lhs: Box::new(shell),
+        rhs: Box::new(door),
+    })
 }
 
 fn compile_room(
@@ -1337,25 +1876,6 @@ fn float_to_u32(v: f32) -> Option<u32> {
         }
     }
     None
-}
-
-fn read_accel_field(obj: &ObjectValue, name: &str) -> Option<AccelMode> {
-    let value = obj.fields.get(name)?;
-    match value {
-        Value::Object(v) => match v.type_name.as_deref() {
-            Some("Naive") | Some("naive") => Some(AccelMode::Naive),
-            Some("Bvh") | Some("bvh") => Some(AccelMode::Bvh),
-            Some("Bricks") | Some("bricks") => Some(AccelMode::Bricks),
-            _ => None,
-        },
-        Value::Number(n) => match *n as i32 {
-            0 => Some(AccelMode::Naive),
-            1 => Some(AccelMode::Bvh),
-            2 => Some(AccelMode::Bricks),
-            _ => None,
-        },
-        Value::String(_) | Value::Array(_) => None,
-    }
 }
 
 fn read_center(obj: &ObjectValue) -> Vec3 {

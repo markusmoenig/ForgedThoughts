@@ -38,6 +38,21 @@ That is why the current renderer is not centered on a path tracer. For this proj
 - environment lights and procedural environment backgrounds
 - debug AOVs such as depth, normal, material id, IOR, transmission, Fresnel, and hit distance
 
+## Acceleration
+
+The renderer currently supports three scene acceleration modes:
+
+- `Naive`
+  Direct scene evaluation with no extra acceleration structure. This is simple and still useful for very small scenes or debugging.
+
+- `Bvh`
+  A hierarchy over lowered scene leaves. This is currently the default fallback when no CLI or `RenderSettings.accel` override is provided.
+
+- `Bricks`
+  A uniform 3D grid accelerator over lowered scene leaves.
+
+In practice, the best mode depends on scene structure. CLI `--accel` still overrides `RenderSettings.accel` when both are provided.
+
 ## Forge Runtime
 
 Forge is JIT-accelerated where it matters most for rendering, especially for hot custom SDF code and supported material hooks.

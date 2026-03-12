@@ -106,6 +106,14 @@ const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
         source: include_str!("../library/objects/cupboard.ft"),
     },
     BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Objects,
+        name: "Table",
+        path: "objects/table.ft",
+        description: "Parameterized table with a rectangular top and four round legs.",
+        tags: &["object", "furniture", "table", "surface", "parametric"],
+        source: include_str!("../library/objects/table.ft"),
+    },
+    BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Scenes,
         name: "Studio",
         path: "scenes/studio.ft",

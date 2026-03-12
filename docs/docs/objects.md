@@ -34,6 +34,7 @@ The same mechanism also works for more semantic library objects:
 
 ```forge
 import "Cupboard";
+import "Table";
 
 let cupboard = Cupboard {
   width: 1.8,
@@ -41,14 +42,23 @@ let cupboard = Cupboard {
   depth: 0.65,
   open_amount: 0.35
 };
+
+let table = Table {
+  width: 1.8,
+  depth: 0.9,
+  height: 0.76,
+  top_thickness: 0.08,
+  leg_radius: 0.05
+};
 ```
 
-Custom object assets can also define their own default anchors inside the asset itself, so instances inherit meaningful placement points like `TopSurface` or `FrontCenter` automatically.
+Custom object assets can also define their own default anchors inside the asset itself, so instances inherit meaningful placement points like `TopSurface` or `FrontCenter` automatically. `Table` is a good early adjective-style asset because it exposes obvious shape parameters like width, depth, height, tabletop thickness, and leg radius.
 
-For example, a room scene can place a cupboard into a corner and then attach another object to the cupboard's own anchor:
+For example, a room scene can place both a cupboard and table into a corner, then attach another object to the table's own anchor:
 
 ```forge
 import "Cupboard";
+import "Table";
 
 let room = Room {
   width: 8.0,
@@ -67,10 +77,19 @@ var cupboard = Cupboard {
   .offset_x(-0.12)
   .offset_z(0.12);
 
+var table = Table {
+  width: 1.7,
+  depth: 0.9,
+  height: 0.78
+}
+  .attach(room, BackRightCorner)
+  .offset_x(-2.1)
+  .offset_z(1.35);
+
 var vase = Sphere {
   radius: 0.18
 }
-  .attach(cupboard, "TopSurface", Bottom)
+  .attach(table, "TopSurface", Bottom)
   .offset_x(-0.35);
 ```
 
