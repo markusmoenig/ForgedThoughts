@@ -229,6 +229,14 @@ enum SdfNode {
         transform: PrimitiveTransform,
         bounds: Aabb,
     },
+    Noise {
+        base: Box<SdfNode>,
+        octaves: u32,
+        scale: f32,
+        lacunarity: f32,
+        transform: PrimitiveTransform,
+        bounds: Aabb,
+    },
     Union {
         lhs: Box<SdfNode>,
         rhs: Box<SdfNode>,
@@ -1692,6 +1700,30 @@ fn compile_sdf(
                 max,
             })
         }
+        "noise" => {
+            let base = compile_sdf(state, required_field(object, "base")?, ctx)?;
+            let octaves = match required_field(object, "octaves")? {
+                Value::Number(v) => (*v).round().clamp(1.0, 16.0) as u32,
+                _ => 7,
+            };
+            let scale = match required_field(object, "scale")? {
+                Value::Number(v) => (*v as f32).max(1.0e-4),
+                _ => 1.0,
+            };
+            let lacunarity = match required_field(object, "lacunarity")? {
+                Value::Number(v) => (*v as f32).max(1.0e-4),
+                _ => 1.0,
+            };
+            let (base, transform, bounds) = split_modifier_base(base);
+            Ok(SdfNode::Noise {
+                base: Box::new(base),
+                octaves,
+                scale,
+                lacunarity,
+                transform,
+                bounds,
+            })
+        }
         "smooth" => {
             let base = compile_sdf(state, required_field(object, "base")?, ctx)?;
             let k = match required_field(object, "k")? {
@@ -1888,6 +1920,25 @@ fn split_modifier_base(node: SdfNode) -> (SdfNode, PrimitiveTransform, Aabb) {
                 bounds_half_extents,
                 object_id,
                 material_id,
+            },
+            transform,
+            bounds,
+        ),
+        SdfNode::Noise {
+            base,
+            octaves,
+            scale,
+            lacunarity,
+            transform,
+            ..
+        } => (
+            SdfNode::Noise {
+                base,
+                octaves,
+                scale,
+                lacunarity,
+                transform: PrimitiveTransform::identity(),
+                bounds,
             },
             transform,
             bounds,
@@ -2127,6 +2178,25 @@ fn remap_sdf_node(
             SdfNode::DistancePostModifier {
                 base,
                 runtime,
+                transform,
+                bounds,
+            }
+        }
+        SdfNode::Noise {
+            base,
+            octaves,
+            scale,
+            lacunarity,
+            transform,
+            ..
+        } => {
+            let transform = map_transform(transform);
+            let bounds = transformed_modifier_bounds(base.as_ref(), transform);
+            SdfNode::Noise {
+                base,
+                octaves,
+                scale,
+                lacunarity,
                 transform,
                 bounds,
             }
@@ -3383,7 +3453,8 @@ fn sdf_center(node: &SdfNode) -> Vec3 {
         SdfNode::ExtrudePolygon { transform, .. } => transform.center,
         SdfNode::Custom { transform, .. } => transform.center,
         SdfNode::DomainModifier { transform, .. }
-        | SdfNode::DistancePostModifier { transform, .. } => transform.center,
+        | SdfNode::DistancePostModifier { transform, .. }
+        | SdfNode::Noise { transform, .. } => transform.center,
         SdfNode::Union { lhs, rhs } => {
             let l = sdf_center(lhs);
             let r = sdf_center(rhs);
@@ -3785,9 +3856,9 @@ fn resolve_surface_normal_from_node(node: &SdfNode, p: Vec3, epsilon: f32) -> Op
         | SdfNode::Torus { .. }
         | SdfNode::ExtrudePolygon { .. }
         | SdfNode::Custom { .. } => Some(estimate_node_normal(node, p, epsilon)),
-        SdfNode::DomainModifier { .. } | SdfNode::DistancePostModifier { .. } => {
-            Some(estimate_node_normal(node, p, epsilon))
-        }
+        SdfNode::DomainModifier { .. }
+        | SdfNode::DistancePostModifier { .. }
+        | SdfNode::Noise { .. } => Some(estimate_node_normal(node, p, epsilon)),
         SdfNode::Union { lhs, rhs } => {
             let l = sdf_distance_info(lhs, p);
             let r = sdf_distance_info(rhs, p);
@@ -4692,9 +4763,9 @@ fn sdf_bounds(node: &SdfNode) -> Aabb {
             }
             bounds
         }
-        SdfNode::DomainModifier { bounds, .. } | SdfNode::DistancePostModifier { bounds, .. } => {
-            *bounds
-        }
+        SdfNode::DomainModifier { bounds, .. }
+        | SdfNode::DistancePostModifier { bounds, .. }
+        | SdfNode::Noise { bounds, .. } => *bounds,
         SdfNode::Smooth { base, k } => sdf_bounds(base).expand(*k * 0.1),
     }
 }
@@ -4850,7 +4921,8 @@ fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
         | SdfNode::Tongue { .. }
         | SdfNode::Slice { .. }
         | SdfNode::DomainModifier { .. }
-        | SdfNode::DistancePostModifier { .. } => point_aabb_lower_bound(p, sdf_bounds(node)),
+        | SdfNode::DistancePostModifier { .. }
+        | SdfNode::Noise { .. } => point_aabb_lower_bound(p, sdf_bounds(node)),
         SdfNode::Smooth { base, k } => sdf_lower_bound(base, p) - *k * 0.1,
     }
 }
@@ -5006,6 +5078,19 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             let q = to_local(p, *transform);
             let mut info = sdf_distance_info(base, q);
             info.distance = eval_modifier_distance_post(runtime, info.distance, q);
+            info
+        }
+        SdfNode::Noise {
+            base,
+            octaves,
+            scale,
+            lacunarity,
+            transform,
+            ..
+        } => {
+            let q = to_local(p, *transform);
+            let mut info = sdf_distance_info(base, q);
+            info.distance = apply_noise_modifier(q, info.distance, *octaves, *scale, *lacunarity);
             info
         }
         SdfNode::Union { lhs, rhs } => {
@@ -5252,6 +5337,78 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             info
         }
     }
+}
+
+fn fractf(x: f32) -> f32 {
+    x - x.floor()
+}
+
+fn hash_noise(p: Vec3) -> f32 {
+    let q = Vec3::new(
+        fractf(p.x * std::f32::consts::FRAC_1_PI + 0.11),
+        fractf(p.y * std::f32::consts::FRAC_1_PI + 0.17),
+        fractf(p.z * std::f32::consts::FRAC_1_PI + 0.13),
+    )
+    .mul(17.0);
+    fractf(q.x * q.y * q.z * (q.x + q.y + q.z))
+}
+
+fn sd_base_noise(mut p: Vec3) -> f32 {
+    p = p.add(Vec3::new(0.5, 0.5, 0.5));
+    let i = Vec3::new(p.x.floor(), p.y.floor(), p.z.floor());
+    let f = Vec3::new(fractf(p.x), fractf(p.y), fractf(p.z));
+    let mut d = f32::INFINITY;
+    for ix in 0..=1 {
+        for iy in 0..=1 {
+            for iz in 0..=1 {
+                let c = Vec3::new(ix as f32, iy as f32, iz as f32);
+                let r = hash_noise(i.add(c));
+                let r = r * r * 0.7;
+                d = d.min(f.sub(c).length() - r);
+            }
+        }
+    }
+    d
+}
+
+fn apply_noise_modifier(p: Vec3, mut d: f32, octaves: u32, scale: f32, lacunarity: f32) -> f32 {
+    let m = [
+        [0.00_f32, 1.60, 1.20],
+        [-1.60, 0.72, -0.96],
+        [-1.20, -0.96, 1.28],
+    ];
+    let mut q = p.mul(scale.max(1.0e-4));
+    let octave_scale = lacunarity.max(1.0e-4);
+    let mut s = 1.0_f32;
+    let mut t = 0.0_f32;
+    for _ in 0..octaves.max(1) {
+        let n = s * sd_base_noise(q);
+        let n = op_smax(n, d - 0.1 * s, 0.3 * s);
+        d = op_smin(n, d, 0.3 * s);
+        t += d;
+        q = mul_mat3(m, q).mul(octave_scale);
+        s *= 0.415;
+        q.z += -4.33 * t * s;
+    }
+    d
+}
+
+fn mul_mat3(m: [[f32; 3]; 3], v: Vec3) -> Vec3 {
+    Vec3::new(
+        m[0][0] * v.x + m[0][1] * v.y + m[0][2] * v.z,
+        m[1][0] * v.x + m[1][1] * v.y + m[1][2] * v.z,
+        m[2][0] * v.x + m[2][1] * v.y + m[2][2] * v.z,
+    )
+}
+
+fn op_smax(a: f32, b: f32, k: f32) -> f32 {
+    let h = (k - (a - b).abs()).max(0.0);
+    a.max(b) + h * h * 0.25 / k.max(1.0e-6)
+}
+
+fn op_smin(a: f32, b: f32, k: f32) -> f32 {
+    let h = (k - (a - b).abs()).max(0.0);
+    a.min(b) - h * h * 0.25 / k.max(1.0e-6)
 }
 
 fn op_union_round(a: f32, b: f32, r: f32) -> f32 {
@@ -5821,6 +5978,7 @@ fn material_from_dynamic_def(
     match def.model.as_str() {
         "Metal" => MaterialKindRt::Metal(params),
         "Dielectric" => MaterialKindRt::Dielectric(params),
+        "Layered" => MaterialKindRt::Lambert(params),
         _ => MaterialKindRt::Lambert(params),
     }
 }
@@ -6101,9 +6259,9 @@ fn resolve_material_from_node(
                 view_dir,
             ))
         }
-        SdfNode::DomainModifier { base, .. } | SdfNode::DistancePostModifier { base, .. } => {
-            resolve_material_from_node(base, setup, hit, view_dir)
-        }
+        SdfNode::DomainModifier { base, .. }
+        | SdfNode::DistancePostModifier { base, .. }
+        | SdfNode::Noise { base, .. } => resolve_material_from_node(base, setup, hit, view_dir),
         SdfNode::Union { lhs, rhs } => {
             let l = sdf_distance_info(lhs, hit.position);
             let r = sdf_distance_info(rhs, hit.position);
@@ -6220,7 +6378,7 @@ fn resolve_split_material_from_node(
         SdfNode::Groove { lhs, rhs, ra, rb } | SdfNode::Tongue { lhs, rhs, ra, rb } => {
             split_node_materials(lhs, rhs, setup, hit, view_dir, ra.max(*rb), true)
         }
-        SdfNode::Smooth { base, .. } => {
+        SdfNode::Smooth { base, .. } | SdfNode::Noise { base, .. } => {
             resolve_split_material_from_node(base, setup, hit, view_dir)
         }
         _ => None,
@@ -6277,6 +6435,8 @@ fn resolve_leaf_material(
     hit: RayHit,
     view_dir: Vec3,
 ) -> MaterialKindRt {
+    let dynamic_name = dynamic_material_name(material, &setup.material_def_names);
+    let dynamic_override = dynamic_material_override(material, &setup.dynamic_material_overrides);
     let transform = setup
         .object_transforms
         .get(hit.object_id as usize)
@@ -6364,6 +6524,133 @@ fn resolve_leaf_material(
         view_dir,
         "emission_strength",
     );
+    if let Some(name) = dynamic_name
+        && matches!(
+            setup
+                .state
+                .material_defs
+                .get(name)
+                .map(|def| def.model.as_str()),
+            Some("Layered")
+        )
+    {
+        let mut base_params = dominant_material_params(material);
+        base_params.color =
+            runtime_color.unwrap_or_else(|| resolve_pattern_color(base_params, local_position));
+        base_params.roughness = runtime_roughness
+            .unwrap_or(base_params.roughness as f64)
+            .clamp(0.0, 1.0) as f32;
+        base_params.ior = runtime_ior
+            .unwrap_or(base_params.ior as f64)
+            .clamp(1.0, 3.0) as f32;
+        if let Some(thin_walled) = runtime_thin_walled {
+            base_params.thin_walled = thin_walled >= 0.5;
+        }
+        base_params.medium = runtime_medium.or(base_params.medium);
+        base_params.subsurface = runtime_subsurface.or(base_params.subsurface);
+        base_params.emission_color = runtime_emission_color.unwrap_or(base_params.emission_color);
+        base_params.emission_strength = runtime_emission_strength
+            .unwrap_or(base_params.emission_strength as f64)
+            .max(0.0) as f32;
+
+        let static_props =
+            eval_material_properties_with_overrides(&setup.state, name, dynamic_override).ok();
+        let static_spectrum = |key: &str| {
+            static_props
+                .as_ref()
+                .and_then(|props| props.get(key))
+                .and_then(spectrum_from_value)
+        };
+        let static_number = |key: &str| {
+            static_props
+                .as_ref()
+                .and_then(|props| props.get(key))
+                .and_then(|value| match value {
+                    Value::Number(v) => Some(*v),
+                    _ => None,
+                })
+        };
+        let coat_color = resolve_dynamic_spectrum(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "coat_color",
+        )
+        .or_else(|| static_spectrum("coat_color"))
+        .unwrap_or(Spectrum::rgb(1.0, 1.0, 1.0));
+        let coat_roughness = resolve_dynamic_number(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "coat_roughness",
+        )
+        .or_else(|| static_number("coat_roughness"))
+        .unwrap_or(0.08)
+        .clamp(0.0, 1.0) as f32;
+        let coat_ior = resolve_dynamic_number(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "coat_ior",
+        )
+        .or_else(|| static_number("coat_ior"))
+        .unwrap_or(1.33)
+        .clamp(1.0, 3.0) as f32;
+        let coat_weight = resolve_dynamic_number(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "coat_weight",
+        )
+        .or_else(|| static_number("coat_weight"))
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0) as f32;
+        let coat_mask = resolve_dynamic_number(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "coat_mask",
+        )
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0) as f32;
+        let t = (coat_weight * coat_mask).clamp(0.0, 1.0);
+        if t <= 0.0 {
+            return MaterialKindRt::Lambert(base_params);
+        }
+        let mut coat_params =
+            MaterialParams::metal(coat_color, coat_roughness, Spectrum::black(), 0.0);
+        coat_params.ior = coat_ior;
+        coat_params.thin_walled = true;
+        coat_params.dynamic_material_id = base_params.dynamic_material_id;
+        coat_params.dynamic_override_id = base_params.dynamic_override_id;
+        return MaterialKindRt::Blend(BlendedMaterial {
+            a_model: MaterialKindTag::Lambert,
+            a_params: base_params,
+            b_model: MaterialKindTag::Metal,
+            b_params: coat_params,
+            t,
+        });
+    }
     match material {
         MaterialKindRt::Lambert(mut params) => {
             params.color =

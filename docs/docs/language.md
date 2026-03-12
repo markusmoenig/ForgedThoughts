@@ -77,6 +77,7 @@ Forge now has a first domain-helper slice for object-level SDF composition:
 - `mirror_x()`, `mirror_y()`, `mirror_z()`
 - `repeat_x(spacing, count)`, `repeat_y(...)`, `repeat_z(...)`
 - `slice_x(min, max)`, `slice_y(...)`, `slice_z(...)`
+- `noise(octaves[, scale[, lacunarity]])`
 
 These helpers are lowered into native renderer structures before marching, so they do not depend on the interpreted hot path.
 
@@ -86,6 +87,16 @@ let rib = Box { size: vec3(0.2, 1.0, 0.4) };
 let columns = rib.repeat_x(0.6, 5.0);
 let mirrored = columns.mirror_z();
 let clipped = mirrored.slice_y(-0.4, 0.4);
+```
+
+`noise(...)` is useful for carved rock and terrain-like breakup on otherwise simple shapes:
+
+```forge
+let stone = Box {
+  size: vec3(1.0, 1.0, 1.0),
+  round: 0.08
+}
+  .noise(7.0, 1.6, 1.2);
 ```
 
 For fully programmable shaping inside custom SDFs, use SDF hooks instead:

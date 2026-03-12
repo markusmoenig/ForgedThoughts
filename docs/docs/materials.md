@@ -105,6 +105,40 @@ Current context fields include:
 - `ctx.current_ior`
 - `ctx.u1`, `ctx.u2`, `ctx.u3` inside `sample(ctx)`
 
+## Layered
+
+Forge also has a constrained two-layer material model for common cases like wet stone, clearcoat, or varnish.
+
+Example:
+
+```forge
+material WetStone {
+  model: Layered;
+
+  color = #5f5951;
+  roughness = 0.56;
+
+  coat_color = #ffffff;
+  coat_roughness = 0.05;
+  coat_ior = 1.33;
+  coat_weight = 0.6;
+
+  fn coat_mask(ctx) {
+    return smoothstep(-0.1, 0.2, sin(ctx.local_position.x) + cos(ctx.local_position.z));
+  }
+};
+```
+
+Current layered fields:
+
+- `color`: Base layer color.
+- `roughness`: Base layer roughness.
+- `coat_color`: Top coat color, usually near white.
+- `coat_roughness`: Coat roughness for glossy or wet response.
+- `coat_ior`: Coat index of refraction.
+- `coat_weight`: Overall coat strength.
+- `coat_mask`: Per-hit mask for where the coat appears.
+
 Materials can also be imported from disk or the built-in library:
 
 ```forge

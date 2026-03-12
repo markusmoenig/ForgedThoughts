@@ -1046,6 +1046,33 @@ fn build_sdf_member_value(
                 ],
             )
         }
+        "noise" => {
+            if args.is_empty() || args.len() > 3 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let Value::Number(octaves) = args[0] else {
+                return Err(EvalError::UnsupportedCall);
+            };
+            let scale = match args.get(1) {
+                Some(Value::Number(v)) => *v,
+                Some(_) => return Err(EvalError::UnsupportedCall),
+                None => 1.0,
+            };
+            let lacunarity = match args.get(2) {
+                Some(Value::Number(v)) => *v,
+                Some(_) => return Err(EvalError::UnsupportedCall),
+                None => 1.0,
+            };
+            (
+                field,
+                vec![
+                    ("base", base),
+                    ("octaves", Value::Number(octaves)),
+                    ("scale", Value::Number(scale)),
+                    ("lacunarity", Value::Number(lacunarity)),
+                ],
+            )
+        }
         _ => return Ok(None),
     };
 
@@ -1204,6 +1231,7 @@ fn is_sdf_member_operator(field: &str) -> bool {
             | "slice_x"
             | "slice_y"
             | "slice_z"
+            | "noise"
     )
 }
 
@@ -3953,6 +3981,7 @@ fn object_bounds(value: &Value) -> Option<Bounds3> {
             }
             Some(base)
         }
+        "noise" => object_bounds(obj.fields.get("base")?),
         "smooth" => Some(
             object_bounds(obj.fields.get("base")?)?
                 .expand(numeric_field(obj, &["k"]).unwrap_or(0.0) * 0.1),

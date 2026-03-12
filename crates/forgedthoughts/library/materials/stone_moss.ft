@@ -1,0 +1,139 @@
+material StoneMoss {
+  name: "StoneMoss";
+  description: "Wet stone base with darker rough moss patches and a glossy coat on damp bare stone.";
+  tags: ["material", "stone", "moss", "wet", "layered", "procedural"];
+  params: [
+    {
+      name: "stone_color",
+      type: "color",
+      description: "Base stone color.",
+      default: #665e54
+    },
+    {
+      name: "moss_color",
+      type: "color",
+      description: "Moss patch color.",
+      default: #1f3510
+    },
+    {
+      name: "moss_amount",
+      type: "number",
+      description: "Overall moss coverage.",
+      default: 1.0,
+      min: 0.0,
+      max: 1.0
+    },
+    {
+      name: "moss_scale",
+      type: "number",
+      description: "Patch scale in object-local space.",
+      default: 1.4,
+      min: 0.1,
+      max: 10.0
+    },
+    {
+      name: "up_bias",
+      type: "number",
+      description: "Upward-facing bias for moss growth.",
+      default: 0.12,
+      min: 0.0,
+      max: 1.0
+    },
+    {
+      name: "stone_roughness",
+      type: "number",
+      description: "Base stone roughness.",
+      default: 0.54,
+      min: 0.0,
+      max: 1.0
+    },
+    {
+      name: "moss_roughness",
+      type: "number",
+      description: "Moss roughness.",
+      default: 0.98,
+      min: 0.0,
+      max: 1.0
+    },
+    {
+      name: "detail_scale",
+      type: "number",
+      description: "Fine breakup scale for the moss mask.",
+      default: 2.6,
+      min: 0.1,
+      max: 20.0
+    },
+    {
+      name: "moss_bulge",
+      type: "number",
+      description: "Shading-normal bulge for moss patches.",
+      default: 0.4,
+      min: 0.0,
+      max: 1.0
+    }
+  ];
+
+  model: Layered;
+
+  stone_color = #665e54;
+  moss_color = #1f3510;
+  moss_amount = 0.5;
+  moss_scale = 1.4;
+  up_bias = 0.12;
+  stone_roughness = 0.48;
+  moss_roughness = 0.98;
+  detail_scale = 2.6;
+  moss_bulge = 0.4;
+
+  coat_color = #ffffff;
+  coat_roughness = 0.07;
+  coat_ior = 1.33;
+  coat_weight = 0.22;
+
+  fn patch_mask(ctx) {
+    let p = ctx.local_position;
+    let broad =
+      sin(p.x * moss_scale * 1.1 + 0.4) +
+      sin(p.y * moss_scale * 0.85 + 1.2) +
+      sin(p.z * moss_scale * 1.0 - 0.3);
+    let detail =
+      sin(p.x * detail_scale * 1.7) *
+      cos(p.z * detail_scale * 1.2) *
+      sin((p.x + p.y + p.z) * detail_scale * 0.6);
+    let normal_bias = clamp(ctx.normal.y * 0.5 + 0.5, 0.0, 1.0) * up_bias;
+    let field = broad * 0.2 + detail * 0.16 + normal_bias - 0.2;
+    return clamp(smoothstep(0.18, 0.34, field) * moss_amount, 0.0, 1.0);
+  }
+
+  fn color(ctx) {
+    let moss = patch_mask(ctx);
+    let moss_color_mix = clamp(smoothstep(0.08, 0.32, moss), 0.0, 1.0);
+    return mix(stone_color, moss_color, moss_color_mix);
+  }
+
+  fn roughness(ctx) {
+    let moss = patch_mask(ctx);
+    return mix(stone_roughness, moss_roughness, moss);
+  }
+
+  fn normal(ctx) {
+    let moss = patch_mask(ctx);
+    let p = ctx.local_position;
+    let bulge = vec3(
+      sin(p.x * detail_scale * 1.4),
+      cos((p.x + p.z) * detail_scale * 0.7),
+      sin(p.z * detail_scale * 1.3)
+    ) * (moss * moss_bulge * 0.035);
+    return normalize(ctx.normal + bulge);
+  }
+
+  fn coat_mask(ctx) {
+    let moss = patch_mask(ctx);
+    let damp =
+      smoothstep(-0.28, 0.08, sin(ctx.local_position.x * 0.7 + 0.7) +
+                               cos(ctx.local_position.z * 0.65 - 0.4));
+    return clamp((1.0 - moss * 3.0) * damp, 0.0, 1.0);
+  }
+};
+
+export { StoneMoss };

@@ -140,6 +140,18 @@ let mirrored = columns.mirror_z();
 let clipped = mirrored.slice_y(-0.4, 0.4);
 ```
 
+Forge also supports a built-in carved noise modifier for turning simple forms into more organic ones:
+
+```forge
+let stone = Box {
+  size: vec3(1.0, 1.0, 1.0),
+  round: 0.08
+}
+  .noise(7.0, 1.6, 1.2);
+```
+
+`noise(octaves[, scale[, lacunarity]])` keeps the same object API while applying recursive subtractive FBM-style breakup to the surface.
+
 Orientation-aware layout can then aim an asset toward another object or anchor:
 
 ```forge

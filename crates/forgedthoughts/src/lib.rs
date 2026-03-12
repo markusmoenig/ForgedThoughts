@@ -91,6 +91,14 @@ const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
         source: include_str!("../library/materials/checker_floor.ft"),
     },
     BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Materials,
+        name: "StoneMoss",
+        path: "materials/stone_moss.ft",
+        description: "Layered wet stone material with darker moss patches and local-space breakup.",
+        tags: &["material", "stone", "moss", "wet", "layered", "procedural"],
+        source: include_str!("../library/materials/stone_moss.ft"),
+    },
+    BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Objects,
         name: "SoftBlob",
         path: "objects/soft_blob.ft",
