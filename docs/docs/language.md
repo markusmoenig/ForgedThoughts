@@ -35,7 +35,7 @@ Current supported pieces include:
 - object literals
 - scalar and `vec3` arithmetic
 - hex color literals like `#ff0000` and `#f00`
-- built-ins such as `mix`, `clamp`, `step`, `smoothstep`, `dot`, `length`, `normalize`, `sin`, `cos`
+- built-ins such as `mix`, `clamp`, `step`, `smoothstep`, `dot`, `length`, `normalize`, `sin`, `cos`, `value_noise_3d`, and `fbm_3d`
 - hard booleans with `+`, `-`, and `&`
 - named SDF boolean variants such as `union_round`, `diff_chamfer`, and `intersect_stairs`
 - material definitions with local bindings and functions
@@ -74,10 +74,10 @@ let shape =
 
 Forge now has a first domain-helper slice for object-level SDF composition:
 
-- `mirror_x()`, `mirror_y()`, `mirror_z()`
-- `repeat_x(spacing, count)`, `repeat_y(...)`, `repeat_z(...)`
-- `slice_x(min, max)`, `slice_y(...)`, `slice_z(...)`
-- `noise(octaves[, scale[, lacunarity]])`
+- `mirror_x()`, `mirror_y()`, `mirror_z()`: Mirrors an object across its local X, Y, or Z axis.
+- `repeat_x(spacing, count)`, `repeat_y(...)`, `repeat_z(...)`: Repeats an object along one axis with a fixed spacing and finite count.
+- `slice_x(min, max)`, `slice_y(...)`, `slice_z(...)`: Keeps only the part of the object between two local-space planes on one axis.
+- `noise(octaves[, scale[, lacunarity]])`: Applies recursive subtractive FBM-style surface breakup to the object.
 
 These helpers are lowered into native renderer structures before marching, so they do not depend on the interpreted hot path.
 
@@ -98,6 +98,16 @@ let stone = Box {
 }
   .noise(7.0, 1.6, 1.2);
 ```
+
+Forge also exposes 3D scalar noise helpers for material and SDF code:
+
+```forge
+let n = value_noise_3d(ctx.local_position, 1.5);
+let f = fbm_3d(ctx.local_position, 5.0, 1.2, 2.0);
+```
+
+- `value_noise_3d(p[, scale])`: Samples smooth scalar value noise at a 3D point.
+- `fbm_3d(p, octaves[, scale[, lacunarity]])`: Builds multi-octave 3D fractal noise from repeated value-noise samples.
 
 For fully programmable shaping inside custom SDFs, use SDF hooks instead:
 

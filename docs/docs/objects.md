@@ -133,6 +133,11 @@ var vase = Sphere {
 
 Forge also has a first object-level modeling-helper layer for symmetry, repetition, and clipping:
 
+- `mirror_x()`, `mirror_y()`, `mirror_z()`: Mirrors an object across its local X, Y, or Z axis.
+- `repeat_x(spacing, count)`, `repeat_y(...)`, `repeat_z(...)`: Repeats an object along one axis with fixed spacing and finite count.
+- `slice_x(min, max)`, `slice_y(...)`, `slice_z(...)`: Clips an object to a local-space range on one axis.
+- `noise(octaves[, scale[, lacunarity]])`: Applies recursive subtractive FBM-style breakup to the object surface.
+
 ```forge
 let rib = Box { size: vec3(0.2, 1.0, 0.4) };
 let columns = rib.repeat_x(0.6, 5.0);
@@ -151,6 +156,11 @@ let stone = Box {
 ```
 
 `noise(octaves[, scale[, lacunarity]])` keeps the same object API while applying recursive subtractive FBM-style breakup to the surface.
+
+For material and custom-SDF code, Forge also exposes:
+
+- `value_noise_3d(p[, scale])`: Samples smooth scalar value noise at a 3D point.
+- `fbm_3d(p, octaves[, scale[, lacunarity]])`: Builds multi-octave 3D fractal noise from repeated value-noise samples.
 
 Orientation-aware layout can then aim an asset toward another object or anchor:
 

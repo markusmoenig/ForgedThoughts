@@ -79,6 +79,16 @@ material BrickLike {
 };
 ```
 
+Procedural material code can also use Forge's scalar 3D noise built-ins for masks and breakup:
+
+```forge
+fn moss_mask(ctx) {
+  let broad = fbm_3d(ctx.local_position, 5.0, 1.2, 2.0);
+  let detail = value_noise_3d(ctx.local_position, 3.0);
+  return smoothstep(0.18, 0.42, broad * 0.7 + detail * 0.2);
+}
+```
+
 Current Forge material hooks:
 
 - `color`: Returns the surface color at the current hit point.

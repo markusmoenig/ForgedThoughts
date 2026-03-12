@@ -69,6 +69,6 @@ var stone = Box {
   material: stone_mat
 }
   .attach(floor, Top)
-  .noise(7.0, 1.0, 1.2);
+  .noise(7.0, 1.0, 1.15);
 
 let scene = floor + stone;

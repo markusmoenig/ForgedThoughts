@@ -1726,6 +1726,43 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
             }
             map_value1("cos", &args[0], f64::cos)?
         }
+        "value_noise_3d" => {
+            if args.is_empty() || args.len() > 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("value_noise_3d"))?;
+            let scale = match args.get(1) {
+                Some(Value::Number(v)) => *v,
+                Some(_) => return Err(EvalError::BuiltinNumericArgs("value_noise_3d")),
+                None => 1.0,
+            };
+            Value::Number(value_noise_3d([p[0] * scale, p[1] * scale, p[2] * scale]))
+        }
+        "fbm_3d" => {
+            if args.len() < 2 || args.len() > 4 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("fbm_3d"))?;
+            let Value::Number(octaves) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs("fbm_3d"));
+            };
+            let scale = match args.get(2) {
+                Some(Value::Number(v)) => *v,
+                Some(_) => return Err(EvalError::BuiltinNumericArgs("fbm_3d")),
+                None => 1.0,
+            };
+            let lacunarity = match args.get(3) {
+                Some(Value::Number(v)) => *v,
+                Some(_) => return Err(EvalError::BuiltinNumericArgs("fbm_3d")),
+                None => 1.0,
+            };
+            Value::Number(fbm_3d(
+                [p[0], p[1], p[2]],
+                octaves.round().clamp(1.0, 16.0) as u32,
+                scale,
+                lacunarity,
+            ))
+        }
         "min" => {
             if args.len() != 2 {
                 return Err(EvalError::InvalidBuiltinArity {
@@ -3419,6 +3456,66 @@ fn map_value3(
             ]))
         }
     }
+}
+
+fn fract64(x: f64) -> f64 {
+    x - x.floor()
+}
+
+fn hash_noise3(p: [f64; 3]) -> f64 {
+    let qx = fract64(p[0] * std::f64::consts::FRAC_1_PI + 0.11) * 17.0;
+    let qy = fract64(p[1] * std::f64::consts::FRAC_1_PI + 0.17) * 17.0;
+    let qz = fract64(p[2] * std::f64::consts::FRAC_1_PI + 0.13) * 17.0;
+    fract64(qx * qy * qz * (qx + qy + qz))
+}
+
+fn lerp64(a: f64, b: f64, t: f64) -> f64 {
+    a * (1.0 - t) + b * t
+}
+
+fn smoothstep01(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn value_noise_3d(p: [f64; 3]) -> f64 {
+    let i = [p[0].floor(), p[1].floor(), p[2].floor()];
+    let f = [fract64(p[0]), fract64(p[1]), fract64(p[2])];
+    let u = [smoothstep01(f[0]), smoothstep01(f[1]), smoothstep01(f[2])];
+
+    let n000 = hash_noise3([i[0], i[1], i[2]]);
+    let n001 = hash_noise3([i[0], i[1], i[2] + 1.0]);
+    let n010 = hash_noise3([i[0], i[1] + 1.0, i[2]]);
+    let n011 = hash_noise3([i[0], i[1] + 1.0, i[2] + 1.0]);
+    let n100 = hash_noise3([i[0] + 1.0, i[1], i[2]]);
+    let n101 = hash_noise3([i[0] + 1.0, i[1], i[2] + 1.0]);
+    let n110 = hash_noise3([i[0] + 1.0, i[1] + 1.0, i[2]]);
+    let n111 = hash_noise3([i[0] + 1.0, i[1] + 1.0, i[2] + 1.0]);
+
+    let nx00 = lerp64(n000, n100, u[0]);
+    let nx01 = lerp64(n001, n101, u[0]);
+    let nx10 = lerp64(n010, n110, u[0]);
+    let nx11 = lerp64(n011, n111, u[0]);
+    let nxy0 = lerp64(nx00, nx10, u[1]);
+    let nxy1 = lerp64(nx01, nx11, u[1]);
+    lerp64(nxy0, nxy1, u[2]) * 2.0 - 1.0
+}
+
+fn fbm_3d(p: [f64; 3], octaves: u32, scale: f64, lacunarity: f64) -> f64 {
+    let mut q = [p[0] * scale, p[1] * scale, p[2] * scale];
+    let mut amplitude = 0.5;
+    let mut sum = 0.0;
+    let lac = if lacunarity.abs() < f64::EPSILON {
+        1.0
+    } else {
+        lacunarity
+    };
+    for _ in 0..octaves.max(1) {
+        sum += amplitude * value_noise_3d(q);
+        q = [q[0] * lac, q[1] * lac, q[2] * lac];
+        amplitude *= 0.55;
+    }
+    sum
 }
 
 fn as_broadcastable_vec3(value: &Value) -> Option<[f64; 3]> {
