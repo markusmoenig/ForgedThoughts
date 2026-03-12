@@ -1,10 +1,11 @@
 import "CheckerFloor";
 import "Cupboard";
+import "Lamp";
 import "Table";
 
 let camera = Camera {
-  origin: vec3(0.0, 1.8, 8.2),
-  target: vec3(0.0, 0.9, 0.0),
+  origin: vec3(1.0, 1.8, 8.2),
+  target: vec3(1.0, 0.9, 0.0),
   fov_y: 30.0
 };
 
@@ -44,8 +45,32 @@ let cupboard_mat = Lambert {
   color: #c8b59a
 };
 
+let cupboard_door_mat = Lambert {
+  color: #d7c4a8
+};
+
 let table_mat = Lambert {
   color: #7a4c35
+};
+
+let table_leg_mat = Metal {
+  color: #2b3138,
+  roughness: 0.22
+};
+
+let lamp_body_mat = Metal {
+  color: #7e6952,
+  roughness: 0.28
+};
+
+let lamp_shade_mat = Lambert {
+  color: #efe2cf
+};
+
+let lamp_bulb_mat = Lambert {
+  color: #fff3dd,
+  emission_color: #fff1d6,
+  emission_strength: 5.0
 };
 
 let accent_mat = Metal {
@@ -54,8 +79,8 @@ let accent_mat = Metal {
 };
 
 let render = RenderSettings {
-  width: 400,
-  height: 400,
+  width: 800,
+  height: 800,
   max_steps: 560,
   max_dist: 80.0,
   epsilon: 0.0002,
@@ -85,12 +110,13 @@ var cupboard = Cupboard {
   height: 2.2,
   depth: 0.62,
   wall_thickness: 0.05,
-  open_amount: 0.2,
-  material: cupboard_mat
+  open_amount: 0.2
 }
   .attach(room, BackRightCorner)
   .offset_x(-0.12)
   .offset_z(0.12);
+cupboard.body.material = cupboard_mat;
+cupboard.door.material = cupboard_door_mat;
 
 var table = Table {
   width: 1.7,
@@ -98,12 +124,29 @@ var table = Table {
   height: 0.78,
   top_thickness: 0.08,
   leg_radius: 0.05,
-  leg_inset: 0.14,
-  material: table_mat
+  leg_inset: 0.14
 }
   .attach(room, BackRightCorner)
   .offset_x(-2.1)
   .offset_z(1.35);
+table.top.material = table_mat;
+table.legs.material = table_leg_mat;
+
+var lamp = Lamp {
+  height: 0.72,
+  base_radius: 0.14,
+  base_height: 0.045,
+  stem_radius: 0.024,
+  shade_radius: 0.19,
+  shade_height: 0.22,
+  bulb_radius: 0.06
+}
+  .attach(cupboard.body, Top, Bottom)
+  .offset_x(0.42)
+  .offset_z(-0.08);
+lamp.body.material = lamp_body_mat;
+lamp.shade.material = lamp_shade_mat;
+lamp.bulb.material = lamp_bulb_mat;
 
 var vase = Sphere {
   radius: 0.18,
@@ -113,4 +156,4 @@ var vase = Sphere {
   .offset_x(-0.35)
   .offset_z(0.08);
 
-let scene = room + cupboard + table + vase;
+let scene = room + cupboard + table + lamp + vase;

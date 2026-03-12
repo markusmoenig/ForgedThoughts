@@ -112,6 +112,22 @@ sphere.material = mat;
 let scene = sphere;
 ```
 
+Semantic assets can also expose part-oriented material assignment:
+
+```forge
+var table = Table {
+  width: 1.7,
+  depth: 0.9,
+  height: 0.78
+};
+
+table.top.material = Lambert { color: #7a4c35 };
+table.legs.material = Metal { color: #2b3138, roughness: 0.22 };
+
+var vase = Sphere { radius: 0.18 }
+  .attach(table.top, Top);
+```
+
 Supported language pieces today include:
 
 - top-level functions

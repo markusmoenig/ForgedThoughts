@@ -1,0 +1,130 @@
+sdf Lamp {
+  name: "Lamp";
+  description: "Parameterized table lamp with separate shade, stem, base, and bulb material slots.";
+  tags: ["object", "furniture", "lamp", "lighting", "parametric"];
+  params: [
+    {
+      name: "height",
+      type: "number",
+      description: "Overall lamp height from base to shade top.",
+      default: 0.72,
+      min: 0.1
+    },
+    {
+      name: "base_radius",
+      type: "number",
+      description: "Radius of the lamp base.",
+      default: 0.16,
+      min: 0.02
+    },
+    {
+      name: "base_height",
+      type: "number",
+      description: "Height of the lamp base.",
+      default: 0.05,
+      min: 0.01
+    },
+    {
+      name: "stem_radius",
+      type: "number",
+      description: "Radius of the lamp stem.",
+      default: 0.025,
+      min: 0.005
+    },
+    {
+      name: "shade_radius",
+      type: "number",
+      description: "Radius of the lamp shade.",
+      default: 0.2,
+      min: 0.02
+    },
+    {
+      name: "shade_height",
+      type: "number",
+      description: "Height of the lamp shade.",
+      default: 0.22,
+      min: 0.02
+    },
+    {
+      name: "bulb_radius",
+      type: "number",
+      description: "Radius of the visible bulb sphere.",
+      default: 0.065,
+      min: 0.01
+    },
+    {
+      name: "light_color",
+      type: "color",
+      description: "Color of the lamp's emitted light."
+    },
+    {
+      name: "light_intensity",
+      type: "number",
+      description: "Intensity of the hidden sphere light emitted from the bulb.",
+      default: 18.0,
+      min: 0.0
+    },
+    {
+      name: "light_radius",
+      type: "number",
+      description: "Radius of the hidden sphere light used for softer lamp shadows.",
+      default: 0.08,
+      min: 0.0
+    },
+    {
+      name: "light_samples",
+      type: "number",
+      description: "Shadow samples used by the hidden sphere light.",
+      default: 6.0,
+      min: 1.0
+    },
+    {
+      name: "body_material",
+      type: "material",
+      description: "Fallback material for the non-emissive lamp body."
+    },
+    {
+      name: "base_material",
+      type: "material",
+      description: "Material override for the lamp base."
+    },
+    {
+      name: "stem_material",
+      type: "material",
+      description: "Material override for the lamp stem."
+    },
+    {
+      name: "shade_material",
+      type: "material",
+      description: "Material override for the lamp shade."
+    },
+    {
+      name: "bulb_material",
+      type: "material",
+      description: "Material override for the visible bulb."
+    }
+  ];
+
+  let height = 0.72;
+  let base_radius = 0.16;
+  let base_height = 0.05;
+  let stem_radius = 0.025;
+  let shade_radius = 0.2;
+  let shade_height = 0.22;
+  let bulb_radius = 0.065;
+  let anchors = {
+    BaseBottom: vec3(0.0, -height * 0.5, 0.0),
+    BulbCenter: vec3(0.0, height * 0.5 - shade_height * 0.5, 0.0),
+    Top: vec3(0.0, height * 0.5, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(max(base_radius, shade_radius), height * 0.5, max(base_radius, shade_radius));
+  }
+
+  fn distance(p) {
+    return max(length(p) - max(base_radius, shade_radius), abs(p.y) - height * 0.5);
+  }
+};
+
+export { Lamp };

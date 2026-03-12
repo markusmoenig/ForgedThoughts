@@ -294,6 +294,10 @@ fn assign_path_in_object(
     path: &[String],
     value: Value,
 ) -> Result<(), EvalError> {
+    if let Some(remapped) = remap_semantic_part_assignment_path(object, path) {
+        return assign_path_in_object(object, &remapped, value);
+    }
+
     let Some((head, tail)) = path.split_first() else {
         return Ok(());
     };
@@ -310,6 +314,40 @@ fn assign_path_in_object(
 
     let nested_obj = as_object_mut(next)?;
     assign_path_in_object(nested_obj, tail, value)
+}
+
+fn remap_semantic_part_assignment_path(
+    object: &ObjectValue,
+    path: &[String],
+) -> Option<Vec<String>> {
+    let [part, field] = path else {
+        return None;
+    };
+    if field != "material" {
+        return None;
+    }
+    let mapped = match object.type_name.as_deref()? {
+        "Table" => match part.as_str() {
+            "top" => "top_material",
+            "legs" => "leg_material",
+            _ => return None,
+        },
+        "Cupboard" => match part.as_str() {
+            "body" => "body_material",
+            "door" => "door_material",
+            _ => return None,
+        },
+        "Lamp" => match part.as_str() {
+            "body" => "body_material",
+            "base" => "base_material",
+            "stem" => "stem_material",
+            "shade" => "shade_material",
+            "bulb" => "bulb_material",
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(vec![mapped.to_string()])
 }
 
 fn eval_expr(expr: &Expr, state: &EvalState) -> Result<Value, EvalError> {
@@ -392,6 +430,9 @@ fn eval_expr_in_material_scope(
                 material_runtime,
                 top_level_depth,
             )?;
+            if let Some(part) = semantic_part_value(&base, field) {
+                return Ok(part);
+            }
             let obj = as_object(&base)?;
             obj.fields
                 .get(field)
@@ -455,6 +496,204 @@ fn augment_object_literal_fields(
         fields.insert("anchors".to_string(), value);
     }
     Ok(())
+}
+
+fn semantic_part_value(base: &Value, field: &str) -> Option<Value> {
+    let obj = as_object(base).ok()?;
+    let pos = object_position(base);
+    let rot = object_rotation(base);
+    match obj.type_name.as_deref()? {
+        "Table" => {
+            let width = numeric_field(obj, &["width"]).unwrap_or(1.8).max(0.2);
+            let depth = numeric_field(obj, &["depth"]).unwrap_or(0.9).max(0.2);
+            let height = numeric_field(obj, &["height"]).unwrap_or(0.76).max(0.1);
+            let top_thickness = numeric_field(obj, &["top_thickness"])
+                .unwrap_or(0.08)
+                .clamp(0.01, height.max(0.01));
+            let leg_radius = numeric_field(obj, &["leg_radius"])
+                .unwrap_or(0.05)
+                .max(0.005);
+            let leg_inset = numeric_field(obj, &["leg_inset"]).unwrap_or(0.12).max(0.0);
+            match field {
+                "top" => Some(proxy_box(
+                    pos,
+                    rot,
+                    [0.0, height * 0.5 - top_thickness * 0.5, 0.0],
+                    [width, top_thickness, depth],
+                )),
+                "legs" => {
+                    let leg_half_height = ((height - top_thickness) * 0.5).max(0.001);
+                    let leg_center_y = -height * 0.5 + leg_half_height;
+                    let leg_x = (width * 0.5 - leg_inset).max(leg_radius);
+                    let leg_z = (depth * 0.5 - leg_inset).max(leg_radius);
+                    Some(proxy_box(
+                        pos,
+                        rot,
+                        [0.0, leg_center_y, 0.0],
+                        [
+                            2.0 * (leg_x + leg_radius),
+                            2.0 * leg_half_height,
+                            2.0 * (leg_z + leg_radius),
+                        ],
+                    ))
+                }
+                _ => None,
+            }
+        }
+        "Cupboard" => {
+            let width = numeric_field(obj, &["width"]).unwrap_or(1.6).max(0.1);
+            let height = numeric_field(obj, &["height"]).unwrap_or(2.0).max(0.1);
+            let depth = numeric_field(obj, &["depth"]).unwrap_or(0.6).max(0.1);
+            let wall_thickness = numeric_field(obj, &["wall_thickness"])
+                .unwrap_or(0.05)
+                .max(0.005);
+            let open_amount = numeric_field(obj, &["open_amount"])
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0);
+            match field {
+                "body" => Some(proxy_box(pos, rot, [0.0, 0.0, 0.0], [width, height, depth])),
+                "door" => {
+                    let door_thickness = (wall_thickness * (1.0 - open_amount)).max(0.001);
+                    Some(proxy_box(
+                        pos,
+                        rot,
+                        [0.0, 0.0, depth * 0.5 - door_thickness * 0.5],
+                        [width, height, door_thickness],
+                    ))
+                }
+                _ => None,
+            }
+        }
+        "Lamp" => {
+            let height = numeric_field(obj, &["height"]).unwrap_or(0.72).max(0.1);
+            let base_radius = numeric_field(obj, &["base_radius"])
+                .unwrap_or(0.16)
+                .max(0.02);
+            let base_height = numeric_field(obj, &["base_height"])
+                .unwrap_or(0.05)
+                .clamp(0.01, height.max(0.01));
+            let stem_radius = numeric_field(obj, &["stem_radius"])
+                .unwrap_or(0.025)
+                .max(0.005);
+            let shade_radius = numeric_field(obj, &["shade_radius"])
+                .unwrap_or(0.2)
+                .max(0.02);
+            let shade_height = numeric_field(obj, &["shade_height"])
+                .unwrap_or(0.22)
+                .clamp(0.02, height.max(0.02));
+            let bulb_radius = numeric_field(obj, &["bulb_radius"])
+                .unwrap_or(0.065)
+                .max(0.01);
+            let base_center_y = -height * 0.5 + base_height * 0.5;
+            let shade_center_y = height * 0.5 - shade_height * 0.5;
+            let stem_half_height = ((shade_center_y - shade_height * 0.5)
+                - (base_center_y + base_height * 0.5))
+                .max(0.001)
+                * 0.5;
+            let stem_center_y =
+                (shade_center_y - shade_height * 0.5 + base_center_y + base_height * 0.5) * 0.5;
+            let bulb_center_y = shade_center_y - shade_height * 0.15;
+            match field {
+                "body" => Some(proxy_box(
+                    pos,
+                    rot,
+                    [0.0, 0.0, 0.0],
+                    [2.0 * shade_radius, height, 2.0 * shade_radius],
+                )),
+                "base" => Some(proxy_cylinder(
+                    pos,
+                    rot,
+                    [0.0, base_center_y, 0.0],
+                    base_radius,
+                    base_height,
+                )),
+                "stem" => Some(proxy_cylinder(
+                    pos,
+                    rot,
+                    [0.0, stem_center_y, 0.0],
+                    stem_radius,
+                    2.0 * stem_half_height,
+                )),
+                "shade" => Some(proxy_cylinder(
+                    pos,
+                    rot,
+                    [0.0, shade_center_y, 0.0],
+                    shade_radius,
+                    shade_height,
+                )),
+                "bulb" => Some(proxy_sphere(pos, [0.0, bulb_center_y, 0.0], bulb_radius)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn proxy_box(
+    base_pos: [f64; 3],
+    base_rot: [f64; 3],
+    local_offset: [f64; 3],
+    size: [f64; 3],
+) -> Value {
+    let world = rotate_xyz(local_offset, base_rot);
+    let mut fields = HashMap::new();
+    fields.insert(
+        "pos".to_string(),
+        vec3_value([
+            base_pos[0] + world[0],
+            base_pos[1] + world[1],
+            base_pos[2] + world[2],
+        ]),
+    );
+    fields.insert("rot".to_string(), vec3_value(base_rot));
+    fields.insert("size".to_string(), vec3_value(size));
+    Value::Object(ObjectValue {
+        type_name: Some("Box".to_string()),
+        fields,
+    })
+}
+
+fn proxy_cylinder(
+    base_pos: [f64; 3],
+    base_rot: [f64; 3],
+    local_offset: [f64; 3],
+    radius: f64,
+    height: f64,
+) -> Value {
+    let world = rotate_xyz(local_offset, base_rot);
+    let mut fields = HashMap::new();
+    fields.insert(
+        "pos".to_string(),
+        vec3_value([
+            base_pos[0] + world[0],
+            base_pos[1] + world[1],
+            base_pos[2] + world[2],
+        ]),
+    );
+    fields.insert("rot".to_string(), vec3_value(base_rot));
+    fields.insert("radius".to_string(), Value::Number(radius));
+    fields.insert("height".to_string(), Value::Number(height));
+    Value::Object(ObjectValue {
+        type_name: Some("Cylinder".to_string()),
+        fields,
+    })
+}
+
+fn proxy_sphere(base_pos: [f64; 3], local_offset: [f64; 3], radius: f64) -> Value {
+    let mut fields = HashMap::new();
+    fields.insert(
+        "pos".to_string(),
+        vec3_value([
+            base_pos[0] + local_offset[0],
+            base_pos[1] + local_offset[1],
+            base_pos[2] + local_offset[2],
+        ]),
+    );
+    fields.insert("radius".to_string(), Value::Number(radius));
+    Value::Object(ObjectValue {
+        type_name: Some("Sphere".to_string()),
+        fields,
+    })
 }
 
 fn resolve_binding_path(

@@ -38,6 +38,21 @@ sdf Cupboard {
       default: 0.0,
       min: 0.0,
       max: 1.0
+    },
+    {
+      name: "material",
+      type: "material",
+      description: "Whole-cupboard fallback material."
+    },
+    {
+      name: "body_material",
+      type: "material",
+      description: "Material override for the cupboard shell."
+    },
+    {
+      name: "door_material",
+      type: "material",
+      description: "Material override for the front panel or door."
     }
   ];
 

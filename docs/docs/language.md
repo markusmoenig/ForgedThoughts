@@ -42,6 +42,8 @@ Current supported pieces include:
 - environment definitions with local bindings and functions
 - custom SDF definitions with `sdf Name { fn distance(p) { ... } }`
 - object layout methods for relative placement
+- semantic part material assignment like `table.legs.material = ...`
+- semantic part placement like `vase.attach(table.top, Top)`
 
 ## Execution Today
 
@@ -179,6 +181,45 @@ Semantics:
 - extra offsets are still explicit
 
 So `right_of(a, -0.8)` does not silently imply matching `y` or `z`.
+
+## Semantic Parts
+
+Some lowered semantic assets expose named parts for assignment-friendly authoring.
+
+Example:
+
+```forge
+var table = Table {
+  width: 1.7,
+  depth: 0.9,
+  height: 0.78
+};
+
+table.top.material = Lambert { color: #7a4c35 };
+table.legs.material = Metal { color: #2b3138, roughness: 0.22 };
+```
+
+Current part-oriented assignment support focuses on material overrides for semantic assets such as:
+
+- `table.top.material`
+- `table.legs.material`
+- `cupboard.body.material`
+- `cupboard.door.material`
+- `lamp.body.material`
+- `lamp.shade.material`
+- `lamp.bulb.material`
+
+The same semantic parts can also act as layout targets:
+
+```forge
+var vase = Sphere { radius: 0.18 }
+  .attach(table.top, Top)
+  .offset_x(-0.35);
+
+var lamp = Lamp {}
+  .attach(cupboard.body, Top, Bottom)
+  .offset_x(0.42);
+```
 
 ## Imports
 

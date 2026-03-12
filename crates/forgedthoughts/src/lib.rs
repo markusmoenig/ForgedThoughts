@@ -114,6 +114,14 @@ const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
         source: include_str!("../library/objects/table.ft"),
     },
     BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Objects,
+        name: "Lamp",
+        path: "objects/lamp.ft",
+        description: "Parameterized table lamp with separate body, shade, and bulb material slots.",
+        tags: &["object", "furniture", "lamp", "lighting", "parametric"],
+        source: include_str!("../library/objects/lamp.ft"),
+    },
+    BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Scenes,
         name: "Studio",
         path: "scenes/studio.ft",
@@ -1295,6 +1303,63 @@ mod tests {
         assert_eq!(pos.fields.get("x"), Some(&Value::Number(1.5)));
         assert_eq!(pos.fields.get("y"), Some(&Value::Number(-0.25)));
         assert_eq!(rot.fields.get("z"), Some(&Value::Number(30.0)));
+    }
+
+    #[test]
+    fn supports_semantic_part_material_assignments() {
+        let source = r#"
+            var table = Table{};
+            table.legs.material = Metal { color: #222222, roughness: 0.2 };
+            table.top.material = Lambert { color: #f0f0f2 };
+
+            var lamp = Lamp{};
+            lamp.bulb.material = Lambert {
+              color: #fff3dd,
+              emission_color: #fff1d6,
+              emission_strength: 5.0
+            };
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+
+        let Value::Object(table) = &state.bindings.get("table").expect("table binding").value
+        else {
+            panic!("table should be an object");
+        };
+        assert!(table.fields.contains_key("leg_material"));
+        assert!(table.fields.contains_key("top_material"));
+
+        let Value::Object(lamp) = &state.bindings.get("lamp").expect("lamp binding").value else {
+            panic!("lamp should be an object");
+        };
+        assert!(lamp.fields.contains_key("bulb_material"));
+    }
+
+    #[test]
+    fn supports_layout_against_semantic_part_proxies() {
+        let source = r#"
+            import "Table";
+
+            var table = Table {
+              width: 1.6,
+              depth: 0.8,
+              height: 0.75,
+              top_thickness: 0.1
+            };
+
+            var vase = Sphere { radius: 0.2 }
+              .attach(table.top, Top);
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+
+        let Value::Object(vase) = &state.bindings.get("vase").expect("vase binding").value else {
+            panic!("vase should be an object");
+        };
+        let Value::Object(vase_pos) = vase.fields.get("pos").expect("vase pos") else {
+            panic!("vase pos should be an object");
+        };
+        assert_eq!(vase_pos.fields.get("y"), Some(&Value::Number(0.575)));
     }
 
     #[test]

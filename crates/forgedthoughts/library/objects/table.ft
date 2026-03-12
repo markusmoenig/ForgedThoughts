@@ -44,6 +44,21 @@ sdf Table {
       description: "Inset of each leg from the tabletop edge.",
       default: 0.12,
       min: 0.0
+    },
+    {
+      name: "material",
+      type: "material",
+      description: "Whole-table fallback material."
+    },
+    {
+      name: "top_material",
+      type: "material",
+      description: "Material override for the tabletop."
+    },
+    {
+      name: "leg_material",
+      type: "material",
+      description: "Material override for the legs."
     }
   ];
 

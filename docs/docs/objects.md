@@ -34,6 +34,7 @@ The same mechanism also works for more semantic library objects:
 
 ```forge
 import "Cupboard";
+import "Lamp";
 import "Table";
 
 let cupboard = Cupboard {
@@ -50,14 +51,42 @@ let table = Table {
   top_thickness: 0.08,
   leg_radius: 0.05
 };
+
+let lamp = Lamp {
+  shade_material: Lambert { color: #efe2cf },
+  bulb_material: Lambert {
+    color: #fff3dd,
+    emission_color: #fff1d6,
+    emission_strength: 5.0
+  }
+};
 ```
 
-Custom object assets can also define their own default anchors inside the asset itself, so instances inherit meaningful placement points like `TopSurface` or `FrontCenter` automatically. `Table` is a good early adjective-style asset because it exposes obvious shape parameters like width, depth, height, tabletop thickness, and leg radius.
+Custom object assets can also define their own default anchors inside the asset itself, so instances inherit meaningful placement points like `TopSurface` or `FrontCenter` automatically. `Table` is a good early adjective-style asset because it exposes obvious shape parameters like width, depth, height, tabletop thickness, and leg radius. Lowered semantic assets can also expose named part material slots like `top_material`, `leg_material`, `door_material`, or `bulb_material`.
+
+Forge also supports part-oriented assignment syntax for these semantic assets:
+
+```forge
+table.top.material = Lambert { color: #7a4c35 };
+table.legs.material = Metal { color: #2b3138, roughness: 0.22 };
+
+cupboard.door.material = Lambert { color: #d7c4a8 };
+lamp.bulb.material = Lambert {
+  color: #fff3dd,
+  emission_color: #fff1d6,
+  emission_strength: 5.0
+};
+```
+
+Today this path is focused on material assignment for named semantic parts. It is the first slice of future part access like `table.legs.material = ...` and later deeper part editing.
+
+The same named parts can also be used as layout targets, which keeps scene code semantic instead of forcing manual offsets from whole-object pivots.
 
 For example, a room scene can place both a cupboard and table into a corner, then attach another object to the table's own anchor:
 
 ```forge
 import "Cupboard";
+import "Lamp";
 import "Table";
 
 let room = Room {
@@ -86,10 +115,19 @@ var table = Table {
   .offset_x(-2.1)
   .offset_z(1.35);
 
+var lamp = Lamp {
+  bulb_material: Lambert {
+    color: #fff3dd,
+    emission_color: #fff1d6,
+    emission_strength: 5.0
+  }
+}
+  .attach(cupboard.body, Top, Bottom);
+
 var vase = Sphere {
   radius: 0.18
 }
-  .attach(table, "TopSurface", Bottom)
+  .attach(table.top, Top)
   .offset_x(-0.35);
 ```
 

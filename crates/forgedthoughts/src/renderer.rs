@@ -450,6 +450,7 @@ struct CompiledScene {
     materials: Vec<MaterialKindRt>,
     object_transforms: Vec<PrimitiveTransform>,
     dynamic_material_overrides: Vec<ObjectValue>,
+    semantic_lights: Vec<SemanticLight>,
 }
 
 struct RenderSetup {
@@ -488,6 +489,7 @@ struct CompileContext {
     materials: Vec<MaterialKindRt>,
     object_transforms: Vec<PrimitiveTransform>,
     dynamic_material_overrides: Vec<ObjectValue>,
+    semantic_lights: Vec<SemanticLight>,
 }
 
 type MaterialKindRt = Material;
@@ -500,6 +502,7 @@ impl CompileContext {
             materials: vec![default_material],
             object_transforms: vec![PrimitiveTransform::identity()],
             dynamic_material_overrides: Vec::new(),
+            semantic_lights: Vec::new(),
         }
     }
 
@@ -548,6 +551,14 @@ impl CompileContext {
             Some((self.dynamic_material_overrides.len() - 1) as u32)
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct SemanticLight {
+    position: Vec3,
+    radius: f32,
+    intensity: Spectrum,
+    samples: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -1223,6 +1234,7 @@ fn compile_scene(
         materials: ctx.materials,
         object_transforms: ctx.object_transforms,
         dynamic_material_overrides: ctx.dynamic_material_overrides,
+        semantic_lights: ctx.semantic_lights,
     })
 }
 
@@ -1486,6 +1498,37 @@ fn room_material_id(
     ctx.intern_material(ctx.default_material)
 }
 
+fn object_material_id(
+    state: &Arc<EvalState>,
+    obj: &ObjectValue,
+    specific_field: &str,
+    ctx: &mut CompileContext,
+) -> u32 {
+    if let Some(Value::Object(mat_obj)) = obj.fields.get(specific_field) {
+        let material = material_from_object(state, mat_obj, Some(ctx));
+        return ctx.intern_material(material);
+    }
+    primitive_material_id(state, obj, ctx)
+}
+
+fn object_material_id_with_fallback(
+    state: &Arc<EvalState>,
+    obj: &ObjectValue,
+    specific_field: &str,
+    fallback_field: &str,
+    ctx: &mut CompileContext,
+) -> u32 {
+    if let Some(Value::Object(mat_obj)) = obj.fields.get(specific_field) {
+        let material = material_from_object(state, mat_obj, Some(ctx));
+        return ctx.intern_material(material);
+    }
+    if let Some(Value::Object(mat_obj)) = obj.fields.get(fallback_field) {
+        let material = material_from_object(state, mat_obj, Some(ctx));
+        return ctx.intern_material(material);
+    }
+    primitive_material_id(state, obj, ctx)
+}
+
 fn room_flag(obj: &ObjectValue, name: &str, default: bool) -> bool {
     obj.fields
         .get(name)
@@ -1502,11 +1545,17 @@ fn compile_lowered_library_object(
     object: &ObjectValue,
     ctx: &mut CompileContext,
 ) -> Option<Result<SdfNode, RenderError>> {
-    match name {
-        "Table" => Some(compile_table(state, object, ctx)),
-        "Cupboard" => Some(compile_cupboard(state, object, ctx)),
+    let lowering = match name {
+        "Table" => Some(lower_table_asset(state, object, ctx)),
+        "Cupboard" => Some(lower_cupboard_asset(state, object, ctx)),
+        "Lamp" => Some(lower_lamp_asset(state, object, ctx)),
         _ => None,
-    }
+    }?;
+    Some(instantiate_semantic_asset(
+        ctx,
+        read_transform(object),
+        lowering,
+    ))
 }
 
 fn transform_offset(transform: PrimitiveTransform, offset: Vec3) -> Vec3 {
@@ -1523,46 +1572,117 @@ fn offset_transform(transform: PrimitiveTransform, offset: Vec3) -> PrimitiveTra
     }
 }
 
-fn make_box_part(
+enum LoweredNodeSpec {
+    Box {
+        offset: Vec3,
+        half_size: Vec3,
+        material_id: u32,
+    },
+    Cylinder {
+        offset: Vec3,
+        radius: f32,
+        half_height: f32,
+        material_id: u32,
+    },
+    Sphere {
+        offset: Vec3,
+        radius: f32,
+        material_id: u32,
+    },
+    Union(Vec<LoweredNodeSpec>),
+    Subtract {
+        lhs: Box<LoweredNodeSpec>,
+        rhs: Box<LoweredNodeSpec>,
+    },
+}
+
+fn instantiate_semantic_asset(
     ctx: &mut CompileContext,
-    transform: PrimitiveTransform,
-    half_size: Vec3,
-    material_id: u32,
-) -> SdfNode {
-    let object_id = ctx.alloc_object_id();
-    ctx.register_object_transform(object_id, transform);
-    SdfNode::Box {
-        transform,
-        half_size,
-        object_id,
-        material_id,
+    base_transform: PrimitiveTransform,
+    spec: LoweredNodeSpec,
+) -> Result<SdfNode, RenderError> {
+    instantiate_lowered_node(ctx, base_transform, spec)
+}
+
+fn instantiate_lowered_node(
+    ctx: &mut CompileContext,
+    base_transform: PrimitiveTransform,
+    spec: LoweredNodeSpec,
+) -> Result<SdfNode, RenderError> {
+    match spec {
+        LoweredNodeSpec::Box {
+            offset,
+            half_size,
+            material_id,
+        } => {
+            let transform = offset_transform(base_transform, offset);
+            let object_id = ctx.alloc_object_id();
+            ctx.register_object_transform(object_id, transform);
+            Ok(SdfNode::Box {
+                transform,
+                half_size,
+                object_id,
+                material_id,
+            })
+        }
+        LoweredNodeSpec::Cylinder {
+            offset,
+            radius,
+            half_height,
+            material_id,
+        } => {
+            let transform = offset_transform(base_transform, offset);
+            let object_id = ctx.alloc_object_id();
+            ctx.register_object_transform(object_id, transform);
+            Ok(SdfNode::Cylinder {
+                transform,
+                radius,
+                half_height,
+                object_id,
+                material_id,
+            })
+        }
+        LoweredNodeSpec::Sphere {
+            offset,
+            radius,
+            material_id,
+        } => {
+            let transform = offset_transform(base_transform, offset);
+            let object_id = ctx.alloc_object_id();
+            ctx.register_object_transform(object_id, transform);
+            Ok(SdfNode::Sphere {
+                transform,
+                radius,
+                object_id,
+                material_id,
+            })
+        }
+        LoweredNodeSpec::Union(parts) => {
+            let mut parts = parts.into_iter();
+            let Some(root) = parts.next() else {
+                return Err(RenderError::ExpectedObject);
+            };
+            let mut root = instantiate_lowered_node(ctx, base_transform, root)?;
+            for part in parts {
+                root = SdfNode::Union {
+                    lhs: Box::new(root),
+                    rhs: Box::new(instantiate_lowered_node(ctx, base_transform, part)?),
+                };
+            }
+            Ok(root)
+        }
+        LoweredNodeSpec::Subtract { lhs, rhs } => Ok(SdfNode::Subtract {
+            lhs: Box::new(instantiate_lowered_node(ctx, base_transform, *lhs)?),
+            rhs: Box::new(instantiate_lowered_node(ctx, base_transform, *rhs)?),
+        }),
     }
 }
 
-fn make_cylinder_part(
-    ctx: &mut CompileContext,
-    transform: PrimitiveTransform,
-    radius: f32,
-    half_height: f32,
-    material_id: u32,
-) -> SdfNode {
-    let object_id = ctx.alloc_object_id();
-    ctx.register_object_transform(object_id, transform);
-    SdfNode::Cylinder {
-        transform,
-        radius,
-        half_height,
-        object_id,
-        material_id,
-    }
-}
-
-fn compile_table(
+fn lower_table_asset(
     state: &Arc<EvalState>,
     object: &ObjectValue,
     ctx: &mut CompileContext,
-) -> Result<SdfNode, RenderError> {
-    let transform = read_transform(object);
+) -> LoweredNodeSpec {
     let width = read_number_field(object, &["width"])
         .unwrap_or(1.8)
         .max(0.2);
@@ -1581,16 +1701,16 @@ fn compile_table(
     let leg_inset = read_number_field(object, &["leg_inset"])
         .unwrap_or(0.12)
         .max(0.0);
-    let material_id = primitive_material_id(state, object, ctx);
+    let top_material_id = object_material_id(state, object, "top_material", ctx);
+    let leg_material_id = object_material_id(state, object, "leg_material", ctx);
 
     let mut parts = Vec::new();
     let top_center_y = height * 0.5 - top_thickness * 0.5;
-    parts.push(make_box_part(
-        ctx,
-        offset_transform(transform, Vec3::new(0.0, top_center_y, 0.0)),
-        Vec3::new(width * 0.5, top_thickness * 0.5, depth * 0.5),
-        material_id,
-    ));
+    parts.push(LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, top_center_y, 0.0),
+        half_size: Vec3::new(width * 0.5, top_thickness * 0.5, depth * 0.5),
+        material_id: top_material_id,
+    });
 
     let leg_half_height = ((height - top_thickness) * 0.5).max(0.001);
     let leg_center_y = -height * 0.5 + leg_half_height;
@@ -1598,35 +1718,22 @@ fn compile_table(
     let leg_z = (depth * 0.5 - leg_inset).max(leg_radius);
     for &sx in &[-1.0_f32, 1.0] {
         for &sz in &[-1.0_f32, 1.0] {
-            parts.push(make_cylinder_part(
-                ctx,
-                offset_transform(transform, Vec3::new(sx * leg_x, leg_center_y, sz * leg_z)),
-                leg_radius,
-                leg_half_height,
-                material_id,
-            ));
+            parts.push(LoweredNodeSpec::Cylinder {
+                offset: Vec3::new(sx * leg_x, leg_center_y, sz * leg_z),
+                radius: leg_radius,
+                half_height: leg_half_height,
+                material_id: leg_material_id,
+            });
         }
     }
-
-    let mut parts = parts.into_iter();
-    let Some(mut root) = parts.next() else {
-        return Err(RenderError::UnsupportedObjectType("Table".to_string()));
-    };
-    for part in parts {
-        root = SdfNode::Union {
-            lhs: Box::new(root),
-            rhs: Box::new(part),
-        };
-    }
-    Ok(root)
+    LoweredNodeSpec::Union(parts)
 }
 
-fn compile_cupboard(
+fn lower_cupboard_asset(
     state: &Arc<EvalState>,
     object: &ObjectValue,
     ctx: &mut CompileContext,
-) -> Result<SdfNode, RenderError> {
-    let transform = read_transform(object);
+) -> LoweredNodeSpec {
     let width = read_number_field(object, &["width"])
         .unwrap_or(1.6)
         .max(0.1);
@@ -1642,47 +1749,135 @@ fn compile_cupboard(
     let open_amount = read_number_field(object, &["open_amount"])
         .unwrap_or(0.0)
         .clamp(0.0, 1.0);
-    let material_id = primitive_material_id(state, object, ctx);
+    let body_material_id = object_material_id(state, object, "body_material", ctx);
+    let door_material_id = object_material_id(state, object, "door_material", ctx);
 
-    let outer = make_box_part(
-        ctx,
-        transform,
-        Vec3::new(width * 0.5, height * 0.5, depth * 0.5),
-        material_id,
-    );
+    let outer = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        half_size: Vec3::new(width * 0.5, height * 0.5, depth * 0.5),
+        material_id: body_material_id,
+    };
 
     let inner_half = Vec3::new(
         (width * 0.5 - wall_thickness).max(0.001),
         (height * 0.5 - wall_thickness).max(0.001),
         (depth * 0.5 - wall_thickness).max(0.001),
     );
-    let cavity = make_box_part(
-        ctx,
-        offset_transform(transform, Vec3::new(0.0, 0.0, -wall_thickness)),
-        inner_half,
-        material_id,
-    );
+    let cavity = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, -wall_thickness),
+        half_size: inner_half,
+        material_id: body_material_id,
+    };
 
-    let shell = SdfNode::Subtract {
+    let shell = LoweredNodeSpec::Subtract {
         lhs: Box::new(outer),
         rhs: Box::new(cavity),
     };
 
     let door_thickness = (wall_thickness * (1.0 - open_amount)).max(0.001);
-    let door = make_box_part(
-        ctx,
-        offset_transform(
-            transform,
-            Vec3::new(0.0, 0.0, depth * 0.5 - door_thickness * 0.5),
-        ),
-        Vec3::new(width * 0.5, height * 0.5, door_thickness * 0.5),
-        material_id,
-    );
+    let door = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, depth * 0.5 - door_thickness * 0.5),
+        half_size: Vec3::new(width * 0.5, height * 0.5, door_thickness * 0.5),
+        material_id: door_material_id,
+    };
 
-    Ok(SdfNode::Union {
-        lhs: Box::new(shell),
-        rhs: Box::new(door),
-    })
+    LoweredNodeSpec::Union(vec![shell, door])
+}
+
+fn lower_lamp_asset(
+    state: &Arc<EvalState>,
+    object: &ObjectValue,
+    ctx: &mut CompileContext,
+) -> LoweredNodeSpec {
+    let height = read_number_field(object, &["height"])
+        .unwrap_or(0.72)
+        .max(0.1);
+    let base_radius = read_number_field(object, &["base_radius"])
+        .unwrap_or(0.16)
+        .max(0.02);
+    let base_height = read_number_field(object, &["base_height"])
+        .unwrap_or(0.05)
+        .clamp(0.01, height.max(0.01));
+    let stem_radius = read_number_field(object, &["stem_radius"])
+        .unwrap_or(0.025)
+        .max(0.005);
+    let shade_radius = read_number_field(object, &["shade_radius"])
+        .unwrap_or(0.2)
+        .max(0.02);
+    let shade_height = read_number_field(object, &["shade_height"])
+        .unwrap_or(0.22)
+        .clamp(0.02, height.max(0.02));
+    let bulb_radius = read_number_field(object, &["bulb_radius"])
+        .unwrap_or(0.065)
+        .max(0.01);
+
+    let base_material_id =
+        object_material_id_with_fallback(state, object, "base_material", "body_material", ctx);
+    let stem_material_id =
+        object_material_id_with_fallback(state, object, "stem_material", "body_material", ctx);
+    let shade_material_id =
+        object_material_id_with_fallback(state, object, "shade_material", "body_material", ctx);
+    let bulb_material_id = object_material_id(state, object, "bulb_material", ctx);
+    let light_intensity = read_light_spectrum(
+        object,
+        "light_color",
+        "light_intensity",
+        &["light_intensity"],
+    )
+    .unwrap_or(Spectrum::rgb(18.0, 17.2, 15.6));
+    let light_radius = read_number_field(object, &["light_radius"])
+        .unwrap_or((bulb_radius * 0.85).max(0.02))
+        .max(0.0);
+    let light_samples = read_number_field(object, &["light_samples"])
+        .map(|v| v.max(1.0) as u32)
+        .unwrap_or(6);
+
+    let base_center_y = -height * 0.5 + base_height * 0.5;
+    let shade_center_y = height * 0.5 - shade_height * 0.5;
+    let stem_half_height =
+        ((shade_center_y - shade_height * 0.5) - (base_center_y + base_height * 0.5)).max(0.001)
+            * 0.5;
+    let stem_center_y =
+        (shade_center_y - shade_height * 0.5 + base_center_y + base_height * 0.5) * 0.5;
+    let bulb_center_y = shade_center_y - shade_height * 0.15;
+
+    if light_intensity.r > 0.0 || light_intensity.g > 0.0 || light_intensity.b > 0.0 {
+        ctx.semantic_lights.push(SemanticLight {
+            position: read_transform(object).center.add(transform_offset(
+                read_transform(object),
+                Vec3::new(0.0, bulb_center_y, 0.0),
+            )),
+            radius: light_radius,
+            intensity: light_intensity,
+            samples: light_samples,
+        });
+    }
+
+    LoweredNodeSpec::Union(vec![
+        LoweredNodeSpec::Cylinder {
+            offset: Vec3::new(0.0, base_center_y, 0.0),
+            radius: base_radius,
+            half_height: base_height * 0.5,
+            material_id: base_material_id,
+        },
+        LoweredNodeSpec::Cylinder {
+            offset: Vec3::new(0.0, stem_center_y, 0.0),
+            radius: stem_radius,
+            half_height: stem_half_height,
+            material_id: stem_material_id,
+        },
+        LoweredNodeSpec::Cylinder {
+            offset: Vec3::new(0.0, shade_center_y, 0.0),
+            radius: shade_radius,
+            half_height: shade_height * 0.5,
+            material_id: shade_material_id,
+        },
+        LoweredNodeSpec::Sphere {
+            offset: Vec3::new(0.0, bulb_center_y, 0.0),
+            radius: bulb_radius,
+            material_id: bulb_material_id,
+        },
+    ])
 }
 
 fn compile_room(
@@ -4236,7 +4431,7 @@ fn build_render_setup(
     options: RenderOptions,
 ) -> RenderSetup {
     let camera = parse_camera(state, scene.center, options);
-    let (lights, path_lights) = parse_lights(state);
+    let (lights, path_lights) = parse_lights(state, &scene.semantic_lights);
     RenderSetup {
         state: state.clone(),
         root: scene.root.clone(),
@@ -4276,7 +4471,10 @@ fn parse_camera(state: &EvalState, scene_center: Vec3, options: RenderOptions) -
     })
 }
 
-fn parse_lights(state: &EvalState) -> (Vec<Box<dyn Light>>, Vec<PathLight>) {
+fn parse_lights(
+    state: &EvalState,
+    semantic_lights: &[SemanticLight],
+) -> (Vec<Box<dyn Light>>, Vec<PathLight>) {
     let mut lights: Vec<Box<dyn Light>> = Vec::new();
     let mut path_lights: Vec<PathLight> = Vec::new();
     for binding in state.bindings.values() {
@@ -4330,6 +4528,19 @@ fn parse_lights(state: &EvalState) -> (Vec<Box<dyn Light>>, Vec<PathLight>) {
             }
             _ => {}
         }
+    }
+
+    for light in semantic_lights {
+        lights.push(Box::new(SphereLight {
+            position: to_api_vec3(light.position),
+            radius: light.radius,
+            intensity: light.intensity,
+            samples: light.samples,
+        }));
+        path_lights.push(PathLight::Point {
+            position: to_api_vec3(light.position),
+            intensity: light.intensity,
+        });
     }
 
     if lights.is_empty() {
