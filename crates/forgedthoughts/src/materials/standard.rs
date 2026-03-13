@@ -13,7 +13,9 @@ pub fn eval(material: MaterialParams, normal: Vec3, wi: Vec3, wo: Vec3) -> Spect
 
     let metallic = material.metallic.clamp(0.0, 1.0);
     let transmission = material.transmission.clamp(0.0, 1.0);
-    let base_kd = ((1.0 - metallic) * (1.0 - transmission)).clamp(0.0, 1.0);
+    let clearcoat = material.clearcoat.clamp(0.0, 1.0);
+    let coat_cover = clearcoat_cover(clearcoat, ndotv);
+    let base_kd = ((1.0 - metallic) * (1.0 - transmission)).clamp(0.0, 1.0) * (1.0 - coat_cover);
     let diffuse = material.color.scale(base_kd / PI);
 
     let f0_dielectric = fresnel_f0_from_ior(material.ior).clamp(0.0, 1.0);
@@ -24,9 +26,8 @@ pub fn eval(material: MaterialParams, normal: Vec3, wi: Vec3, wo: Vec3) -> Spect
     let spec_f0 = lerp_spectrum(base_f0, metal_f0, metallic);
     let specular_params =
         MaterialParams::metal(spec_f0, material.roughness, Spectrum::black(), 0.0);
-    let specular = metal::eval(specular_params, normal, wi, wo);
+    let specular = metal::eval(specular_params, normal, wi, wo).scale(1.0 - coat_cover * 0.85);
 
-    let clearcoat = material.clearcoat.clamp(0.0, 1.0);
     let clearcoat_term = if clearcoat > 1.0e-5 {
         let clearcoat_params = MaterialParams::metal(
             Spectrum::rgb(1.0, 1.0, 1.0),
@@ -34,7 +35,7 @@ pub fn eval(material: MaterialParams, normal: Vec3, wi: Vec3, wo: Vec3) -> Spect
             Spectrum::black(),
             0.0,
         );
-        metal::eval(clearcoat_params, normal, wi, wo).scale(clearcoat * 0.25)
+        metal::eval(clearcoat_params, normal, wi, wo).scale(clearcoat * 0.18)
     } else {
         Spectrum::black()
     };
@@ -46,11 +47,14 @@ pub fn pdf(material: MaterialParams, normal: Vec3, wi: Vec3, wo: Vec3) -> f32 {
     let metallic = material.metallic.clamp(0.0, 1.0);
     let transmission = material.transmission.clamp(0.0, 1.0);
     let clearcoat = material.clearcoat.clamp(0.0, 1.0);
+    let ndotv = normal.dot(wo).max(0.0);
+    let coat_cover = clearcoat_cover(clearcoat, ndotv);
 
-    let diffuse_w = ((1.0 - metallic) * (1.0 - transmission) * (1.0 - clearcoat)).max(0.0);
-    let specular_w =
-        ((material.specular * material.specular_weight) * (1.0 - transmission)).clamp(0.0, 1.0);
-    let clearcoat_w = clearcoat * 0.25;
+    let diffuse_w = ((1.0 - metallic) * (1.0 - transmission)).max(0.0) * (1.0 - coat_cover);
+    let specular_w = ((material.specular * material.specular_weight) * (1.0 - transmission))
+        .clamp(0.0, 1.0)
+        * (1.0 - coat_cover * 0.85);
+    let clearcoat_w = clearcoat * 0.18;
     let sum = diffuse_w + specular_w + clearcoat_w;
     if sum <= 1.0e-6 {
         return lambert::pdf(material, normal, wi, wo);
@@ -78,11 +82,14 @@ pub fn sample(material: MaterialParams, normal: Vec3, wo: Vec3, input: SampleInp
     let metallic = material.metallic.clamp(0.0, 1.0);
     let transmission = material.transmission.clamp(0.0, 1.0);
     let clearcoat = material.clearcoat.clamp(0.0, 1.0);
+    let ndotv = normal.dot(wo).max(0.0);
+    let coat_cover = clearcoat_cover(clearcoat, ndotv);
 
-    let diffuse_w = ((1.0 - metallic) * (1.0 - transmission) * (1.0 - clearcoat)).max(0.0);
-    let specular_w =
-        ((material.specular * material.specular_weight) * (1.0 - transmission)).clamp(0.0, 1.0);
-    let clearcoat_w = clearcoat * 0.25;
+    let diffuse_w = ((1.0 - metallic) * (1.0 - transmission)).max(0.0) * (1.0 - coat_cover);
+    let specular_w = ((material.specular * material.specular_weight) * (1.0 - transmission))
+        .clamp(0.0, 1.0)
+        * (1.0 - coat_cover * 0.85);
+    let clearcoat_w = clearcoat * 0.18;
     let transmission_w = transmission;
     let sum = diffuse_w + specular_w + clearcoat_w + transmission_w;
 
@@ -162,4 +169,15 @@ fn blended_f0(material: MaterialParams) -> Spectrum {
 
 fn lerp_spectrum(a: Spectrum, b: Spectrum, t: f32) -> Spectrum {
     a.scale(1.0 - t) + b.scale(t)
+}
+
+fn clearcoat_cover(clearcoat: f32, ndotv: f32) -> f32 {
+    let fresnel = schlick_weight(ndotv);
+    (clearcoat * (0.2 + 0.8 * fresnel) * 0.65).clamp(0.0, 0.95)
+}
+
+fn schlick_weight(cos_theta: f32) -> f32 {
+    let m = (1.0 - cos_theta.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    let m2 = m * m;
+    m2 * m2 * m
 }
