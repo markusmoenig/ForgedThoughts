@@ -184,10 +184,7 @@ impl Parser {
         self.expect_kind(TokenKind::Semicolon, ";")?;
         Ok(Statement::MaterialDef(MaterialDef {
             name,
-            model: model.ok_or(ParseError::Expected {
-                expected: "model",
-                offset: self.current_offset(),
-            })?,
+            model: model.unwrap_or_else(|| "Standard".to_string()),
             metadata,
             statements,
         }))

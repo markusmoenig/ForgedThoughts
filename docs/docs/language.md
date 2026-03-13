@@ -133,7 +133,7 @@ statue.distance_post = fn(d, p) {
 
 ## Functions
 
-Material functions can now also drive shading-normal perturbation with `fn normal(ctx) { ... }`, which is useful for procedural bump-style detail without changing the underlying SDF geometry.
+Material functions can now also drive shading-normal perturbation with `fn normal(ctx) { ... }` or the simpler scalar `fn bump(ctx) { ... }`, which is useful for procedural surface detail without changing the underlying SDF geometry.
 
 Top-level helper functions can be reused across a module and may take multiple arguments:
 

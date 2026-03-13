@@ -3816,7 +3816,7 @@ fn build_bsdf_context(
                 }
             });
     let material = material_for_id(&setup.materials, hit.material_id);
-    let normal = resolve_dynamic_normal(
+    let bumped_normal = resolve_dynamic_bump(
         &setup.state,
         &setup.material_def_names,
         &setup.dynamic_material_overrides,
@@ -3827,6 +3827,17 @@ fn build_bsdf_context(
         geometric_normal,
     )
     .unwrap_or(geometric_normal);
+    let normal = resolve_dynamic_normal(
+        &setup.state,
+        &setup.material_def_names,
+        &setup.dynamic_material_overrides,
+        material,
+        hit,
+        local_position,
+        view_dir,
+        bumped_normal,
+    )
+    .unwrap_or(bumped_normal);
 
     BsdfContextBase {
         hit,
@@ -4519,11 +4530,13 @@ fn medium_state_from_material(material: MaterialKindRt) -> Option<MediumState> {
         density: medium.density.max(0.0),
     });
     explicit.or_else(|| {
-        matches!(
-            dominant_material_model(material),
-            MaterialKindTag::Dielectric
-        )
-        .then_some(MediumState {
+        let transmissive =
+            matches!(
+                dominant_material_model(material),
+                MaterialKindTag::Dielectric
+            ) || (matches!(dominant_material_model(material), MaterialKindTag::Standard)
+                && params.transmission > 0.01);
+        transmissive.then_some(MediumState {
             ior: params.ior.clamp(1.0, 3.0),
             absorption_color: Spectrum::rgb(1.0, 1.0, 1.0),
             density: 0.0,
@@ -4536,10 +4549,12 @@ fn transition_medium(
     front_face: bool,
     current: MediumState,
 ) -> MediumState {
-    if !matches!(
+    let transmissive = matches!(
         dominant_material_model(material),
         MaterialKindTag::Dielectric
-    ) {
+    ) || matches!(dominant_material_model(material), MaterialKindTag::Standard)
+        && dominant_material_params(material).transmission > 0.01;
+    if !transmissive {
         return current;
     }
     if front_face {
@@ -5805,6 +5820,7 @@ fn extract_material_kind(state: &EvalState, value: &Value) -> Option<MaterialKin
 
     let type_name = obj.type_name.as_deref().unwrap_or_default();
     if type_name.eq_ignore_ascii_case("material")
+        || type_name.eq_ignore_ascii_case("standard")
         || type_name.eq_ignore_ascii_case("openpbr")
         || type_name.eq_ignore_ascii_case("lambert")
         || type_name.eq_ignore_ascii_case("metal")
@@ -5843,6 +5859,65 @@ fn material_from_object(
         params.subsurface = read_subsurface_field(obj, "subsurface");
         params.pattern = read_pattern_field(obj, "pattern");
         return MaterialKindRt::Lambert(params);
+    }
+    if type_name.eq_ignore_ascii_case("material")
+        || type_name.eq_ignore_ascii_case("standard")
+        || type_name.eq_ignore_ascii_case("openpbr")
+    {
+        let color = read_spectrum_field(obj, "color")
+            .or_else(|| read_spectrum_field(obj, "base_color"))
+            .unwrap_or(Spectrum::rgb(0.8, 0.8, 0.8));
+        let roughness = read_number_field(obj, &["roughness"])
+            .unwrap_or(0.5)
+            .clamp(0.0, 1.0);
+        let metallic = read_number_field(obj, &["metallic", "metalness"])
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        let specular = read_number_field(obj, &["specular"])
+            .unwrap_or(0.5)
+            .clamp(0.0, 1.0);
+        let specular_weight = read_number_field(obj, &["specular_weight"])
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        let specular_color =
+            read_spectrum_field(obj, "specular_color").unwrap_or(Spectrum::rgb(1.0, 1.0, 1.0));
+        let ior = read_number_field(obj, &["ior", "specular_ior"])
+            .unwrap_or(1.5)
+            .clamp(1.0, 3.0);
+        let clearcoat = read_number_field(obj, &["clearcoat"])
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        let clearcoat_roughness = read_number_field(obj, &["clearcoat_roughness"])
+            .unwrap_or(0.1)
+            .clamp(0.0, 1.0);
+        let transmission = read_number_field(obj, &["transmission", "transmission_weight"])
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        let thin_walled = read_number_field(obj, &["thin_walled"]).unwrap_or(0.0) >= 0.5;
+        let emission_color =
+            read_spectrum_field(obj, "emission_color").unwrap_or(Spectrum::black());
+        let emission_strength = read_number_field(obj, &["emission_strength"])
+            .unwrap_or(0.0)
+            .max(0.0);
+        let mut params = MaterialParams::standard(
+            color,
+            roughness,
+            metallic,
+            specular,
+            specular_weight,
+            specular_color,
+            ior,
+            clearcoat,
+            clearcoat_roughness,
+            transmission,
+            thin_walled,
+            emission_color,
+            emission_strength,
+        );
+        params.medium = read_medium_field(obj, "medium");
+        params.subsurface = read_subsurface_field(obj, "subsurface");
+        params.pattern = read_pattern_field(obj, "pattern");
+        return MaterialKindRt::Standard(params);
     }
     if type_name.eq_ignore_ascii_case("metal") {
         let color = read_spectrum_field(obj, "color")
@@ -5919,32 +5994,39 @@ fn material_from_legacy_object(_state: &EvalState, obj: &ObjectValue) -> Materia
         .unwrap_or(0.0)
         .max(0.0);
 
-    if transmission > 0.01 {
-        let mut params = MaterialParams::dielectric(
-            color,
-            ior,
-            roughness,
-            thin_walled,
-            emission_color,
-            emission_strength,
-        );
-        params.medium = read_medium_field(obj, "medium");
-        params.subsurface = read_subsurface_field(obj, "subsurface");
-        params.pattern = read_pattern_field(obj, "pattern");
-        return MaterialKindRt::Dielectric(params);
-    }
-    if metallic > 0.01 {
-        let mut params = MaterialParams::metal(color, roughness, emission_color, emission_strength);
-        params.medium = read_medium_field(obj, "medium");
-        params.subsurface = read_subsurface_field(obj, "subsurface");
-        params.pattern = read_pattern_field(obj, "pattern");
-        return MaterialKindRt::Metal(params);
-    }
-    let mut params = MaterialParams::lambert(color, emission_color, emission_strength);
+    let specular = read_number_field(obj, &["specular"])
+        .unwrap_or(0.5)
+        .clamp(0.0, 1.0);
+    let specular_weight = read_number_field(obj, &["specular_weight"])
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+    let specular_color =
+        read_spectrum_field(obj, "specular_color").unwrap_or(Spectrum::rgb(1.0, 1.0, 1.0));
+    let clearcoat = read_number_field(obj, &["clearcoat"])
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    let clearcoat_roughness = read_number_field(obj, &["clearcoat_roughness"])
+        .unwrap_or(0.1)
+        .clamp(0.0, 1.0);
+    let mut params = MaterialParams::standard(
+        color,
+        roughness,
+        metallic,
+        specular,
+        specular_weight,
+        specular_color,
+        ior,
+        clearcoat,
+        clearcoat_roughness,
+        transmission,
+        thin_walled,
+        emission_color,
+        emission_strength,
+    );
     params.medium = read_medium_field(obj, "medium");
     params.subsurface = read_subsurface_field(obj, "subsurface");
     params.pattern = read_pattern_field(obj, "pattern");
-    MaterialKindRt::Lambert(params)
+    MaterialKindRt::Standard(params)
 }
 
 fn material_from_dynamic_def(
@@ -5957,6 +6039,21 @@ fn material_from_dynamic_def(
         return default_material();
     };
     let mut params = match def.model.as_str() {
+        "Standard" | "Layered" => MaterialParams::standard(
+            Spectrum::rgb(0.8, 0.8, 0.8),
+            0.5,
+            0.0,
+            0.5,
+            1.0,
+            Spectrum::rgb(1.0, 1.0, 1.0),
+            1.5,
+            0.0,
+            0.1,
+            0.0,
+            false,
+            Spectrum::black(),
+            0.0,
+        ),
         "Metal" => MaterialParams::metal(Spectrum::rgb(0.9, 0.9, 0.9), 0.1, Spectrum::black(), 0.0),
         "Dielectric" => MaterialParams::dielectric(
             Spectrum::rgb(1.0, 1.0, 1.0),
@@ -5978,8 +6075,8 @@ fn material_from_dynamic_def(
     match def.model.as_str() {
         "Metal" => MaterialKindRt::Metal(params),
         "Dielectric" => MaterialKindRt::Dielectric(params),
-        "Layered" => MaterialKindRt::Lambert(params),
-        _ => MaterialKindRt::Lambert(params),
+        "Standard" | "Layered" => MaterialKindRt::Standard(params),
+        _ => MaterialKindRt::Standard(params),
     }
 }
 
@@ -6009,6 +6106,41 @@ fn apply_dynamic_material_properties(
             "ior" => {
                 if let Value::Number(v) = value {
                     params.ior = (v as f32).clamp(1.0, 3.0);
+                }
+            }
+            "metallic" => {
+                if let Value::Number(v) = value {
+                    params.metallic = (v as f32).clamp(0.0, 1.0);
+                }
+            }
+            "specular" => {
+                if let Value::Number(v) = value {
+                    params.specular = (v as f32).clamp(0.0, 1.0);
+                }
+            }
+            "specular_weight" => {
+                if let Value::Number(v) = value {
+                    params.specular_weight = (v as f32).clamp(0.0, 1.0);
+                }
+            }
+            "specular_color" => {
+                if let Some(color) = spectrum_from_value(&value) {
+                    params.specular_color = color;
+                }
+            }
+            "clearcoat" => {
+                if let Value::Number(v) = value {
+                    params.clearcoat = (v as f32).clamp(0.0, 1.0);
+                }
+            }
+            "clearcoat_roughness" => {
+                if let Value::Number(v) = value {
+                    params.clearcoat_roughness = (v as f32).clamp(0.0, 1.0);
+                }
+            }
+            "transmission" => {
+                if let Value::Number(v) = value {
+                    params.transmission = (v as f32).clamp(0.0, 1.0);
                 }
             }
             "thin_walled" => {
@@ -6531,7 +6663,7 @@ fn resolve_leaf_material(
                 .material_defs
                 .get(name)
                 .map(|def| def.model.as_str()),
-            Some("Layered")
+            Some("Layered" | "Standard")
         )
     {
         let mut base_params = dominant_material_params(material);
@@ -6552,6 +6684,95 @@ fn resolve_leaf_material(
         base_params.emission_strength = runtime_emission_strength
             .unwrap_or(base_params.emission_strength as f64)
             .max(0.0) as f32;
+        let runtime_metallic = resolve_dynamic_number(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "metallic",
+        );
+        let runtime_specular = resolve_dynamic_number(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "specular",
+        );
+        let runtime_specular_weight = resolve_dynamic_number(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "specular_weight",
+        );
+        let runtime_specular_color = resolve_dynamic_spectrum(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "specular_color",
+        );
+        let runtime_clearcoat = resolve_dynamic_number(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "clearcoat",
+        );
+        let runtime_clearcoat_roughness = resolve_dynamic_number(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "clearcoat_roughness",
+        );
+        let runtime_transmission = resolve_dynamic_number(
+            &setup.state,
+            &setup.material_def_names,
+            &setup.dynamic_material_overrides,
+            material,
+            hit,
+            local_position,
+            view_dir,
+            "transmission",
+        );
+        base_params.metallic = runtime_metallic
+            .unwrap_or(base_params.metallic as f64)
+            .clamp(0.0, 1.0) as f32;
+        base_params.specular = runtime_specular
+            .unwrap_or(base_params.specular as f64)
+            .clamp(0.0, 1.0) as f32;
+        base_params.specular_weight = runtime_specular_weight
+            .unwrap_or(base_params.specular_weight as f64)
+            .clamp(0.0, 1.0) as f32;
+        base_params.specular_color = runtime_specular_color.unwrap_or(base_params.specular_color);
+        base_params.transmission = runtime_transmission
+            .unwrap_or(base_params.transmission as f64)
+            .clamp(0.0, 1.0) as f32;
+        base_params.clearcoat = runtime_clearcoat
+            .unwrap_or(base_params.clearcoat as f64)
+            .clamp(0.0, 1.0) as f32;
+        base_params.clearcoat_roughness = runtime_clearcoat_roughness
+            .unwrap_or(base_params.clearcoat_roughness as f64)
+            .clamp(0.0, 1.0) as f32;
 
         let static_props =
             eval_material_properties_with_overrides(&setup.state, name, dynamic_override).ok();
@@ -6570,88 +6791,103 @@ fn resolve_leaf_material(
                     _ => None,
                 })
         };
-        let coat_color = resolve_dynamic_spectrum(
-            &setup.state,
-            &setup.material_def_names,
-            &setup.dynamic_material_overrides,
-            material,
-            hit,
-            local_position,
-            view_dir,
-            "coat_color",
-        )
-        .or_else(|| static_spectrum("coat_color"))
-        .unwrap_or(Spectrum::rgb(1.0, 1.0, 1.0));
-        let coat_roughness = resolve_dynamic_number(
-            &setup.state,
-            &setup.material_def_names,
-            &setup.dynamic_material_overrides,
-            material,
-            hit,
-            local_position,
-            view_dir,
-            "coat_roughness",
-        )
-        .or_else(|| static_number("coat_roughness"))
-        .unwrap_or(0.08)
-        .clamp(0.0, 1.0) as f32;
-        let coat_ior = resolve_dynamic_number(
-            &setup.state,
-            &setup.material_def_names,
-            &setup.dynamic_material_overrides,
-            material,
-            hit,
-            local_position,
-            view_dir,
-            "coat_ior",
-        )
-        .or_else(|| static_number("coat_ior"))
-        .unwrap_or(1.33)
-        .clamp(1.0, 3.0) as f32;
-        let coat_weight = resolve_dynamic_number(
-            &setup.state,
-            &setup.material_def_names,
-            &setup.dynamic_material_overrides,
-            material,
-            hit,
-            local_position,
-            view_dir,
-            "coat_weight",
-        )
-        .or_else(|| static_number("coat_weight"))
-        .unwrap_or(0.0)
-        .clamp(0.0, 1.0) as f32;
-        let coat_mask = resolve_dynamic_number(
-            &setup.state,
-            &setup.material_def_names,
-            &setup.dynamic_material_overrides,
-            material,
-            hit,
-            local_position,
-            view_dir,
-            "coat_mask",
-        )
-        .unwrap_or(1.0)
-        .clamp(0.0, 1.0) as f32;
-        let t = (coat_weight * coat_mask).clamp(0.0, 1.0);
-        if t <= 0.0 {
-            return MaterialKindRt::Lambert(base_params);
+        if matches!(
+            setup
+                .state
+                .material_defs
+                .get(name)
+                .map(|def| def.model.as_str()),
+            Some("Layered" | "Standard")
+        ) {
+            let coat_color = resolve_dynamic_spectrum(
+                &setup.state,
+                &setup.material_def_names,
+                &setup.dynamic_material_overrides,
+                material,
+                hit,
+                local_position,
+                view_dir,
+                "coat_color",
+            )
+            .or_else(|| static_spectrum("coat_color"))
+            .unwrap_or(Spectrum::rgb(1.0, 1.0, 1.0));
+            let coat_roughness = resolve_dynamic_number(
+                &setup.state,
+                &setup.material_def_names,
+                &setup.dynamic_material_overrides,
+                material,
+                hit,
+                local_position,
+                view_dir,
+                "coat_roughness",
+            )
+            .or_else(|| static_number("coat_roughness"))
+            .unwrap_or(0.08)
+            .clamp(0.0, 1.0) as f32;
+            let coat_ior = resolve_dynamic_number(
+                &setup.state,
+                &setup.material_def_names,
+                &setup.dynamic_material_overrides,
+                material,
+                hit,
+                local_position,
+                view_dir,
+                "coat_ior",
+            )
+            .or_else(|| static_number("coat_ior"))
+            .unwrap_or(1.33)
+            .clamp(1.0, 3.0) as f32;
+            let coat_weight = resolve_dynamic_number(
+                &setup.state,
+                &setup.material_def_names,
+                &setup.dynamic_material_overrides,
+                material,
+                hit,
+                local_position,
+                view_dir,
+                "coat_weight",
+            )
+            .or_else(|| static_number("coat_weight"))
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0) as f32;
+            let coat_mask = resolve_dynamic_number(
+                &setup.state,
+                &setup.material_def_names,
+                &setup.dynamic_material_overrides,
+                material,
+                hit,
+                local_position,
+                view_dir,
+                "coat_mask",
+            )
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0) as f32;
+            base_params.specular_color = coat_color;
+            base_params.ior = coat_ior;
+            base_params.clearcoat = (coat_weight * coat_mask).clamp(0.0, 1.0);
+            base_params.clearcoat_roughness = coat_roughness;
         }
-        let mut coat_params =
-            MaterialParams::metal(coat_color, coat_roughness, Spectrum::black(), 0.0);
-        coat_params.ior = coat_ior;
-        coat_params.thin_walled = true;
-        coat_params.dynamic_material_id = base_params.dynamic_material_id;
-        coat_params.dynamic_override_id = base_params.dynamic_override_id;
-        return MaterialKindRt::Blend(BlendedMaterial {
-            a_model: MaterialKindTag::Lambert,
-            a_params: base_params,
-            b_model: MaterialKindTag::Metal,
-            b_params: coat_params,
-            t,
-        });
+        return MaterialKindRt::Standard(base_params);
     }
     match material {
+        MaterialKindRt::Standard(mut params) => {
+            params.color =
+                runtime_color.unwrap_or_else(|| resolve_pattern_color(params, local_position));
+            params.roughness = runtime_roughness
+                .unwrap_or(params.roughness as f64)
+                .clamp(0.0, 1.0) as f32;
+            params.ior = runtime_ior.unwrap_or(params.ior as f64).clamp(1.0, 3.0) as f32;
+            if let Some(thin_walled) = runtime_thin_walled {
+                params.thin_walled = thin_walled >= 0.5;
+            }
+            params.medium = runtime_medium.or(params.medium);
+            params.subsurface = runtime_subsurface.or(params.subsurface);
+            params.emission_color = runtime_emission_color.unwrap_or(params.emission_color);
+            params.emission_strength = runtime_emission_strength
+                .unwrap_or(params.emission_strength as f64)
+                .max(0.0) as f32;
+            MaterialKindRt::Standard(params)
+        }
         MaterialKindRt::Lambert(mut params) => {
             params.color =
                 runtime_color.unwrap_or_else(|| resolve_pattern_color(params, local_position));
@@ -6766,7 +7002,15 @@ fn blend_subsurface(
 fn blend_params(mut a: MaterialParams, b: MaterialParams, t: f32) -> MaterialParams {
     a.color = lerp_spectrum(a.color, b.color, t);
     a.roughness = a.roughness + (b.roughness - a.roughness) * t;
+    a.metallic = a.metallic + (b.metallic - a.metallic) * t;
+    a.specular = a.specular + (b.specular - a.specular) * t;
+    a.specular_weight = a.specular_weight + (b.specular_weight - a.specular_weight) * t;
+    a.specular_color = lerp_spectrum(a.specular_color, b.specular_color, t);
     a.ior = a.ior + (b.ior - a.ior) * t;
+    a.clearcoat = a.clearcoat + (b.clearcoat - a.clearcoat) * t;
+    a.clearcoat_roughness =
+        a.clearcoat_roughness + (b.clearcoat_roughness - a.clearcoat_roughness) * t;
+    a.transmission = a.transmission + (b.transmission - a.transmission) * t;
     a.thin_walled = if t < 0.5 {
         a.thin_walled
     } else {
@@ -6784,6 +7028,9 @@ fn blend_params(mut a: MaterialParams, b: MaterialParams, t: f32) -> MaterialPar
 
 fn blend_materials(a: MaterialKindRt, b: MaterialKindRt, t: f32) -> MaterialKindRt {
     match (a, b) {
+        (MaterialKindRt::Standard(a), MaterialKindRt::Standard(b)) => {
+            MaterialKindRt::Standard(blend_params(a, b, t))
+        }
         (MaterialKindRt::Lambert(a), MaterialKindRt::Lambert(b)) => {
             MaterialKindRt::Lambert(blend_params(a, b, t))
         }
@@ -6805,6 +7052,7 @@ fn blend_materials(a: MaterialKindRt, b: MaterialKindRt, t: f32) -> MaterialKind
 
 fn dominant_material_model(material: MaterialKindRt) -> MaterialKindTag {
     match material {
+        MaterialKindRt::Standard(_) => MaterialKindTag::Standard,
         MaterialKindRt::Lambert(_) => MaterialKindTag::Lambert,
         MaterialKindRt::Metal(_) => MaterialKindTag::Metal,
         MaterialKindRt::Dielectric(_) => MaterialKindTag::Dielectric,
@@ -6820,7 +7068,8 @@ fn dominant_material_model(material: MaterialKindRt) -> MaterialKindTag {
 
 fn dominant_material_params(material: MaterialKindRt) -> MaterialParams {
     match material {
-        MaterialKindRt::Lambert(params)
+        MaterialKindRt::Standard(params)
+        | MaterialKindRt::Lambert(params)
         | MaterialKindRt::Metal(params)
         | MaterialKindRt::Dielectric(params) => params,
         MaterialKindRt::Blend(blend) => {
@@ -6921,6 +7170,59 @@ fn resolve_dynamic_normal(
         normal = normal.mul(-1.0);
     }
     Some(normal)
+}
+
+fn resolve_dynamic_bump(
+    state: &EvalState,
+    material_def_names: &[String],
+    dynamic_material_overrides: &[ObjectValue],
+    material: MaterialKindRt,
+    hit: RayHit,
+    local_position: Vec3,
+    view_dir: Vec3,
+    geometric_normal: Vec3,
+) -> Option<Vec3> {
+    let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
+    let dynamic_override = dynamic_material_override(material, dynamic_material_overrides);
+    let name = material_def_names.get(dynamic_material_id as usize)?;
+
+    let evaluate = |pos: Vec3| -> Option<f32> {
+        let ctx = make_shading_context_with_normal(hit, pos, view_dir, geometric_normal);
+        let value =
+            eval_material_function_with_overrides(state, name, "bump", ctx, dynamic_override)
+                .ok()?;
+        match value {
+            Value::Number(v) => Some(v as f32),
+            _ => None,
+        }
+    };
+
+    let center = evaluate(local_position)?;
+    let tangent = orthonormal_tangent(geometric_normal);
+    let bitangent = geometric_normal.cross(tangent).normalize();
+    let eps = 0.01f32;
+    let dx = evaluate(local_position.add(tangent.mul(eps)))? - center;
+    let dy = evaluate(local_position.add(bitangent.mul(eps)))? - center;
+    let mut normal = geometric_normal
+        .sub(tangent.mul(dx / eps))
+        .sub(bitangent.mul(dy / eps))
+        .normalize();
+    if normal.length() <= 1.0e-6 {
+        return None;
+    }
+    if normal.dot(geometric_normal) < 0.0 {
+        normal = normal.mul(-1.0);
+    }
+    Some(normal)
+}
+
+fn orthonormal_tangent(normal: Vec3) -> Vec3 {
+    let up = if normal.y.abs() < 0.999 {
+        Vec3::new(0.0, 1.0, 0.0)
+    } else {
+        Vec3::new(1.0, 0.0, 0.0)
+    };
+    normal.cross(up).normalize()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7032,8 +7334,18 @@ fn spectrum_from_value(value: &Value) -> Option<Spectrum> {
 }
 
 fn default_material() -> MaterialKindRt {
-    MaterialKindRt::Lambert(MaterialParams::lambert(
+    MaterialKindRt::Standard(MaterialParams::standard(
         Spectrum::rgb(0.8, 0.8, 0.8),
+        0.5,
+        0.0,
+        0.5,
+        1.0,
+        Spectrum::rgb(1.0, 1.0, 1.0),
+        1.5,
+        0.0,
+        0.1,
+        0.0,
+        false,
         Spectrum::black(),
         0.0,
     ))
@@ -7452,12 +7764,14 @@ mod tests {
         let state = empty_state(bindings);
 
         let mat = super::parse_material(&state, &sphere);
-        let super::MaterialKindRt::Dielectric(mat) = mat else {
-            panic!("expected Dielectric material");
+        let super::MaterialKindRt::Standard(mat) = mat else {
+            panic!("expected Standard material");
         };
         assert!((mat.roughness - 0.2).abs() < 1.0e-6);
         assert!((mat.ior - 1.65).abs() < 1.0e-6);
         assert!(mat.thin_walled);
+        assert!((mat.transmission - 0.55).abs() < 1.0e-6);
+        assert!((mat.clearcoat - 0.3).abs() < 1.0e-6);
         assert!((mat.emission_color.g - 0.2).abs() < 1.0e-6);
         assert!((mat.emission_strength - 3.0).abs() < 1.0e-6);
         assert!((mat.color.r - 0.9).abs() < 1.0e-6);
@@ -7717,15 +8031,15 @@ mod tests {
             ..hit_warm
         };
 
-        let super::MaterialKindRt::Lambert(mat_warm) =
+        let super::MaterialKindRt::Standard(mat_warm) =
             super::resolve_material_at_hit(&setup, hit_warm, super::Vec3::new(0.0, 0.0, 1.0))
         else {
-            panic!("expected Lambert material");
+            panic!("expected Standard material");
         };
-        let super::MaterialKindRt::Lambert(mat_dark) =
+        let super::MaterialKindRt::Standard(mat_dark) =
             super::resolve_material_at_hit(&setup, hit_dark, super::Vec3::new(0.0, 0.0, 1.0))
         else {
-            panic!("expected Lambert material");
+            panic!("expected Standard material");
         };
 
         assert!((mat_warm.color.r - 0.9).abs() < 1.0e-6);
@@ -7751,8 +8065,8 @@ mod tests {
         let program = parse_program(source).expect("program should parse");
         let state = eval_program(&program).expect("program should evaluate");
         let scene = &state.bindings.get("scene").expect("scene binding").value;
-        let super::MaterialKindRt::Lambert(mat) = super::parse_material(&state, scene) else {
-            panic!("expected Lambert material");
+        let super::MaterialKindRt::Standard(mat) = super::parse_material(&state, scene) else {
+            panic!("expected Standard material");
         };
 
         assert!((mat.color.r - 0.24).abs() < 1.0e-6);
@@ -8194,6 +8508,46 @@ mod tests {
     }
 
     #[test]
+    fn resolves_ft_material_dynamic_bump_hook() {
+        let source = r#"
+            material Bumpy {
+              fn bump(ctx) {
+                return sin(ctx.local_position.x * 10.0) * 0.2;
+              }
+            };
+
+            let scene = Sphere {
+              material: Bumpy {}
+            };
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let scene = super::compile_scene(
+            &state,
+            state
+                .bindings
+                .get("scene")
+                .map(|b| &b.value)
+                .expect("scene binding"),
+            super::default_material(),
+        )
+        .expect("scene should compile");
+        let setup = super::build_render_setup(&state, &scene, RenderOptions::default());
+        let hit = super::RayHit {
+            t: 1.0,
+            position: super::Vec3::new(0.1, 0.0, 0.995),
+            normal: super::Vec3::new(0.1, 0.0, 0.995).normalize(),
+            front_face: true,
+            object_id: 1,
+            material_id: 1,
+        };
+
+        let ctx = super::build_bsdf_context(&setup, hit, super::Vec3::new(0.0, 0.0, 1.0), 1.0);
+        assert!(ctx.normal.dot(hit.normal.normalize()) < 0.9999);
+    }
+
+    #[test]
     fn resolves_material_local_helper_functions_across_hooks() {
         let source = r#"
             material Brick {
@@ -8248,10 +8602,10 @@ mod tests {
             material_id: 1,
         };
 
-        let super::MaterialKindRt::Lambert(mat) =
+        let super::MaterialKindRt::Standard(mat) =
             super::resolve_material_at_hit(&setup, hit, super::Vec3::new(0.0, 0.0, 1.0))
         else {
-            panic!("expected Lambert material");
+            panic!("expected Standard material");
         };
         let ctx = super::build_bsdf_context(&setup, hit, super::Vec3::new(0.0, 0.0, 1.0), 1.0);
 
@@ -8323,15 +8677,15 @@ mod tests {
             material_id: 1,
         };
 
-        let super::MaterialKindRt::Lambert(mat_a) =
+        let super::MaterialKindRt::Standard(mat_a) =
             super::resolve_material_at_hit(&setup, hit_a, super::Vec3::new(0.0, 1.0, 1.0))
         else {
-            panic!("expected Lambert material");
+            panic!("expected Standard material");
         };
-        let super::MaterialKindRt::Lambert(mat_b) =
+        let super::MaterialKindRt::Standard(mat_b) =
             super::resolve_material_at_hit(&setup, hit_b, super::Vec3::new(0.0, 1.0, 1.0))
         else {
-            panic!("expected Lambert material");
+            panic!("expected Standard material");
         };
 
         assert!(mat_a.color.r > 0.9);

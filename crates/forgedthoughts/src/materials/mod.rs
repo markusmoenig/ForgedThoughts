@@ -1,6 +1,7 @@
 mod dielectric;
 mod lambert;
 mod metal;
+mod standard;
 
 use crate::render_api::{Spectrum, Vec3};
 
@@ -10,6 +11,7 @@ pub type DielectricMaterial = MaterialParams;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum MaterialKindTag {
+    Standard,
     Lambert,
     Metal,
     Dielectric,
@@ -66,7 +68,14 @@ pub enum ColorPattern {
 pub struct MaterialParams {
     pub color: Spectrum,
     pub roughness: f32,
+    pub metallic: f32,
+    pub specular: f32,
+    pub specular_weight: f32,
+    pub specular_color: Spectrum,
     pub ior: f32,
+    pub clearcoat: f32,
+    pub clearcoat_roughness: f32,
+    pub transmission: f32,
     pub thin_walled: bool,
     pub emission_color: Spectrum,
     pub emission_strength: f32,
@@ -79,11 +88,57 @@ pub struct MaterialParams {
 
 impl MaterialParams {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn standard(
+        color: Spectrum,
+        roughness: f32,
+        metallic: f32,
+        specular: f32,
+        specular_weight: f32,
+        specular_color: Spectrum,
+        ior: f32,
+        clearcoat: f32,
+        clearcoat_roughness: f32,
+        transmission: f32,
+        thin_walled: bool,
+        emission_color: Spectrum,
+        emission_strength: f32,
+    ) -> Self {
+        Self {
+            color,
+            roughness,
+            metallic,
+            specular,
+            specular_weight,
+            specular_color,
+            ior,
+            clearcoat,
+            clearcoat_roughness,
+            transmission,
+            thin_walled,
+            emission_color,
+            emission_strength,
+            medium: None,
+            subsurface: None,
+            pattern: None,
+            dynamic_material_id: None,
+            dynamic_override_id: None,
+        }
+    }
+
+    #[must_use]
     pub fn lambert(color: Spectrum, emission_color: Spectrum, emission_strength: f32) -> Self {
         Self {
             color,
             roughness: 1.0,
+            metallic: 0.0,
+            specular: 0.5,
+            specular_weight: 1.0,
+            specular_color: Spectrum::rgb(1.0, 1.0, 1.0),
             ior: 1.5,
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.1,
+            transmission: 0.0,
             thin_walled: false,
             emission_color,
             emission_strength,
@@ -105,7 +160,14 @@ impl MaterialParams {
         Self {
             color,
             roughness,
+            metallic: 1.0,
+            specular: 1.0,
+            specular_weight: 1.0,
+            specular_color: Spectrum::rgb(1.0, 1.0, 1.0),
             ior: 1.5,
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.1,
+            transmission: 0.0,
             thin_walled: false,
             emission_color,
             emission_strength,
@@ -129,7 +191,14 @@ impl MaterialParams {
         Self {
             color,
             roughness,
+            metallic: 0.0,
+            specular: 0.5,
+            specular_weight: 1.0,
+            specular_color: Spectrum::rgb(1.0, 1.0, 1.0),
             ior,
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.1,
+            transmission: 1.0,
             thin_walled,
             emission_color,
             emission_strength,
@@ -144,6 +213,7 @@ impl MaterialParams {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Material {
+    Standard(MaterialParams),
     Lambert(MaterialParams),
     Metal(MaterialParams),
     Dielectric(MaterialParams),
@@ -191,6 +261,7 @@ impl Material {
     #[must_use]
     pub fn model(self) -> MaterialKindTag {
         match self {
+            Material::Standard(_) => MaterialKindTag::Standard,
             Material::Lambert(_) => MaterialKindTag::Lambert,
             Material::Metal(_) => MaterialKindTag::Metal,
             Material::Dielectric(_) => MaterialKindTag::Dielectric,
@@ -201,7 +272,10 @@ impl Material {
     #[must_use]
     pub fn params(self) -> MaterialParams {
         match self {
-            Material::Lambert(m) | Material::Metal(m) | Material::Dielectric(m) => m,
+            Material::Standard(m)
+            | Material::Lambert(m)
+            | Material::Metal(m)
+            | Material::Dielectric(m) => m,
             Material::Blend(m) => {
                 if m.t < 0.5 {
                     m.a_params
@@ -214,9 +288,10 @@ impl Material {
 
     pub fn emission(self) -> Spectrum {
         match self {
-            Material::Lambert(m) | Material::Metal(m) | Material::Dielectric(m) => {
-                m.emission_color.scale(m.emission_strength.max(0.0))
-            }
+            Material::Standard(m)
+            | Material::Lambert(m)
+            | Material::Metal(m)
+            | Material::Dielectric(m) => m.emission_color.scale(m.emission_strength.max(0.0)),
             Material::Blend(m) => lerp_spectrum(
                 material_emission(m.a_model, m.a_params),
                 material_emission(m.b_model, m.b_params),
@@ -227,6 +302,7 @@ impl Material {
 
     pub fn eval(self, normal: Vec3, wi: Vec3, wo: Vec3) -> Spectrum {
         match self {
+            Material::Standard(m) => standard::eval(m, normal, wi, wo),
             Material::Lambert(m) => lambert::eval(m, normal, wi, wo),
             Material::Metal(m) => metal::eval(m, normal, wi, wo),
             Material::Dielectric(m) => dielectric::eval(m, normal, wi, wo),
@@ -240,6 +316,7 @@ impl Material {
 
     pub fn pdf(self, normal: Vec3, wi: Vec3, wo: Vec3) -> f32 {
         match self {
+            Material::Standard(m) => standard::pdf(m, normal, wi, wo),
             Material::Lambert(m) => lambert::pdf(m, normal, wi, wo),
             Material::Metal(m) => metal::pdf(m, normal, wi, wo),
             Material::Dielectric(m) => dielectric::pdf(m, normal, wi, wo),
@@ -253,6 +330,7 @@ impl Material {
 
     pub fn sample(self, normal: Vec3, wo: Vec3, input: SampleInput) -> BsdfSample {
         match self {
+            Material::Standard(m) => standard::sample(m, normal, wo, input),
             Material::Lambert(m) => lambert::sample(m, normal, wo, input),
             Material::Metal(m) => metal::sample(m, normal, wo, input),
             Material::Dielectric(m) => dielectric::sample(m, normal, wo, input),
@@ -263,7 +341,10 @@ impl Material {
 
 fn material_emission(model: MaterialKindTag, params: MaterialParams) -> Spectrum {
     match model {
-        MaterialKindTag::Lambert | MaterialKindTag::Metal | MaterialKindTag::Dielectric => params
+        MaterialKindTag::Standard
+        | MaterialKindTag::Lambert
+        | MaterialKindTag::Metal
+        | MaterialKindTag::Dielectric => params
             .emission_color
             .scale(params.emission_strength.max(0.0)),
     }
@@ -277,6 +358,7 @@ fn material_eval(
     wo: Vec3,
 ) -> Spectrum {
     match model {
+        MaterialKindTag::Standard => standard::eval(params, normal, wi, wo),
         MaterialKindTag::Lambert => lambert::eval(params, normal, wi, wo),
         MaterialKindTag::Metal => metal::eval(params, normal, wi, wo),
         MaterialKindTag::Dielectric => dielectric::eval(params, normal, wi, wo),
@@ -291,6 +373,7 @@ fn material_pdf(
     wo: Vec3,
 ) -> f32 {
     match model {
+        MaterialKindTag::Standard => standard::pdf(params, normal, wi, wo),
         MaterialKindTag::Lambert => lambert::pdf(params, normal, wi, wo),
         MaterialKindTag::Metal => metal::pdf(params, normal, wi, wo),
         MaterialKindTag::Dielectric => dielectric::pdf(params, normal, wi, wo),
@@ -305,6 +388,7 @@ fn material_sample(
     input: SampleInput,
 ) -> BsdfSample {
     match model {
+        MaterialKindTag::Standard => standard::sample(params, normal, wo, input),
         MaterialKindTag::Lambert => lambert::sample(params, normal, wo, input),
         MaterialKindTag::Metal => metal::sample(params, normal, wo, input),
         MaterialKindTag::Dielectric => dielectric::sample(params, normal, wo, input),

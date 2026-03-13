@@ -57,26 +57,48 @@ fn trace_hit_with_material(
     let bsdf_ctx = build_bsdf_context(setup, hit, dir.mul(-1.0), medium.ior);
     let params = dominant_material_params(mat);
     let roughness = params.roughness.clamp(0.0, 1.0);
-    let (transmission, ior, thin, specular_color, base_color, metallic) =
-        match dominant_material_model(mat) {
-            MaterialKindTag::Lambert => (
-                0.0,
-                1.0,
-                false,
-                Spectrum::rgb(0.0, 0.0, 0.0),
-                params.color,
-                0.0,
-            ),
-            MaterialKindTag::Metal => (0.0, 1.0, false, params.color, params.color, 1.0),
-            MaterialKindTag::Dielectric => (
-                1.0,
-                params.ior.clamp(1.0, 3.0),
-                params.thin_walled,
-                Spectrum::rgb(1.0, 1.0, 1.0),
-                params.color,
-                0.0,
-            ),
-        };
+    let (
+        transmission,
+        ior,
+        thin,
+        specular_color,
+        base_color,
+        metallic,
+        clearcoat,
+        specular_strength,
+    ) = match dominant_material_model(mat) {
+        MaterialKindTag::Standard => (
+            params.transmission.clamp(0.0, 1.0),
+            params.ior.clamp(1.0, 3.0),
+            params.thin_walled,
+            params.specular_color,
+            params.color,
+            params.metallic.clamp(0.0, 1.0),
+            params.clearcoat.clamp(0.0, 1.0),
+            (params.specular * params.specular_weight).clamp(0.0, 1.0),
+        ),
+        MaterialKindTag::Lambert => (
+            0.0,
+            1.0,
+            false,
+            Spectrum::rgb(0.0, 0.0, 0.0),
+            params.color,
+            0.0,
+            0.0,
+            0.0,
+        ),
+        MaterialKindTag::Metal => (0.0, 1.0, false, params.color, params.color, 1.0, 0.0, 1.0),
+        MaterialKindTag::Dielectric => (
+            1.0,
+            params.ior.clamp(1.0, 3.0),
+            params.thin_walled,
+            Spectrum::rgb(1.0, 1.0, 1.0),
+            params.color,
+            0.0,
+            0.0,
+            1.0,
+        ),
+    };
     let (eta_i, eta_t, next_ior) = if thin {
         (1.0, 1.0, medium.ior)
     } else if hit.front_face {
@@ -100,7 +122,12 @@ fn trace_hit_with_material(
     let reflect_weight = if transmission > 1.0e-4 {
         fresnel.clamp(0.0, 1.0)
     } else {
-        ((if metallic > 0.5 { 1.0 } else { 0.08 }) * fresnel + metallic * 0.8).clamp(0.0, 1.0)
+        let base_reflect = if metallic > 0.5 {
+            1.0
+        } else {
+            specular_strength.clamp(0.0, 1.0)
+        };
+        (base_reflect * fresnel + metallic * 0.8 + clearcoat * 0.2).clamp(0.0, 1.0)
     };
 
     let local_weight = ((1.0 - transmission) * (1.0 - reflect_weight)).clamp(0.0, 1.0);
@@ -224,21 +251,27 @@ pub(super) fn trace_ray_debug_aov(
         RayDebugAov::MaterialId => material_id_color(hit.material_id),
         RayDebugAov::Ior => {
             let ior = match dominant_material_model(mat) {
-                MaterialKindTag::Dielectric => dominant_material_params(mat).ior.clamp(1.0, 3.0),
+                MaterialKindTag::Dielectric | MaterialKindTag::Standard => {
+                    dominant_material_params(mat).ior.clamp(1.0, 3.0)
+                }
                 _ => 1.0,
             };
             let v = ((ior - 1.0) / 2.0).clamp(0.0, 1.0);
             Spectrum::rgb(v, v, v)
         }
         RayDebugAov::Transmission => {
-            let v =
-                matches!(dominant_material_model(mat), MaterialKindTag::Dielectric) as u8 as f32;
+            let v = matches!(
+                dominant_material_model(mat),
+                MaterialKindTag::Dielectric | MaterialKindTag::Standard
+            ) as u8 as f32;
             Spectrum::rgb(v, v, v)
         }
         RayDebugAov::Fresnel => {
             let wo = dir.mul(-1.0).normalize();
             let ior = match dominant_material_model(mat) {
-                MaterialKindTag::Dielectric => dominant_material_params(mat).ior.clamp(1.0, 3.0),
+                MaterialKindTag::Dielectric | MaterialKindTag::Standard => {
+                    dominant_material_params(mat).ior.clamp(1.0, 3.0)
+                }
                 _ => 1.0,
             };
             let f = fresnel_dielectric_scalar(normal.dot(wo).abs(), 1.0, ior);
