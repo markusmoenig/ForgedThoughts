@@ -54,15 +54,15 @@ let floor_mat = CheckerFloor {
 };
 
 let robot_mat = Material {
-  color: #3f4854,
-  roughness: 0.44,
-  metallic: 0.42
+  color: #2c3138,
+  roughness: 0.64,
+  metallic: 0.12
 };
 
 let accent_mat = Material {
-  color: #bfc6cf,
-  roughness: 0.22,
-  metallic: 0.88
+  color: #8f979f,
+  roughness: 0.34,
+  metallic: 0.72
 };
 
 let joint_mat = Material {
@@ -101,8 +101,8 @@ let rig = Robot {
   ik: {
     leg_l: vec3(-0.27, -0.925, 0.12),
     leg_r: vec3(0.20, -0.90, -0.07),
-    arm_l: vec3(-0.74, -0.08, 0.28),
-    arm_r: vec3(0.42, 0.22, -0.12)
+    arm_l: vec3(-0.78, -0.16, 0.22),
+    arm_r: vec3(0.48, 0.16, -0.16)
   }
 }
   .attach(stone, Top + 0.08);
@@ -125,48 +125,48 @@ let neck = RobotSegment {
 
 let shoulder_bridge = RobotSegment {
   length: 0.78,
-  width: 0.10,
-  depth: 0.10,
+  width: 0.08,
+  depth: 0.08,
   round: 0.02,
   material: accent_mat
 }.bind(rig.shoulder_span);
 
 let hip_bridge = RobotSegment {
   length: 0.42,
-  width: 0.11,
-  depth: 0.11,
+  width: 0.09,
+  depth: 0.09,
   round: 0.02,
   material: accent_mat
 }.bind(rig.hip_span);
 
 let upper_arm_l = RobotSegment {
-  length: 0.40,
-  width: 0.17,
-  depth: 0.17,
+  length: 0.38,
+  width: 0.19,
+  depth: 0.18,
   round: 0.03,
   material: robot_mat
 }.bind(rig.upper_arm_l);
 
 let upper_arm_r = RobotSegment {
-  length: 0.40,
-  width: 0.17,
-  depth: 0.17,
+  length: 0.38,
+  width: 0.19,
+  depth: 0.18,
   round: 0.03,
   material: robot_mat
 }.bind(rig.upper_arm_r);
 
 let forearm_l = RobotSegment {
   length: 0.54,
-  width: 0.13,
-  depth: 0.13,
+  width: 0.12,
+  depth: 0.12,
   round: 0.03,
   material: robot_mat
 }.bind(rig.forearm_l);
 
 let forearm_r = RobotSegment {
   length: 0.54,
-  width: 0.13,
-  depth: 0.13,
+  width: 0.12,
+  depth: 0.12,
   round: 0.03,
   material: robot_mat
 }.bind(rig.forearm_r);
@@ -262,21 +262,21 @@ let palm_r = RobotHand {
 }.attach(rig.hand_r, Center);
 
 let foot_l = RobotFoot {
-  width: 0.20,
-  height: 0.09,
-  length: 0.38,
+  width: 0.24,
+  height: 0.10,
+  length: 0.44,
   round: 0.02,
-  material: robot_mat
+  material: accent_mat
 }.attach(rig.foot_l, Center);
 let foot_r = RobotFoot {
-  width: 0.20,
-  height: 0.09,
-  length: 0.38,
+  width: 0.24,
+  height: 0.10,
+  length: 0.44,
   round: 0.02,
-  material: robot_mat
+  material: accent_mat
 }.attach(rig.foot_r, Center);
 
-let core = ((((torso + shoulder_bridge) + hip_bridge) + neck) + head) + pelvis;
+let core = (((torso + hip_bridge) + neck) + head) + pelvis;
 let left_arm = (((upper_arm_l + forearm_l) + shoulder_l) + elbow_l) + hand_l;
 let right_arm = (((upper_arm_r + forearm_r) + shoulder_r) + elbow_r) + hand_r;
 let left_leg = ((thigh_l + shin_l) + knee_l) + foot_l;

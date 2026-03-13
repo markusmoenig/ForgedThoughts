@@ -13,6 +13,118 @@ use crate::ast::{
 };
 use crate::vm::{VmFunction, VmInstruction};
 
+type JitScalar = f32;
+const JIT_TYPE: types::Type = types::F32;
+
+fn jit_const(fb: &mut FunctionBuilder<'_>, value: f32) -> cranelift_codegen::ir::Value {
+    fb.ins().f32const(value as JitScalar)
+}
+
+fn vec2_len(x: JitScalar, y: JitScalar) -> JitScalar {
+    (x * x + y * y).sqrt()
+}
+
+fn axis_cylinder_distance_native_f32(
+    p: [JitScalar; 3],
+    axis: usize,
+    radius: JitScalar,
+    half_len: JitScalar,
+) -> JitScalar {
+    let (axial, radial) = match axis {
+        0 => (p[0].abs() - half_len, [p[1], p[2]]),
+        1 => (p[1].abs() - half_len, [p[0], p[2]]),
+        _ => (p[2].abs() - half_len, [p[0], p[1]]),
+    };
+    let radial = vec2_len(radial[0], radial[1]) - radius;
+    let outside = vec2_len(radial.max(0.0), axial.max(0.0));
+    let inside = radial.max(axial).min(0.0);
+    outside + inside
+}
+
+fn hole_line_distance_native_f32(
+    p: [JitScalar; 3],
+    cylinder_axis: usize,
+    radius: JitScalar,
+    half_len: JitScalar,
+    spacing: JitScalar,
+    count: usize,
+) -> JitScalar {
+    let count = count.max(1);
+    let start = -0.5 * (count.saturating_sub(1) as JitScalar) * spacing;
+    let mut best = JitScalar::INFINITY;
+    for i in 0..count {
+        let mut q = p;
+        q[2] -= start + i as JitScalar * spacing;
+        best = best.min(axis_cylinder_distance_native_f32(
+            q,
+            cylinder_axis,
+            radius,
+            half_len,
+        ));
+    }
+    best
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn forge_hole_line_x_sdf(
+    px: JitScalar,
+    py: JitScalar,
+    pz: JitScalar,
+    radius: JitScalar,
+    half_len: JitScalar,
+    spacing: JitScalar,
+    count: JitScalar,
+) -> JitScalar {
+    hole_line_distance_native_f32(
+        [px, py, pz],
+        0,
+        radius,
+        half_len,
+        spacing,
+        count.round().clamp(1.0, 32.0) as usize,
+    )
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn forge_hole_line_y_sdf(
+    px: JitScalar,
+    py: JitScalar,
+    pz: JitScalar,
+    radius: JitScalar,
+    half_len: JitScalar,
+    spacing: JitScalar,
+    count: JitScalar,
+) -> JitScalar {
+    hole_line_distance_native_f32(
+        [px, py, pz],
+        1,
+        radius,
+        half_len,
+        spacing,
+        count.round().clamp(1.0, 32.0) as usize,
+    )
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn forge_hole_line_z_sdf(
+    px: JitScalar,
+    py: JitScalar,
+    pz: JitScalar,
+    radius: JitScalar,
+    half_len: JitScalar,
+    spacing: JitScalar,
+    count: JitScalar,
+) -> JitScalar {
+    hole_line_distance_native_f32(
+        [px, py, pz],
+        2,
+        radius,
+        half_len,
+        spacing,
+        count.round().clamp(1.0, 32.0) as usize,
+    )
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct JitFunction {
     code_ptr: *const u8,
@@ -65,7 +177,7 @@ unsafe impl Send for JitVec3Function {}
 unsafe impl Sync for JitVec3Function {}
 
 impl JitFunction {
-    pub fn invoke(&self, args: &[f64]) -> Option<f64> {
+    pub fn invoke(&self, args: &[f32]) -> Option<f32> {
         if args.len() != self.argc {
             return None;
         }
@@ -74,7 +186,7 @@ impl JitFunction {
 }
 
 impl JitSdfDistanceFunction {
-    pub fn invoke(&self, p: [f64; 3], captures: &[f64]) -> Option<f64> {
+    pub fn invoke(&self, p: [f32; 3], captures: &[f32]) -> Option<f32> {
         let mut args = Vec::with_capacity(3 + captures.len());
         args.extend_from_slice(&p);
         args.extend_from_slice(captures);
@@ -83,13 +195,13 @@ impl JitSdfDistanceFunction {
 }
 
 impl JitModifierDistanceFunction {
-    pub fn invoke(&self, d: f64, p: [f64; 3]) -> Option<f64> {
+    pub fn invoke(&self, d: f32, p: [f32; 3]) -> Option<f32> {
         invoke_code_ptr(self.code_ptr, &[d, p[0], p[1], p[2]])
     }
 }
 
 impl JitSdfVec3Function {
-    pub fn invoke(&self, p: [f64; 3], captures: &[f64]) -> Option<[f64; 3]> {
+    pub fn invoke(&self, p: [f32; 3], captures: &[f32]) -> Option<[f32; 3]> {
         let mut args = Vec::with_capacity(3 + captures.len());
         args.extend_from_slice(&p);
         args.extend_from_slice(captures);
@@ -102,7 +214,7 @@ impl JitSdfVec3Function {
 }
 
 impl JitVec3Function {
-    pub fn invoke(&self, args: &[f64]) -> Option<[f64; 3]> {
+    pub fn invoke(&self, args: &[f32]) -> Option<[f32; 3]> {
         Some([
             self.components[0].invoke(args)?,
             self.components[1].invoke(args)?,
@@ -111,71 +223,131 @@ impl JitVec3Function {
     }
 }
 
-fn invoke_code_ptr(code_ptr: *const u8, args: &[f64]) -> Option<f64> {
+fn invoke_code_ptr(code_ptr: *const u8, args: &[f32]) -> Option<f32> {
+    let args = args.to_vec();
     unsafe {
         match args.len() {
             0 => {
-                let f: extern "C" fn() -> f64 = std::mem::transmute(code_ptr);
+                let f: extern "C" fn() -> JitScalar = std::mem::transmute(code_ptr);
                 Some(f())
             }
             1 => {
-                let f: extern "C" fn(f64) -> f64 = std::mem::transmute(code_ptr);
+                let f: extern "C" fn(JitScalar) -> JitScalar = std::mem::transmute(code_ptr);
                 Some(f(args[0]))
             }
             2 => {
-                let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(code_ptr);
+                let f: extern "C" fn(JitScalar, JitScalar) -> JitScalar =
+                    std::mem::transmute(code_ptr);
                 Some(f(args[0], args[1]))
             }
             3 => {
-                let f: extern "C" fn(f64, f64, f64) -> f64 = std::mem::transmute(code_ptr);
+                let f: extern "C" fn(JitScalar, JitScalar, JitScalar) -> JitScalar =
+                    std::mem::transmute(code_ptr);
                 Some(f(args[0], args[1], args[2]))
             }
             4 => {
-                let f: extern "C" fn(f64, f64, f64, f64) -> f64 = std::mem::transmute(code_ptr);
+                let f: extern "C" fn(JitScalar, JitScalar, JitScalar, JitScalar) -> JitScalar =
+                    std::mem::transmute(code_ptr);
                 Some(f(args[0], args[1], args[2], args[3]))
             }
             5 => {
-                let f: extern "C" fn(f64, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(code_ptr);
+                let f: extern "C" fn(
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                ) -> JitScalar = std::mem::transmute(code_ptr);
                 Some(f(args[0], args[1], args[2], args[3], args[4]))
             }
             6 => {
-                let f: extern "C" fn(f64, f64, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(code_ptr);
+                let f: extern "C" fn(
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                ) -> JitScalar = std::mem::transmute(code_ptr);
                 Some(f(args[0], args[1], args[2], args[3], args[4], args[5]))
             }
             7 => {
-                let f: extern "C" fn(f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(code_ptr);
+                let f: extern "C" fn(
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                ) -> JitScalar = std::mem::transmute(code_ptr);
                 Some(f(
                     args[0], args[1], args[2], args[3], args[4], args[5], args[6],
                 ))
             }
             8 => {
-                let f: extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(code_ptr);
+                let f: extern "C" fn(
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                ) -> JitScalar = std::mem::transmute(code_ptr);
                 Some(f(
                     args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
                 ))
             }
             9 => {
-                let f: extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(code_ptr);
+                let f: extern "C" fn(
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                ) -> JitScalar = std::mem::transmute(code_ptr);
                 Some(f(
                     args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
                 ))
             }
             10 => {
-                let f: extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(code_ptr);
+                let f: extern "C" fn(
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                ) -> JitScalar = std::mem::transmute(code_ptr);
                 Some(f(
                     args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
                     args[8], args[9],
                 ))
             }
             11 => {
-                let f: extern "C" fn(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64) -> f64 =
-                    std::mem::transmute(code_ptr);
+                let f: extern "C" fn(
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                ) -> JitScalar = std::mem::transmute(code_ptr);
                 Some(f(
                     args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
                     args[8], args[9], args[10],
@@ -183,19 +355,19 @@ fn invoke_code_ptr(code_ptr: *const u8, args: &[f64]) -> Option<f64> {
             }
             12 => {
                 let f: extern "C" fn(
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                    f64,
-                ) -> f64 = std::mem::transmute(code_ptr);
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                    JitScalar,
+                ) -> JitScalar = std::mem::transmute(code_ptr);
                 Some(f(
                     args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
                     args[8], args[9], args[10], args[11],
@@ -214,7 +386,10 @@ fn create_module() -> Option<JITModule> {
     let isa = isa_builder
         .finish(settings::Flags::new(flag_builder))
         .ok()?;
-    let builder = JITBuilder::with_isa(isa, default_libcall_names());
+    let mut builder = JITBuilder::with_isa(isa, default_libcall_names());
+    builder.symbol("forge_hole_line_x_sdf", forge_hole_line_x_sdf as *const u8);
+    builder.symbol("forge_hole_line_y_sdf", forge_hole_line_y_sdf as *const u8);
+    builder.symbol("forge_hole_line_z_sdf", forge_hole_line_z_sdf as *const u8);
     Some(JITModule::new(builder))
 }
 
@@ -226,9 +401,9 @@ pub fn compile_jit_function(name: &str, function: &VmFunction) -> Option<JitFunc
     let mut module = create_module()?;
     let mut sig = module.make_signature();
     for _ in &function.params {
-        sig.params.push(AbiParam::new(types::F64));
+        sig.params.push(AbiParam::new(JIT_TYPE));
     }
-    sig.returns.push(AbiParam::new(types::F64));
+    sig.returns.push(AbiParam::new(JIT_TYPE));
 
     let func_id = module.declare_function(name, Linkage::Local, &sig).ok()?;
 
@@ -246,7 +421,7 @@ pub fn compile_jit_function(name: &str, function: &VmFunction) -> Option<JitFunc
     let mut vars = HashMap::new();
     for (index, param) in function.params.iter().enumerate() {
         let var = Variable::from_u32(index as u32);
-        fb.declare_var(var, types::F64);
+        fb.declare_var(var, JIT_TYPE);
         let value = fb.block_params(block)[index];
         fb.def_var(var, value);
         vars.insert(param.clone(), var);
@@ -257,7 +432,7 @@ pub fn compile_jit_function(name: &str, function: &VmFunction) -> Option<JitFunc
 
     for instruction in &function.code {
         match instruction {
-            VmInstruction::PushNumber(v) => stack.push(fb.ins().f64const(*v)),
+            VmInstruction::PushNumber(v) => stack.push(jit_const(&mut fb, *v)),
             VmInstruction::LoadName(name) => {
                 let var = *vars.get(name)?;
                 stack.push(fb.use_var(var));
@@ -291,7 +466,7 @@ pub fn compile_jit_function(name: &str, function: &VmFunction) -> Option<JitFunc
                 let value = stack.pop()?;
                 let var = Variable::from_u32(next_var as u32);
                 next_var += 1;
-                fb.declare_var(var, types::F64);
+                fb.declare_var(var, JIT_TYPE);
                 fb.def_var(var, value);
                 vars.insert(name.clone(), var);
             }
@@ -360,9 +535,9 @@ pub fn compile_sdf_distance_function(def: &SdfDef) -> Option<JitSdfDistanceFunct
     let mut module = create_module()?;
     let mut sig = module.make_signature();
     for _ in 0..(3 + capture_names.len()) {
-        sig.params.push(AbiParam::new(types::F64));
+        sig.params.push(AbiParam::new(JIT_TYPE));
     }
-    sig.returns.push(AbiParam::new(types::F64));
+    sig.returns.push(AbiParam::new(JIT_TYPE));
 
     let func_id = module
         .declare_function(&format!("{}_distance_vec3", def.name), Linkage::Local, &sig)
@@ -388,7 +563,7 @@ pub fn compile_sdf_distance_function(def: &SdfDef) -> Option<JitSdfDistanceFunct
     let mut captures = HashMap::new();
     for (index, name) in capture_names.iter().enumerate() {
         let var = Variable::from_u32(index as u32);
-        fb.declare_var(var, types::F64);
+        fb.declare_var(var, JIT_TYPE);
         fb.def_var(var, block_params[3 + index]);
         captures.insert(name.clone(), var);
     }
@@ -510,9 +685,9 @@ pub fn compile_modifier_distance_function(
     let mut module = create_module()?;
     let mut sig = module.make_signature();
     for _ in 0..4 {
-        sig.params.push(AbiParam::new(types::F64));
+        sig.params.push(AbiParam::new(JIT_TYPE));
     }
-    sig.returns.push(AbiParam::new(types::F64));
+    sig.returns.push(AbiParam::new(JIT_TYPE));
 
     let func_id = module
         .declare_function(&format!("{name}_modifier_distance"), Linkage::Local, &sig)
@@ -648,9 +823,9 @@ fn material_function_returns_vec3(
     let mut module = create_module()?;
     let mut sig = module.make_signature();
     for _ in 0..argc {
-        sig.params.push(AbiParam::new(types::F64));
+        sig.params.push(AbiParam::new(JIT_TYPE));
     }
-    sig.returns.push(AbiParam::new(types::F64));
+    sig.returns.push(AbiParam::new(JIT_TYPE));
 
     let func_id = module
         .declare_function("material_vec3_probe", Linkage::Local, &sig)
@@ -727,9 +902,9 @@ fn compile_material_vec3_component(
     let mut module = create_module()?;
     let mut sig = module.make_signature();
     for _ in 0..argc {
-        sig.params.push(AbiParam::new(types::F64));
+        sig.params.push(AbiParam::new(JIT_TYPE));
     }
-    sig.returns.push(AbiParam::new(types::F64));
+    sig.returns.push(AbiParam::new(JIT_TYPE));
 
     let func_id = module
         .declare_function(
@@ -756,7 +931,7 @@ fn compile_material_vec3_component(
         match capture.kind {
             JitCaptureKind::Scalar => {
                 let var = Variable::from_u32(next_param as u32);
-                fb.declare_var(var, types::F64);
+                fb.declare_var(var, JIT_TYPE);
                 fb.def_var(var, block_params[next_param]);
                 capture_vars.insert(
                     capture.name.clone(),
@@ -765,10 +940,10 @@ fn compile_material_vec3_component(
                 next_param += 1;
             }
             JitCaptureKind::Vec3 => {
-                let mut vec = [fb.ins().f64const(0.0); 3];
+                let mut vec = [jit_const(&mut fb, 0.0); 3];
                 for axis in 0..3 {
                     let var = Variable::from_u32((next_param + axis) as u32);
-                    fb.declare_var(var, types::F64);
+                    fb.declare_var(var, JIT_TYPE);
                     fb.def_var(var, block_params[next_param + axis]);
                     vec[axis] = fb.use_var(var);
                 }
@@ -990,7 +1165,7 @@ fn collect_sdf_distance_captures(
 
 fn compile_sdf_expr(expr: &Expr, ctx: &mut SdfJitContext<'_, '_>) -> Option<SdfJitValue> {
     match expr {
-        Expr::Number(value) => Some(SdfJitValue::Scalar(ctx.fb.ins().f64const(*value))),
+        Expr::Number(value) => Some(SdfJitValue::Scalar(jit_const(ctx.fb, *value as f32))),
         Expr::Ident(name) => {
             if let Some(value) = ctx.locals.get(name) {
                 return Some(*value);
@@ -1013,7 +1188,7 @@ fn compile_sdf_expr(expr: &Expr, ctx: &mut SdfJitContext<'_, '_>) -> Option<SdfJ
             }
         }
         Expr::ObjectLiteral { type_name, fields } if type_name == "vec3" => {
-            let zero = ctx.fb.ins().f64const(0.0);
+            let zero = jit_const(ctx.fb, 0.0);
             let mut values = [zero, zero, zero];
             for (name, expr) in fields {
                 let SdfJitValue::Scalar(value) = compile_sdf_expr(expr, ctx)? else {
@@ -1088,7 +1263,7 @@ fn compile_sdf_primitive_distance_call(
             let dx = ctx.fb.ins().fsub(ax, b[0]);
             let dy = ctx.fb.ins().fsub(ay, b[1]);
             let dz = ctx.fb.ins().fsub(az, b[2]);
-            let zero = ctx.fb.ins().f64const(0.0);
+            let zero = jit_const(ctx.fb, 0.0);
             let ox = ctx.fb.ins().fmax(dx, zero);
             let oy = ctx.fb.ins().fmax(dy, zero);
             let oz = ctx.fb.ins().fmax(dz, zero);
@@ -1128,7 +1303,7 @@ fn compile_sdf_primitive_distance_call(
             let dx = ctx.fb.ins().fsub(radial, *radius);
             let abs_y = ctx.fb.ins().fabs(p[1]);
             let dy = ctx.fb.ins().fsub(abs_y, *half_height);
-            let zero = ctx.fb.ins().f64const(0.0);
+            let zero = jit_const(ctx.fb, 0.0);
             let ox = ctx.fb.ins().fmax(dx, zero);
             let oy = ctx.fb.ins().fmax(dy, zero);
             let ox2 = ctx.fb.ins().fmul(ox, ox);
@@ -1174,7 +1349,7 @@ fn emit_box_distance_sdf(
     let dx = ctx.fb.ins().fsub(ax, b[0]);
     let dy = ctx.fb.ins().fsub(ay, b[1]);
     let dz = ctx.fb.ins().fsub(az, b[2]);
-    let zero = ctx.fb.ins().f64const(0.0);
+    let zero = jit_const(ctx.fb, 0.0);
     let ox = ctx.fb.ins().fmax(dx, zero);
     let oy = ctx.fb.ins().fmax(dy, zero);
     let oz = ctx.fb.ins().fmax(dz, zero);
@@ -1209,7 +1384,7 @@ fn emit_axis_cylinder_distance_sdf(
     let radial_sum = ctx.fb.ins().fadd(r0_2, r1_2);
     let radial_len = ctx.fb.ins().sqrt(radial_sum);
     let radial = ctx.fb.ins().fsub(radial_len, radius);
-    let zero = ctx.fb.ins().f64const(0.0);
+    let zero = jit_const(ctx.fb, 0.0);
     let orad = ctx.fb.ins().fmax(radial, zero);
     let oax = ctx.fb.ins().fmax(axial, zero);
     let orad2 = ctx.fb.ins().fmul(orad, orad);
@@ -1228,7 +1403,7 @@ fn emit_box_shell_distance_sdf(
     wall: cranelift_codegen::ir::Value,
     round: cranelift_codegen::ir::Value,
 ) -> cranelift_codegen::ir::Value {
-    let eps = ctx.fb.ins().f64const(0.001);
+    let eps = jit_const(ctx.fb, 0.001);
     let outer_x = ctx.fb.ins().fsub(half[0], round);
     let outer_y = ctx.fb.ins().fsub(half[1], round);
     let outer_z = ctx.fb.ins().fsub(half[2], round);
@@ -1251,10 +1426,10 @@ fn emit_box_shell_distance_sdf(
         ctx.fb.ins().fmax(inner_y, eps),
         ctx.fb.ins().fmax(inner_z, eps),
     ];
-    let four_tenths = ctx.fb.ins().f64const(0.4);
+    let four_tenths = jit_const(ctx.fb, 0.4);
     let wall_term = ctx.fb.ins().fmul(wall, four_tenths);
     let inner_round_raw = ctx.fb.ins().fsub(round, wall_term);
-    let zero = ctx.fb.ins().f64const(0.0);
+    let zero = jit_const(ctx.fb, 0.0);
     let inner_round = ctx.fb.ins().fmax(inner_round_raw, zero);
     let inner_box = emit_box_distance_sdf(ctx, p, inner_half);
     let inner = ctx.fb.ins().fsub(inner_box, inner_round);
@@ -1295,7 +1470,7 @@ fn emit_rotate_vec3(
     deg: cranelift_codegen::ir::Value,
     axis: u8,
 ) -> Option<[cranelift_codegen::ir::Value; 3]> {
-    let pi_over_180 = ctx.fb.ins().f64const(std::f64::consts::PI / 180.0);
+    let pi_over_180 = jit_const(ctx.fb, std::f32::consts::PI / 180.0);
     let radians = ctx.fb.ins().fmul(deg, pi_over_180);
     let s = emit_unary_import_call(ctx.fb, ctx.module, "sin", radians)?;
     let c = emit_unary_import_call(ctx.fb, ctx.module, "cos", radians)?;
@@ -1337,9 +1512,9 @@ fn compile_sdf_vec3_component(
     let mut module = create_module()?;
     let mut sig = module.make_signature();
     for _ in 0..argc {
-        sig.params.push(AbiParam::new(types::F64));
+        sig.params.push(AbiParam::new(JIT_TYPE));
     }
-    sig.returns.push(AbiParam::new(types::F64));
+    sig.returns.push(AbiParam::new(JIT_TYPE));
 
     let func_id = module
         .declare_function(
@@ -1369,7 +1544,7 @@ fn compile_sdf_vec3_component(
     let mut captures = HashMap::new();
     for (index, name) in capture_names.iter().enumerate() {
         let var = Variable::from_u32(index as u32);
-        fb.declare_var(var, types::F64);
+        fb.declare_var(var, JIT_TYPE);
         fb.def_var(var, block_params[3 + index]);
         captures.insert(name.clone(), var);
     }
@@ -1481,7 +1656,7 @@ fn compile_sdf_builtin(
             let sum_xy = ctx.fb.ins().fadd(x2, y2);
             let sum = ctx.fb.ins().fadd(sum_xy, z2);
             let len = ctx.fb.ins().sqrt(sum);
-            let eps = ctx.fb.ins().f64const(1.0e-9);
+            let eps = jit_const(ctx.fb, 1.0e-9);
             let safe_len = ctx.fb.ins().fmax(len, eps);
             Some(SdfJitValue::Vec3([
                 ctx.fb.ins().fdiv(values[0], safe_len),
@@ -1501,8 +1676,8 @@ fn compile_sdf_builtin(
                 *x,
                 *edge,
             );
-            let zero = ctx.fb.ins().f64const(0.0);
-            let one = ctx.fb.ins().f64const(1.0);
+            let zero = jit_const(ctx.fb, 0.0);
+            let one = jit_const(ctx.fb, 1.0);
             Some(SdfJitValue::Scalar(ctx.fb.ins().select(cond, zero, one)))
         }
         (
@@ -1517,7 +1692,7 @@ fn compile_sdf_builtin(
             Some(SdfJitValue::Scalar(ctx.fb.ins().fmin(maxed, *b)))
         }
         ("mix", [lhs, rhs, SdfJitValue::Scalar(a)]) => {
-            let one = ctx.fb.ins().f64const(1.0);
+            let one = jit_const(ctx.fb, 1.0);
             let inv = ctx.fb.ins().fsub(one, *a);
             match (lhs, rhs) {
                 (SdfJitValue::Scalar(x), SdfJitValue::Scalar(y)) => {
@@ -1575,13 +1750,13 @@ fn compile_sdf_builtin(
             let span = ctx.fb.ins().fsub(*edge1, *edge0);
             let x_minus_edge0 = ctx.fb.ins().fsub(*x, *edge0);
             let t = ctx.fb.ins().fdiv(x_minus_edge0, span);
-            let zero = ctx.fb.ins().f64const(0.0);
-            let one = ctx.fb.ins().f64const(1.0);
+            let zero = jit_const(ctx.fb, 0.0);
+            let one = jit_const(ctx.fb, 1.0);
             let t_max = ctx.fb.ins().fmax(t, zero);
             let t = ctx.fb.ins().fmin(t_max, one);
             let t2 = ctx.fb.ins().fmul(t, t);
-            let three = ctx.fb.ins().f64const(3.0);
-            let two = ctx.fb.ins().f64const(2.0);
+            let three = jit_const(ctx.fb, 3.0);
+            let two = jit_const(ctx.fb, 2.0);
             let two_t = ctx.fb.ins().fmul(two, t);
             let cubic = ctx.fb.ins().fsub(three, two_t);
             Some(SdfJitValue::Scalar(ctx.fb.ins().fmul(t2, cubic)))
@@ -1639,6 +1814,63 @@ fn compile_sdf_builtin(
         ) => Some(SdfJitValue::Scalar(emit_axis_cylinder_distance_sdf(
             ctx, *p, *radius, *half_len, 2,
         ))),
+        (
+            "hole_line_x_sdf",
+            [
+                SdfJitValue::Vec3(p),
+                SdfJitValue::Scalar(radius),
+                SdfJitValue::Scalar(half_len),
+                SdfJitValue::Scalar(spacing),
+                SdfJitValue::Scalar(count),
+            ],
+        ) => Some(SdfJitValue::Scalar(emit_hole_line_import_call(
+            ctx.fb,
+            ctx.module,
+            "forge_hole_line_x_sdf",
+            *p,
+            *radius,
+            *half_len,
+            *spacing,
+            *count,
+        )?)),
+        (
+            "hole_line_y_sdf",
+            [
+                SdfJitValue::Vec3(p),
+                SdfJitValue::Scalar(radius),
+                SdfJitValue::Scalar(half_len),
+                SdfJitValue::Scalar(spacing),
+                SdfJitValue::Scalar(count),
+            ],
+        ) => Some(SdfJitValue::Scalar(emit_hole_line_import_call(
+            ctx.fb,
+            ctx.module,
+            "forge_hole_line_y_sdf",
+            *p,
+            *radius,
+            *half_len,
+            *spacing,
+            *count,
+        )?)),
+        (
+            "hole_line_z_sdf",
+            [
+                SdfJitValue::Vec3(p),
+                SdfJitValue::Scalar(radius),
+                SdfJitValue::Scalar(half_len),
+                SdfJitValue::Scalar(spacing),
+                SdfJitValue::Scalar(count),
+            ],
+        ) => Some(SdfJitValue::Scalar(emit_hole_line_import_call(
+            ctx.fb,
+            ctx.module,
+            "forge_hole_line_z_sdf",
+            *p,
+            *radius,
+            *half_len,
+            *spacing,
+            *count,
+        )?)),
         _ => None,
     }
 }
@@ -1973,7 +2205,7 @@ fn compile_material_expr(
     ctx: &mut MaterialJitContext<'_, '_>,
 ) -> Option<MaterialJitValue> {
     match expr {
-        Expr::Number(value) => Some(MaterialJitValue::Scalar(ctx.fb.ins().f64const(*value))),
+        Expr::Number(value) => Some(MaterialJitValue::Scalar(jit_const(ctx.fb, *value as f32))),
         Expr::Ident(name) => {
             if let Some(value) = ctx.locals.get(name) {
                 return Some(*value);
@@ -2001,7 +2233,7 @@ fn compile_material_expr(
             }
         }
         Expr::ObjectLiteral { type_name, fields } if type_name == "vec3" => {
-            let zero = ctx.fb.ins().f64const(0.0);
+            let zero = jit_const(ctx.fb, 0.0);
             let mut values = [zero, zero, zero];
             for (name, expr) in fields {
                 let MaterialJitValue::Scalar(value) = compile_material_expr(expr, ctx)? else {
@@ -2083,7 +2315,7 @@ fn compile_material_primitive_distance_call(
             let dx = ctx.fb.ins().fsub(ax, b[0]);
             let dy = ctx.fb.ins().fsub(ay, b[1]);
             let dz = ctx.fb.ins().fsub(az, b[2]);
-            let zero = ctx.fb.ins().f64const(0.0);
+            let zero = jit_const(ctx.fb, 0.0);
             let ox = ctx.fb.ins().fmax(dx, zero);
             let oy = ctx.fb.ins().fmax(dy, zero);
             let oz = ctx.fb.ins().fmax(dz, zero);
@@ -2123,7 +2355,7 @@ fn compile_material_primitive_distance_call(
             let dx = ctx.fb.ins().fsub(radial, *radius);
             let abs_y = ctx.fb.ins().fabs(p[1]);
             let dy = ctx.fb.ins().fsub(abs_y, *half_height);
-            let zero = ctx.fb.ins().f64const(0.0);
+            let zero = jit_const(ctx.fb, 0.0);
             let ox = ctx.fb.ins().fmax(dx, zero);
             let oy = ctx.fb.ins().fmax(dy, zero);
             let ox2 = ctx.fb.ins().fmul(ox, ox);
@@ -2271,7 +2503,7 @@ fn compile_material_builtin(
             let sum_xy = ctx.fb.ins().fadd(x2, y2);
             let sum = ctx.fb.ins().fadd(sum_xy, z2);
             let len = ctx.fb.ins().sqrt(sum);
-            let eps = ctx.fb.ins().f64const(1.0e-9);
+            let eps = jit_const(ctx.fb, 1.0e-9);
             let safe_len = ctx.fb.ins().fmax(len, eps);
             Some(MaterialJitValue::Vec3([
                 ctx.fb.ins().fdiv(values[0], safe_len),
@@ -2291,8 +2523,8 @@ fn compile_material_builtin(
                 *x,
                 *edge,
             );
-            let zero = ctx.fb.ins().f64const(0.0);
-            let one = ctx.fb.ins().f64const(1.0);
+            let zero = jit_const(ctx.fb, 0.0);
+            let one = jit_const(ctx.fb, 1.0);
             Some(MaterialJitValue::Scalar(
                 ctx.fb.ins().select(cond, zero, one),
             ))
@@ -2358,8 +2590,65 @@ fn compile_material_builtin(
         ) => Some(MaterialJitValue::Scalar(
             emit_material_axis_cylinder_distance(ctx, *p, *radius, *half_len, 2),
         )),
+        (
+            "hole_line_x_sdf",
+            [
+                MaterialJitValue::Vec3(p),
+                MaterialJitValue::Scalar(radius),
+                MaterialJitValue::Scalar(half_len),
+                MaterialJitValue::Scalar(spacing),
+                MaterialJitValue::Scalar(count),
+            ],
+        ) => Some(MaterialJitValue::Scalar(emit_hole_line_import_call(
+            ctx.fb,
+            ctx.module,
+            "forge_hole_line_x_sdf",
+            *p,
+            *radius,
+            *half_len,
+            *spacing,
+            *count,
+        )?)),
+        (
+            "hole_line_y_sdf",
+            [
+                MaterialJitValue::Vec3(p),
+                MaterialJitValue::Scalar(radius),
+                MaterialJitValue::Scalar(half_len),
+                MaterialJitValue::Scalar(spacing),
+                MaterialJitValue::Scalar(count),
+            ],
+        ) => Some(MaterialJitValue::Scalar(emit_hole_line_import_call(
+            ctx.fb,
+            ctx.module,
+            "forge_hole_line_y_sdf",
+            *p,
+            *radius,
+            *half_len,
+            *spacing,
+            *count,
+        )?)),
+        (
+            "hole_line_z_sdf",
+            [
+                MaterialJitValue::Vec3(p),
+                MaterialJitValue::Scalar(radius),
+                MaterialJitValue::Scalar(half_len),
+                MaterialJitValue::Scalar(spacing),
+                MaterialJitValue::Scalar(count),
+            ],
+        ) => Some(MaterialJitValue::Scalar(emit_hole_line_import_call(
+            ctx.fb,
+            ctx.module,
+            "forge_hole_line_z_sdf",
+            *p,
+            *radius,
+            *half_len,
+            *spacing,
+            *count,
+        )?)),
         ("mix", [lhs, rhs, MaterialJitValue::Scalar(a)]) => {
-            let one = ctx.fb.ins().f64const(1.0);
+            let one = jit_const(ctx.fb, 1.0);
             let inv = ctx.fb.ins().fsub(one, *a);
             match (lhs, rhs) {
                 (MaterialJitValue::Scalar(x), MaterialJitValue::Scalar(y)) => {
@@ -2420,13 +2709,13 @@ fn compile_material_builtin(
             let span = ctx.fb.ins().fsub(*edge1, *edge0);
             let x_minus_edge0 = ctx.fb.ins().fsub(*x, *edge0);
             let t = ctx.fb.ins().fdiv(x_minus_edge0, span);
-            let zero = ctx.fb.ins().f64const(0.0);
-            let one = ctx.fb.ins().f64const(1.0);
+            let zero = jit_const(ctx.fb, 0.0);
+            let one = jit_const(ctx.fb, 1.0);
             let t_max = ctx.fb.ins().fmax(t, zero);
             let t = ctx.fb.ins().fmin(t_max, one);
             let t2 = ctx.fb.ins().fmul(t, t);
-            let three = ctx.fb.ins().f64const(3.0);
-            let two = ctx.fb.ins().f64const(2.0);
+            let three = jit_const(ctx.fb, 3.0);
+            let two = jit_const(ctx.fb, 2.0);
             let two_t = ctx.fb.ins().fmul(two, t);
             let cubic = ctx.fb.ins().fsub(three, two_t);
             Some(MaterialJitValue::Scalar(ctx.fb.ins().fmul(t2, cubic)))
@@ -2441,7 +2730,7 @@ fn emit_material_rotate_vec3(
     deg: cranelift_codegen::ir::Value,
     axis: u8,
 ) -> Option<[cranelift_codegen::ir::Value; 3]> {
-    let pi_over_180 = ctx.fb.ins().f64const(std::f64::consts::PI / 180.0);
+    let pi_over_180 = jit_const(ctx.fb, std::f32::consts::PI / 180.0);
     let radians = ctx.fb.ins().fmul(deg, pi_over_180);
     let s = emit_unary_import_call(ctx.fb, ctx.module, "sin", radians)?;
     let c = emit_unary_import_call(ctx.fb, ctx.module, "cos", radians)?;
@@ -2481,7 +2770,7 @@ fn emit_material_box_distance(
     let dx = ctx.fb.ins().fsub(ax, b[0]);
     let dy = ctx.fb.ins().fsub(ay, b[1]);
     let dz = ctx.fb.ins().fsub(az, b[2]);
-    let zero = ctx.fb.ins().f64const(0.0);
+    let zero = jit_const(ctx.fb, 0.0);
     let ox = ctx.fb.ins().fmax(dx, zero);
     let oy = ctx.fb.ins().fmax(dy, zero);
     let oz = ctx.fb.ins().fmax(dz, zero);
@@ -2516,7 +2805,7 @@ fn emit_material_axis_cylinder_distance(
     let radial_sum = ctx.fb.ins().fadd(r0_2, r1_2);
     let radial_len = ctx.fb.ins().sqrt(radial_sum);
     let radial = ctx.fb.ins().fsub(radial_len, radius);
-    let zero = ctx.fb.ins().f64const(0.0);
+    let zero = jit_const(ctx.fb, 0.0);
     let orad = ctx.fb.ins().fmax(radial, zero);
     let oax = ctx.fb.ins().fmax(axial, zero);
     let orad2 = ctx.fb.ins().fmul(orad, orad);
@@ -2535,7 +2824,7 @@ fn emit_material_box_shell_distance(
     wall: cranelift_codegen::ir::Value,
     round: cranelift_codegen::ir::Value,
 ) -> cranelift_codegen::ir::Value {
-    let eps = ctx.fb.ins().f64const(0.001);
+    let eps = jit_const(ctx.fb, 0.001);
     let outer_x = ctx.fb.ins().fsub(half[0], round);
     let outer_y = ctx.fb.ins().fsub(half[1], round);
     let outer_z = ctx.fb.ins().fsub(half[2], round);
@@ -2558,15 +2847,41 @@ fn emit_material_box_shell_distance(
         ctx.fb.ins().fmax(inner_y, eps),
         ctx.fb.ins().fmax(inner_z, eps),
     ];
-    let four_tenths = ctx.fb.ins().f64const(0.4);
+    let four_tenths = jit_const(ctx.fb, 0.4);
     let wall_term = ctx.fb.ins().fmul(wall, four_tenths);
     let inner_round_raw = ctx.fb.ins().fsub(round, wall_term);
-    let zero = ctx.fb.ins().f64const(0.0);
+    let zero = jit_const(ctx.fb, 0.0);
     let inner_round = ctx.fb.ins().fmax(inner_round_raw, zero);
     let inner_box = emit_material_box_distance(ctx, p, inner_half);
     let inner = ctx.fb.ins().fsub(inner_box, inner_round);
     let neg_inner = ctx.fb.ins().fneg(inner);
     ctx.fb.ins().fmax(outer, neg_inner)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_hole_line_import_call(
+    fb: &mut FunctionBuilder<'_>,
+    module: &mut JITModule,
+    symbol: &str,
+    p: [cranelift_codegen::ir::Value; 3],
+    radius: cranelift_codegen::ir::Value,
+    half_len: cranelift_codegen::ir::Value,
+    spacing: cranelift_codegen::ir::Value,
+    count: cranelift_codegen::ir::Value,
+) -> Option<cranelift_codegen::ir::Value> {
+    let mut sig = module.make_signature();
+    for _ in 0..7 {
+        sig.params.push(AbiParam::new(JIT_TYPE));
+    }
+    sig.returns.push(AbiParam::new(JIT_TYPE));
+    let func_id = module
+        .declare_function(symbol, Linkage::Import, &sig)
+        .ok()?;
+    let local = module.declare_func_in_func(func_id, fb.func);
+    let call = fb
+        .ins()
+        .call(local, &[p[0], p[1], p[2], radius, half_len, spacing, count]);
+    fb.inst_results(call).first().copied()
 }
 
 fn compile_material_min_max(
@@ -2619,11 +2934,16 @@ fn emit_unary_import_call(
     symbol: &str,
     arg: cranelift_codegen::ir::Value,
 ) -> Option<cranelift_codegen::ir::Value> {
+    let import_symbol = match symbol {
+        "sin" => "sinf",
+        "cos" => "cosf",
+        _ => symbol,
+    };
     let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::F64));
-    sig.returns.push(AbiParam::new(types::F64));
+    sig.params.push(AbiParam::new(JIT_TYPE));
+    sig.returns.push(AbiParam::new(JIT_TYPE));
     let func_id = module
-        .declare_function(symbol, Linkage::Import, &sig)
+        .declare_function(import_symbol, Linkage::Import, &sig)
         .ok()?;
     let local = module.declare_func_in_func(func_id, fb.func);
     let call = fb.ins().call(local, &[arg]);
@@ -2647,8 +2967,8 @@ fn emit_builtin_call(
         ("sin", [x]) => emit_unary_import_call(fb, module, "sin", *x),
         ("cos", [x]) => emit_unary_import_call(fb, module, "cos", *x),
         ("saturate", [x]) => {
-            let zero = fb.ins().f64const(0.0);
-            let one = fb.ins().f64const(1.0);
+            let zero = jit_const(fb, 0.0);
+            let one = jit_const(fb, 1.0);
             let maxed = fb.ins().fmax(*x, zero);
             Some(fb.ins().fmin(maxed, one))
         }
@@ -2657,7 +2977,7 @@ fn emit_builtin_call(
             Some(fb.ins().fmin(maxed, *b))
         }
         ("mix", [x, y, a]) => {
-            let one = fb.ins().f64const(1.0);
+            let one = jit_const(fb, 1.0);
             let inv = fb.ins().fsub(one, *a);
             let lhs = fb.ins().fmul(*x, inv);
             let rhs = fb.ins().fmul(*y, *a);
@@ -2669,20 +2989,20 @@ fn emit_builtin_call(
                 *x,
                 *edge,
             );
-            let zero = fb.ins().f64const(0.0);
-            let one = fb.ins().f64const(1.0);
+            let zero = jit_const(fb, 0.0);
+            let one = jit_const(fb, 1.0);
             Some(fb.ins().select(cond, zero, one))
         }
         ("smoothstep", [edge0, edge1, x]) => {
             let span = fb.ins().fsub(*edge1, *edge0);
             let x_minus_edge0 = fb.ins().fsub(*x, *edge0);
             let t = fb.ins().fdiv(x_minus_edge0, span);
-            let zero = fb.ins().f64const(0.0);
-            let one = fb.ins().f64const(1.0);
+            let zero = jit_const(fb, 0.0);
+            let one = jit_const(fb, 1.0);
             let maxed = fb.ins().fmax(t, zero);
             let t = fb.ins().fmin(maxed, one);
-            let three = fb.ins().f64const(3.0);
-            let two = fb.ins().f64const(2.0);
+            let three = jit_const(fb, 3.0);
+            let two = jit_const(fb, 2.0);
             let two_t = fb.ins().fmul(two, t);
             let inner = fb.ins().fsub(three, two_t);
             Some(fb.ins().fmul(t, inner))

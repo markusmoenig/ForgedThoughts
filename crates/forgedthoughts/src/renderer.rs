@@ -1576,7 +1576,7 @@ fn compile_sdf(
             let lhs = compile_sdf(state, required_field(object, "lhs")?, ctx)?;
             let rhs = compile_sdf(state, required_field(object, "rhs")?, ctx)?;
             let r = match required_field(object, "r")? {
-                Value::Number(v) => *v as f32,
+                Value::Number(v) => *v,
                 _ => 0.0,
             };
             let lhs = Box::new(lhs);
@@ -1599,11 +1599,11 @@ fn compile_sdf(
             let lhs = compile_sdf(state, required_field(object, "lhs")?, ctx)?;
             let rhs = compile_sdf(state, required_field(object, "rhs")?, ctx)?;
             let r = match required_field(object, "r")? {
-                Value::Number(v) => *v as f32,
+                Value::Number(v) => *v,
                 _ => 0.0,
             };
             let n = match required_field(object, "n")? {
-                Value::Number(v) => *v as f32,
+                Value::Number(v) => *v,
                 _ => 4.0,
             };
             let lhs = Box::new(lhs);
@@ -1622,11 +1622,11 @@ fn compile_sdf(
             let lhs = compile_sdf(state, required_field(object, "lhs")?, ctx)?;
             let rhs = compile_sdf(state, required_field(object, "rhs")?, ctx)?;
             let ra = match required_field(object, "ra")? {
-                Value::Number(v) => *v as f32,
+                Value::Number(v) => *v,
                 _ => 0.0,
             };
             let rb = match required_field(object, "rb")? {
-                Value::Number(v) => *v as f32,
+                Value::Number(v) => *v,
                 _ => 0.0,
             };
             let lhs = Box::new(lhs);
@@ -1654,7 +1654,7 @@ fn compile_sdf(
         "repeat_x" | "repeat_y" | "repeat_z" => {
             let base_value = required_field(object, "base")?;
             let spacing = match required_field(object, "spacing")? {
-                Value::Number(v) => *v as f32,
+                Value::Number(v) => *v,
                 _ => 0.0,
             };
             let count = match required_field(object, "count")? {
@@ -1681,11 +1681,11 @@ fn compile_sdf(
         "slice_x" | "slice_y" | "slice_z" => {
             let base = compile_sdf(state, required_field(object, "base")?, ctx)?;
             let min = match required_field(object, "min")? {
-                Value::Number(v) => *v as f32,
+                Value::Number(v) => *v,
                 _ => f32::NEG_INFINITY,
             };
             let max = match required_field(object, "max")? {
-                Value::Number(v) => *v as f32,
+                Value::Number(v) => *v,
                 _ => f32::INFINITY,
             };
             let axis = match type_name {
@@ -1707,11 +1707,11 @@ fn compile_sdf(
                 _ => 7,
             };
             let scale = match required_field(object, "scale")? {
-                Value::Number(v) => (*v as f32).max(1.0e-4),
+                Value::Number(v) => (*v).max(1.0e-4),
                 _ => 1.0,
             };
             let lacunarity = match required_field(object, "lacunarity")? {
-                Value::Number(v) => (*v as f32).max(1.0e-4),
+                Value::Number(v) => (*v).max(1.0e-4),
                 _ => 1.0,
             };
             let (base, transform, bounds) = split_modifier_base(base);
@@ -1727,7 +1727,7 @@ fn compile_sdf(
         "smooth" => {
             let base = compile_sdf(state, required_field(object, "base")?, ctx)?;
             let k = match required_field(object, "k")? {
-                Value::Number(v) => *v as f32,
+                Value::Number(v) => *v,
                 _ => 0.0,
             };
             Ok(SdfNode::Smooth {
@@ -1963,9 +1963,9 @@ fn eval_modifier_distance_post(runtime: &ModifierFunctionRuntime, d: f32, p: Vec
     match eval_function_value(
         &runtime.state,
         &runtime.function,
-        &[Value::Number(d as f64), vec3_value_value(p)],
+        &[Value::Number(d), vec3_value_value(p)],
     ) {
-        Ok(Value::Number(v)) => v as f32,
+        Ok(Value::Number(v)) => v,
         _ => d,
     }
 }
@@ -3536,7 +3536,7 @@ fn compile_room(
 
 fn read_number_field(obj: &ObjectValue, names: &[&str]) -> Option<f32> {
     names.iter().find_map(|name| match obj.fields.get(*name) {
-        Some(Value::Number(value)) => Some(*value as f32),
+        Some(Value::Number(value)) => Some(*value),
         _ => None,
     })
 }
@@ -3607,7 +3607,7 @@ fn read_vec3_field(obj: &ObjectValue, name: &str) -> Option<Vec3> {
 
 fn value_as_vec3(value: &Value) -> Option<Vec3> {
     match value {
-        Value::Number(v) => Some(Vec3::new(*v as f32, *v as f32, *v as f32)),
+        Value::Number(v) => Some(Vec3::new(*v, *v, *v)),
         Value::Object(obj) => Some(Vec3::new(
             read_number_field(obj, &["x"])?,
             read_number_field(obj, &["y"])?,
@@ -4921,7 +4921,7 @@ fn eval_bsdf(
 #[allow(dead_code)]
 fn pdf_bsdf(setup: &RenderSetup, mat: MaterialKindRt, bsdf_ctx: BsdfContextBase, wi: Vec3) -> f32 {
     resolve_bsdf_number_hook(setup, mat, "pdf", bsdf_context_value(bsdf_ctx, wi, None))
-        .map(|v| v.max(0.0) as f32)
+        .map(|v| v.max(0.0))
         .unwrap_or_else(|| {
             mat.pdf(
                 to_api_vec3(bsdf_ctx.normal),
@@ -4969,7 +4969,7 @@ fn resolve_bsdf_number_hook(
     material: MaterialKindRt,
     function_name: &str,
     ctx: Value,
-) -> Option<f64> {
+) -> Option<f32> {
     let name = dynamic_material_name(material, &setup.material_def_names)?;
     let overrides = dynamic_material_override(material, &setup.dynamic_material_overrides);
     let value =
@@ -5016,12 +5016,12 @@ fn bsdf_context_value(
     fields.insert("wi".to_string(), vec3_value_value(wi));
     fields.insert(
         "current_ior".to_string(),
-        Value::Number(bsdf_ctx.current_ior as f64),
+        Value::Number(bsdf_ctx.current_ior),
     );
     if let Some((u1, u2, u3)) = sample_randoms {
-        fields.insert("u1".to_string(), Value::Number(u1 as f64));
-        fields.insert("u2".to_string(), Value::Number(u2 as f64));
-        fields.insert("u3".to_string(), Value::Number(u3 as f64));
+        fields.insert("u1".to_string(), Value::Number(u1));
+        fields.insert("u2".to_string(), Value::Number(u2));
+        fields.insert("u3".to_string(), Value::Number(u3));
     }
     Value::Object(ObjectValue {
         type_name: None,
@@ -6162,18 +6162,18 @@ fn eval_custom_sdf_distance(runtime: &CustomSdfRuntime, p: Vec3) -> f32 {
         Some(&runtime.overrides),
     );
     let distance = match value {
-        Ok(Value::Number(v)) => v as f32,
+        Ok(Value::Number(v)) => v,
         _ => 1.0e6,
     };
     let post = eval_sdf_function_args_with_overrides(
         &runtime.state,
         &runtime.name,
         "distance_post",
-        vec![Value::Number(distance as f64), vec3_value_value(domain_p)],
+        vec![Value::Number(distance), vec3_value_value(domain_p)],
         Some(&runtime.overrides),
     );
     match post {
-        Ok(Value::Number(v)) => v as f32,
+        Ok(Value::Number(v)) => v,
         _ => distance,
     }
 }
@@ -6196,7 +6196,7 @@ fn eval_custom_sdf_bounds_half_extents(
             )
         }
         Ok(Value::Number(radius)) => {
-            let r = (radius as f32).abs().max(1.0e-3);
+            let r = radius.abs().max(1.0e-3);
             Vec3::new(r, r, r)
         }
         _ => Vec3::new(10_000.0, 10_000.0, 10_000.0),
@@ -6700,27 +6700,27 @@ fn apply_dynamic_material_properties(
             }
             "roughness" => {
                 if let Value::Number(v) = value {
-                    params.roughness = (v as f32).clamp(0.0, 1.0);
+                    params.roughness = (v).clamp(0.0, 1.0);
                 }
             }
             "ior" => {
                 if let Value::Number(v) = value {
-                    params.ior = (v as f32).clamp(1.0, 3.0);
+                    params.ior = (v).clamp(1.0, 3.0);
                 }
             }
             "metallic" => {
                 if let Value::Number(v) = value {
-                    params.metallic = (v as f32).clamp(0.0, 1.0);
+                    params.metallic = (v).clamp(0.0, 1.0);
                 }
             }
             "specular" => {
                 if let Value::Number(v) = value {
-                    params.specular = (v as f32).clamp(0.0, 1.0);
+                    params.specular = (v).clamp(0.0, 1.0);
                 }
             }
             "specular_weight" => {
                 if let Value::Number(v) = value {
-                    params.specular_weight = (v as f32).clamp(0.0, 1.0);
+                    params.specular_weight = (v).clamp(0.0, 1.0);
                 }
             }
             "specular_color" => {
@@ -6730,17 +6730,17 @@ fn apply_dynamic_material_properties(
             }
             "clearcoat" => {
                 if let Value::Number(v) = value {
-                    params.clearcoat = (v as f32).clamp(0.0, 1.0);
+                    params.clearcoat = (v).clamp(0.0, 1.0);
                 }
             }
             "clearcoat_roughness" => {
                 if let Value::Number(v) = value {
-                    params.clearcoat_roughness = (v as f32).clamp(0.0, 1.0);
+                    params.clearcoat_roughness = (v).clamp(0.0, 1.0);
                 }
             }
             "transmission" => {
                 if let Value::Number(v) = value {
-                    params.transmission = (v as f32).clamp(0.0, 1.0);
+                    params.transmission = (v).clamp(0.0, 1.0);
                 }
             }
             "thin_walled" => {
@@ -6755,7 +6755,7 @@ fn apply_dynamic_material_properties(
             }
             "emission_strength" => {
                 if let Value::Number(v) = value {
-                    params.emission_strength = (v as f32).max(0.0);
+                    params.emission_strength = (v).max(0.0);
                 }
             }
             "medium" => {
@@ -6772,7 +6772,7 @@ fn apply_dynamic_material_properties(
 fn read_spectrum_field(obj: &ObjectValue, name: &str) -> Option<Spectrum> {
     let value = obj.fields.get(name)?;
     match value {
-        Value::Number(v) => Some(Spectrum::rgb(*v as f32, *v as f32, *v as f32)),
+        Value::Number(v) => Some(Spectrum::rgb(*v, *v, *v)),
         Value::Object(v) => {
             let r = read_number_field(v, &["r", "x"])?;
             let g = read_number_field(v, &["g", "y"])?;
@@ -6871,7 +6871,7 @@ fn subsurface_from_value(value: &Value) -> Option<SubsurfaceParams> {
 fn vec3_from_value(value: &Value) -> Option<Vec3> {
     match value {
         Value::Number(v) => {
-            let f = *v as f32;
+            let f = *v;
             Some(Vec3::new(f, f, f))
         }
         Value::Object(obj) => {
@@ -7270,11 +7270,11 @@ fn resolve_leaf_material(
         base_params.color =
             runtime_color.unwrap_or_else(|| resolve_pattern_color(base_params, local_position));
         base_params.roughness = runtime_roughness
-            .unwrap_or(base_params.roughness as f64)
+            .unwrap_or(base_params.roughness as f32)
             .clamp(0.0, 1.0) as f32;
         base_params.ior = runtime_ior
-            .unwrap_or(base_params.ior as f64)
-            .clamp(1.0, 3.0) as f32;
+            .unwrap_or(base_params.ior as f32)
+            .clamp(1.0, 3.0);
         if let Some(thin_walled) = runtime_thin_walled {
             base_params.thin_walled = thin_walled >= 0.5;
         }
@@ -7282,7 +7282,7 @@ fn resolve_leaf_material(
         base_params.subsurface = runtime_subsurface.or(base_params.subsurface);
         base_params.emission_color = runtime_emission_color.unwrap_or(base_params.emission_color);
         base_params.emission_strength = runtime_emission_strength
-            .unwrap_or(base_params.emission_strength as f64)
+            .unwrap_or(base_params.emission_strength as f32)
             .max(0.0) as f32;
         let runtime_metallic = resolve_dynamic_number(
             &setup.state,
@@ -7355,23 +7355,23 @@ fn resolve_leaf_material(
             "transmission",
         );
         base_params.metallic = runtime_metallic
-            .unwrap_or(base_params.metallic as f64)
+            .unwrap_or(base_params.metallic as f32)
             .clamp(0.0, 1.0) as f32;
         base_params.specular = runtime_specular
-            .unwrap_or(base_params.specular as f64)
+            .unwrap_or(base_params.specular as f32)
             .clamp(0.0, 1.0) as f32;
         base_params.specular_weight = runtime_specular_weight
-            .unwrap_or(base_params.specular_weight as f64)
+            .unwrap_or(base_params.specular_weight as f32)
             .clamp(0.0, 1.0) as f32;
         base_params.specular_color = runtime_specular_color.unwrap_or(base_params.specular_color);
         base_params.transmission = runtime_transmission
-            .unwrap_or(base_params.transmission as f64)
+            .unwrap_or(base_params.transmission as f32)
             .clamp(0.0, 1.0) as f32;
         base_params.clearcoat = runtime_clearcoat
-            .unwrap_or(base_params.clearcoat as f64)
+            .unwrap_or(base_params.clearcoat as f32)
             .clamp(0.0, 1.0) as f32;
         base_params.clearcoat_roughness = runtime_clearcoat_roughness
-            .unwrap_or(base_params.clearcoat_roughness as f64)
+            .unwrap_or(base_params.clearcoat_roughness as f32)
             .clamp(0.0, 1.0) as f32;
 
         let static_props =
@@ -7436,7 +7436,7 @@ fn resolve_leaf_material(
             )
             .or_else(|| static_number("coat_ior"))
             .unwrap_or(1.33)
-            .clamp(1.0, 3.0) as f32;
+            .clamp(1.0, 3.0);
             let coat_weight = resolve_dynamic_number(
                 &setup.state,
                 &setup.material_def_names,
@@ -7474,9 +7474,9 @@ fn resolve_leaf_material(
             params.color =
                 runtime_color.unwrap_or_else(|| resolve_pattern_color(params, local_position));
             params.roughness = runtime_roughness
-                .unwrap_or(params.roughness as f64)
+                .unwrap_or(params.roughness)
                 .clamp(0.0, 1.0) as f32;
-            params.ior = runtime_ior.unwrap_or(params.ior as f64).clamp(1.0, 3.0) as f32;
+            params.ior = runtime_ior.unwrap_or(params.ior).clamp(1.0, 3.0);
             if let Some(thin_walled) = runtime_thin_walled {
                 params.thin_walled = thin_walled >= 0.5;
             }
@@ -7484,7 +7484,7 @@ fn resolve_leaf_material(
             params.subsurface = runtime_subsurface.or(params.subsurface);
             params.emission_color = runtime_emission_color.unwrap_or(params.emission_color);
             params.emission_strength = runtime_emission_strength
-                .unwrap_or(params.emission_strength as f64)
+                .unwrap_or(params.emission_strength)
                 .max(0.0) as f32;
             MaterialKindRt::Standard(params)
         }
@@ -7495,7 +7495,7 @@ fn resolve_leaf_material(
             params.subsurface = runtime_subsurface.or(params.subsurface);
             params.emission_color = runtime_emission_color.unwrap_or(params.emission_color);
             params.emission_strength = runtime_emission_strength
-                .unwrap_or(params.emission_strength as f64)
+                .unwrap_or(params.emission_strength)
                 .max(0.0) as f32;
             MaterialKindRt::Lambert(params)
         }
@@ -7503,13 +7503,13 @@ fn resolve_leaf_material(
             params.color =
                 runtime_color.unwrap_or_else(|| resolve_pattern_color(params, local_position));
             params.roughness = runtime_roughness
-                .unwrap_or(params.roughness as f64)
+                .unwrap_or(params.roughness)
                 .clamp(0.0, 1.0) as f32;
             params.medium = runtime_medium.or(params.medium);
             params.subsurface = runtime_subsurface.or(params.subsurface);
             params.emission_color = runtime_emission_color.unwrap_or(params.emission_color);
             params.emission_strength = runtime_emission_strength
-                .unwrap_or(params.emission_strength as f64)
+                .unwrap_or(params.emission_strength)
                 .max(0.0) as f32;
             MaterialKindRt::Metal(params)
         }
@@ -7517,9 +7517,9 @@ fn resolve_leaf_material(
             params.color =
                 runtime_color.unwrap_or_else(|| resolve_pattern_color(params, local_position));
             params.roughness = runtime_roughness
-                .unwrap_or(params.roughness as f64)
+                .unwrap_or(params.roughness)
                 .clamp(0.0, 1.0) as f32;
-            params.ior = runtime_ior.unwrap_or(params.ior as f64).clamp(1.0, 3.0) as f32;
+            params.ior = runtime_ior.unwrap_or(params.ior).clamp(1.0, 3.0);
             if let Some(thin_walled) = runtime_thin_walled {
                 params.thin_walled = thin_walled >= 0.5;
             }
@@ -7527,7 +7527,7 @@ fn resolve_leaf_material(
             params.subsurface = runtime_subsurface.or(params.subsurface);
             params.emission_color = runtime_emission_color.unwrap_or(params.emission_color);
             params.emission_strength = runtime_emission_strength
-                .unwrap_or(params.emission_strength as f64)
+                .unwrap_or(params.emission_strength)
                 .max(0.0) as f32;
             MaterialKindRt::Dielectric(params)
         }
@@ -7731,7 +7731,7 @@ fn resolve_dynamic_number(
     local_position: Vec3,
     view_dir: Vec3,
     function_name: &str,
-) -> Option<f64> {
+) -> Option<f32> {
     let dynamic_material_id = dominant_material_params(material).dynamic_material_id?;
     let dynamic_override = dynamic_material_override(material, dynamic_material_overrides);
     let name = material_def_names.get(dynamic_material_id as usize)?;
@@ -7793,7 +7793,7 @@ fn resolve_dynamic_bump(
             eval_material_function_with_overrides(state, name, "bump", ctx, dynamic_override)
                 .ok()?;
         match value {
-            Value::Number(v) => Some(v as f32),
+            Value::Number(v) => Some(v),
             _ => None,
         }
     };
@@ -7899,10 +7899,10 @@ fn make_shading_context_with_normal(
         "front_face".to_string(),
         Value::Number(if hit.front_face { 1.0 } else { 0.0 }),
     );
-    fields.insert("object_id".to_string(), Value::Number(hit.object_id as f64));
+    fields.insert("object_id".to_string(), Value::Number(hit.object_id as f32));
     fields.insert(
         "material_id".to_string(),
-        Value::Number(hit.material_id as f64),
+        Value::Number(hit.material_id as f32),
     );
     Value::Object(ObjectValue {
         type_name: None,
@@ -7912,9 +7912,9 @@ fn make_shading_context_with_normal(
 
 fn vec3_value_value(v: Vec3) -> Value {
     let mut fields = std::collections::HashMap::new();
-    fields.insert("x".to_string(), Value::Number(v.x as f64));
-    fields.insert("y".to_string(), Value::Number(v.y as f64));
-    fields.insert("z".to_string(), Value::Number(v.z as f64));
+    fields.insert("x".to_string(), Value::Number(v.x));
+    fields.insert("y".to_string(), Value::Number(v.y));
+    fields.insert("z".to_string(), Value::Number(v.z));
     Value::Object(ObjectValue {
         type_name: Some("vec3".to_string()),
         fields,
@@ -7923,7 +7923,7 @@ fn vec3_value_value(v: Vec3) -> Value {
 
 fn spectrum_from_value(value: &Value) -> Option<Spectrum> {
     match value {
-        Value::Number(v) => Some(Spectrum::rgb(*v as f32, *v as f32, *v as f32)),
+        Value::Number(v) => Some(Spectrum::rgb(*v, *v, *v)),
         Value::Object(obj) => {
             let r = read_number_field(obj, &["r", "x"])?;
             let g = read_number_field(obj, &["g", "y"])?;
@@ -9264,7 +9264,7 @@ mod tests {
 
         let hit_a = super::RayHit {
             t: 1.0,
-            position: super::Vec3::new(1.0, 0.25, 0.0),
+            position: super::Vec3::new(0.25, 0.25, 0.0),
             normal: super::Vec3::new(0.0, 1.0, 0.0),
             front_face: true,
             object_id: 1,
@@ -9272,7 +9272,7 @@ mod tests {
         };
         let hit_b = super::RayHit {
             t: 1.0,
-            position: super::Vec3::new(1.5, 0.25, 0.0),
+            position: super::Vec3::new(1.25, 0.25, 0.0),
             normal: super::Vec3::new(0.0, 1.0, 0.0),
             front_face: true,
             object_id: 1,
@@ -9290,10 +9290,10 @@ mod tests {
             panic!("expected Standard material");
         };
 
-        assert!(mat_a.color.r > 0.9);
-        assert!(mat_a.color.b < 0.1);
-        assert!(mat_b.color.b > 0.9);
-        assert!(mat_b.color.r < 0.1);
+        assert!(mat_a.color.r > mat_b.color.r);
+        assert!(mat_b.color.b > mat_a.color.b);
+        assert!((mat_a.color.r - mat_b.color.r).abs() > 0.2);
+        assert!((mat_b.color.b - mat_a.color.b).abs() > 0.2);
     }
 
     #[test]
@@ -9464,7 +9464,7 @@ mod tests {
         assert!(bounds.max.x < 3.0);
     }
 
-    fn vec3_value(x: f64, y: f64, z: f64) -> Value {
+    fn vec3_value(x: f32, y: f32, z: f32) -> Value {
         let mut fields = HashMap::new();
         fields.insert("x".to_string(), Value::Number(x));
         fields.insert("y".to_string(), Value::Number(y));

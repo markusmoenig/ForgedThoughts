@@ -2,7 +2,7 @@ use crate::ast::{BinaryOp, Expr, FunctionDef, MaterialFunctionStatement, UnaryOp
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmInstruction {
-    PushNumber(f64),
+    PushNumber(f32),
     PushString(String),
     LoadName(String),
     BuildArray(usize),
@@ -61,7 +61,7 @@ fn compile_stmt(stmt: &MaterialFunctionStatement, code: &mut Vec<VmInstruction>)
 
 fn compile_expr(expr: &Expr, code: &mut Vec<VmInstruction>) -> Option<()> {
     match expr {
-        Expr::Number(n) => code.push(VmInstruction::PushNumber(*n)),
+        Expr::Number(n) => code.push(VmInstruction::PushNumber(*n as f32)),
         Expr::String(value) => code.push(VmInstruction::PushString(value.clone())),
         Expr::Array(items) => {
             for item in items {

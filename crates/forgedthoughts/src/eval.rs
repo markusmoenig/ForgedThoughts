@@ -20,7 +20,7 @@ use crate::vm::{VmFunction, VmInstruction, compile_function};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    Number(f64),
+    Number(f32),
     String(String),
     Array(Vec<Value>),
     Object(ObjectValue),
@@ -428,7 +428,7 @@ fn eval_expr_in_material_scope(
     top_level_depth: usize,
 ) -> Result<Value, EvalError> {
     match expr {
-        Expr::Number(n) => Ok(Value::Number(*n)),
+        Expr::Number(n) => Ok(Value::Number(*n as f32)),
         Expr::String(value) => Ok(Value::String(value.clone())),
         Expr::Array(items) => {
             let mut values = Vec::with_capacity(items.len());
@@ -594,8 +594,8 @@ fn instantiate_skeleton_fields(
     let mut joints = HashMap::new();
     let mut bones = HashMap::new();
     let mut chains = HashMap::new();
-    let mut min = [f64::INFINITY; 3];
-    let mut max = [f64::NEG_INFINITY; 3];
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
 
     for stmt in &def.statements {
         match stmt {
@@ -646,8 +646,8 @@ fn instantiate_skeleton_fields(
             (min[2] + max[2]) * 0.5,
         ];
         apply_skeleton_ik_targets(&mut joints, &chains, ik_targets, initial_bounds_center)?;
-        let mut ik_min = [f64::INFINITY; 3];
-        let mut ik_max = [f64::NEG_INFINITY; 3];
+        let mut ik_min = [f32::INFINITY; 3];
+        let mut ik_max = [f32::NEG_INFINITY; 3];
         for point in joints.values().filter_map(as_vec3) {
             for axis in 0..3 {
                 ik_min[axis] = ik_min[axis].min(point[axis]);
@@ -749,7 +749,7 @@ fn apply_skeleton_ik_targets(
     joints: &mut HashMap<String, Value>,
     chains: &HashMap<String, (String, String, String)>,
     ik_targets: &ObjectValue,
-    bounds_center: [f64; 3],
+    bounds_center: [f32; 3],
 ) -> Result<(), EvalError> {
     for (target_name, target_value) in &ik_targets.fields {
         let Some((start_name, mid_name, end_name)) = resolve_skeleton_chain(chains, target_name)
@@ -790,7 +790,7 @@ fn resolve_skeleton_chain<'a>(
     })
 }
 
-fn skeleton_ik_target_point(value: &Value, bounds_center: [f64; 3]) -> Option<[f64; 3]> {
+fn skeleton_ik_target_point(value: &Value, bounds_center: [f32; 3]) -> Option<[f32; 3]> {
     if let Some(local) = as_vec3(value) {
         return Some([
             local[0] + bounds_center[0],
@@ -804,11 +804,11 @@ fn skeleton_ik_target_point(value: &Value, bounds_center: [f64; 3]) -> Option<[f
 }
 
 fn solve_two_bone_chain(
-    start: [f64; 3],
-    mid: [f64; 3],
-    end: [f64; 3],
-    target: [f64; 3],
-) -> ([f64; 3], [f64; 3]) {
+    start: [f32; 3],
+    mid: [f32; 3],
+    end: [f32; 3],
+    target: [f32; 3],
+) -> ([f32; 3], [f32; 3]) {
     let upper = sub3(mid, start);
     let lower = sub3(end, mid);
     let upper_len = length3(upper).max(1.0e-6);
@@ -841,32 +841,32 @@ fn solve_two_bone_chain(
     (new_mid, new_end)
 }
 
-fn add3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
-fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-fn scale3(v: [f64; 3], s: f64) -> [f64; 3] {
+fn scale3(v: [f32; 3], s: f32) -> [f32; 3] {
     [v[0] * s, v[1] * s, v[2] * s]
 }
 
-fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-fn length3(v: [f64; 3]) -> f64 {
+fn length3(v: [f32; 3]) -> f32 {
     dot3(v, v).sqrt()
 }
 
-fn normalize3(v: [f64; 3]) -> [f64; 3] {
+fn normalize3(v: [f32; 3]) -> [f32; 3] {
     let len = length3(v).max(1.0e-9);
     [v[0] / len, v[1] / len, v[2] / len]
 }
 
-fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
@@ -874,7 +874,7 @@ fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     ]
 }
 
-fn fallback_perpendicular(dir: [f64; 3]) -> [f64; 3] {
+fn fallback_perpendicular(dir: [f32; 3]) -> [f32; 3] {
     let seed = if dir[1].abs() < 0.9 {
         [0.0, 1.0, 0.0]
     } else {
@@ -1063,10 +1063,10 @@ fn semantic_part_value(base: &Value, field: &str) -> Option<Value> {
 }
 
 fn proxy_box(
-    base_pos: [f64; 3],
-    base_rot: [f64; 3],
-    local_offset: [f64; 3],
-    size: [f64; 3],
+    base_pos: [f32; 3],
+    base_rot: [f32; 3],
+    local_offset: [f32; 3],
+    size: [f32; 3],
 ) -> Value {
     let world = rotate_xyz(local_offset, base_rot);
     let mut fields = HashMap::new();
@@ -1087,11 +1087,11 @@ fn proxy_box(
 }
 
 fn proxy_cylinder(
-    base_pos: [f64; 3],
-    base_rot: [f64; 3],
-    local_offset: [f64; 3],
-    radius: f64,
-    height: f64,
+    base_pos: [f32; 3],
+    base_rot: [f32; 3],
+    local_offset: [f32; 3],
+    radius: f32,
+    height: f32,
 ) -> Value {
     let world = rotate_xyz(local_offset, base_rot);
     let mut fields = HashMap::new();
@@ -1112,7 +1112,7 @@ fn proxy_cylinder(
     })
 }
 
-fn proxy_sphere(base_pos: [f64; 3], local_offset: [f64; 3], radius: f64) -> Value {
+fn proxy_sphere(base_pos: [f32; 3], local_offset: [f32; 3], radius: f32) -> Value {
     let mut fields = HashMap::new();
     fields.insert(
         "pos".to_string(),
@@ -1130,10 +1130,10 @@ fn proxy_sphere(base_pos: [f64; 3], local_offset: [f64; 3], radius: f64) -> Valu
 }
 
 fn proxy_skeleton_joint(
-    base_pos: [f64; 3],
-    base_rot: [f64; 3],
-    local_offset: [f64; 3],
-    radius: f64,
+    base_pos: [f32; 3],
+    base_rot: [f32; 3],
+    local_offset: [f32; 3],
+    radius: f32,
 ) -> Value {
     let world = rotate_xyz(local_offset, base_rot);
     let center = [
@@ -1158,11 +1158,11 @@ fn proxy_skeleton_joint(
 }
 
 fn proxy_skeleton_bone(
-    base_pos: [f64; 3],
-    base_rot: [f64; 3],
-    local_start: [f64; 3],
-    local_end: [f64; 3],
-    radius: f64,
+    base_pos: [f32; 3],
+    base_rot: [f32; 3],
+    local_start: [f32; 3],
+    local_end: [f32; 3],
+    radius: f32,
 ) -> Value {
     let start_world = rotate_xyz(local_start, base_rot);
     let end_world = rotate_xyz(local_end, base_rot);
@@ -1687,7 +1687,7 @@ fn bind_object_to_bone(mut value: Value, target: Value) -> Result<Value, EvalErr
     Ok(value)
 }
 
-fn fit_object_length_to_bone(obj: &mut ObjectValue, length: f64) {
+fn fit_object_length_to_bone(obj: &mut ObjectValue, length: f32) {
     let fit_length = length * 1.03;
     match obj.type_name.as_deref() {
         Some("Box") => {
@@ -1940,22 +1940,22 @@ fn eval_primitive_static_call(
     Ok(Some(value))
 }
 
-fn vec2_len(v: [f64; 2]) -> f64 {
+fn vec2_len(v: [f32; 2]) -> f32 {
     (v[0] * v[0] + v[1] * v[1]).sqrt()
 }
 
-fn vec3_len(v: [f64; 3]) -> f64 {
+fn vec3_len(v: [f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }
 
-fn box_distance_native(p: [f64; 3], b: [f64; 3]) -> f64 {
+fn box_distance_native(p: [f32; 3], b: [f32; 3]) -> f32 {
     let d = [p[0].abs() - b[0], p[1].abs() - b[1], p[2].abs() - b[2]];
     let outside = vec3_len([d[0].max(0.0), d[1].max(0.0), d[2].max(0.0)]);
     let inside = d[0].max(d[1].max(d[2])).min(0.0);
     outside + inside
 }
 
-fn axis_cylinder_distance_native(p: [f64; 3], axis: usize, radius: f64, half_len: f64) -> f64 {
+fn axis_cylinder_distance_native(p: [f32; 3], axis: usize, radius: f32, half_len: f32) -> f32 {
     let (axial, radial) = match axis {
         0 => (p[0].abs() - half_len, [p[1], p[2]]),
         1 => (p[1].abs() - half_len, [p[0], p[2]]),
@@ -1967,7 +1967,7 @@ fn axis_cylinder_distance_native(p: [f64; 3], axis: usize, radius: f64, half_len
     outside + inside
 }
 
-fn box_shell_distance_native(p: [f64; 3], half: [f64; 3], wall: f64, round: f64) -> f64 {
+fn box_shell_distance_native(p: [f32; 3], half: [f32; 3], wall: f32, round: f32) -> f32 {
     let outer_half = [
         (half[0] - round).max(0.001),
         (half[1] - round).max(0.001),
@@ -1985,19 +1985,19 @@ fn box_shell_distance_native(p: [f64; 3], half: [f64; 3], wall: f64, round: f64)
 }
 
 fn hole_line_distance_native(
-    p: [f64; 3],
+    p: [f32; 3],
     cylinder_axis: usize,
-    radius: f64,
-    half_len: f64,
-    spacing: f64,
+    radius: f32,
+    half_len: f32,
+    spacing: f32,
     count: usize,
-) -> f64 {
+) -> f32 {
     let count = count.max(1);
-    let start = -0.5 * (count.saturating_sub(1) as f64) * spacing;
-    let mut best = f64::INFINITY;
+    let start = -0.5 * (count.saturating_sub(1) as f32) * spacing;
+    let mut best = f32::INFINITY;
     for i in 0..count {
         let mut q = p;
-        q[2] -= start + i as f64 * spacing;
+        q[2] -= start + i as f32 * spacing;
         best = best.min(axis_cylinder_distance_native(
             q,
             cylinder_axis,
@@ -2308,7 +2308,7 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                 return Err(EvalError::BuiltinNumericArgs("smoothstep"));
             };
             let span = edge1 - edge0;
-            let t = if span.abs() < f64::EPSILON {
+            let t = if span.abs() < f32::EPSILON {
                 if x < edge0 { 0.0 } else { 1.0 }
             } else {
                 ((x - edge0) / span).clamp(0.0, 1.0)
@@ -2333,7 +2333,7 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                     got: args.len(),
                 });
             }
-            map_value1("abs", &args[0], f64::abs)?
+            map_value1("abs", &args[0], f32::abs)?
         }
         "floor" => {
             if args.len() != 1 {
@@ -2343,7 +2343,7 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                     got: args.len(),
                 });
             }
-            map_value1("floor", &args[0], f64::floor)?
+            map_value1("floor", &args[0], f32::floor)?
         }
         "ceil" => {
             if args.len() != 1 {
@@ -2353,7 +2353,7 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                     got: args.len(),
                 });
             }
-            map_value1("ceil", &args[0], f64::ceil)?
+            map_value1("ceil", &args[0], f32::ceil)?
         }
         "fract" => {
             if args.len() != 1 {
@@ -2373,7 +2373,7 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                     got: args.len(),
                 });
             }
-            map_value1("sqrt", &args[0], f64::sqrt)?
+            map_value1("sqrt", &args[0], f32::sqrt)?
         }
         "sin" => {
             if args.len() != 1 {
@@ -2383,7 +2383,7 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                     got: args.len(),
                 });
             }
-            map_value1("sin", &args[0], f64::sin)?
+            map_value1("sin", &args[0], f32::sin)?
         }
         "cos" => {
             if args.len() != 1 {
@@ -2393,7 +2393,7 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                     got: args.len(),
                 });
             }
-            map_value1("cos", &args[0], f64::cos)?
+            map_value1("cos", &args[0], f32::cos)?
         }
         "value_noise_3d" => {
             if args.is_empty() || args.len() > 2 {
@@ -2591,7 +2591,7 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                     got: args.len(),
                 });
             }
-            map_value2("min", &args[0], &args[1], f64::min)?
+            map_value2("min", &args[0], &args[1], f32::min)?
         }
         "max" => {
             if args.len() != 2 {
@@ -2601,7 +2601,7 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                     got: args.len(),
                 });
             }
-            map_value2("max", &args[0], &args[1], f64::max)?
+            map_value2("max", &args[0], &args[1], f32::max)?
         }
         "pow" => {
             if args.len() != 2 {
@@ -2611,7 +2611,7 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                     got: args.len(),
                 });
             }
-            map_value2("pow", &args[0], &args[1], f64::powf)?
+            map_value2("pow", &args[0], &args[1], f32::powf)?
         }
         "dot" => {
             if args.len() != 2 {
@@ -2646,7 +2646,7 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
             }
             let v = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("normalize"))?;
             let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-            if len <= f64::EPSILON {
+            if len <= f32::EPSILON {
                 vec3_value([0.0, 0.0, 0.0])
             } else {
                 vec3_value([v[0] / len, v[1] / len, v[2] / len])
@@ -3352,7 +3352,7 @@ fn eval_sdf_expr(
     sdf_runtime: Option<SdfRuntime<'_>>,
 ) -> Result<Value, EvalError> {
     match expr {
-        Expr::Number(n) => Ok(Value::Number(*n)),
+        Expr::Number(n) => Ok(Value::Number(*n as f32)),
         Expr::String(value) => Ok(Value::String(value.clone())),
         Expr::Array(items) => {
             let mut values = Vec::with_capacity(items.len());
@@ -3904,7 +3904,7 @@ fn eval_named_vm_call(
     Err(EvalError::UnsupportedCall)
 }
 
-fn numeric_arg_slice(values: &[Value]) -> Option<Vec<f64>> {
+fn numeric_arg_slice(values: &[Value]) -> Option<Vec<f32>> {
     values
         .iter()
         .map(|value| match value {
@@ -3914,7 +3914,7 @@ fn numeric_arg_slice(values: &[Value]) -> Option<Vec<f64>> {
         .collect()
 }
 
-fn numeric_vec3(value: &Value) -> Option<[f64; 3]> {
+fn numeric_vec3(value: &Value) -> Option<[f32; 3]> {
     let Value::Object(obj) = value else {
         return None;
     };
@@ -3931,7 +3931,7 @@ fn numeric_vec3(value: &Value) -> Option<[f64; 3]> {
 fn numeric_capture_args(
     captures: &[JitCapture],
     locals: &HashMap<String, Value>,
-) -> Result<Vec<f64>, EvalError> {
+) -> Result<Vec<f32>, EvalError> {
     let mut args = Vec::new();
     for capture in captures {
         let value = resolve_local_path(locals, &capture.name)
@@ -4032,7 +4032,7 @@ fn rewrite_expr_for_jit(expr: &Expr) -> Option<Expr> {
     })
 }
 
-fn numeric_vm_args(function: &VmFunction, locals: &HashMap<String, Value>) -> Option<Vec<f64>> {
+fn numeric_vm_args(function: &VmFunction, locals: &HashMap<String, Value>) -> Option<Vec<f32>> {
     let mut args = Vec::new();
     let mut seen_locals = std::collections::HashSet::new();
     for instruction in &function.code {
@@ -4230,7 +4230,7 @@ fn eval_top_level_function_call(
 fn map_value1(
     name: &'static str,
     value: &Value,
-    f: impl Fn(f64) -> f64,
+    f: impl Fn(f32) -> f32,
 ) -> Result<Value, EvalError> {
     match value {
         Value::Number(x) => Ok(Value::Number(f(*x))),
@@ -4245,7 +4245,7 @@ fn map_value2(
     name: &'static str,
     a: &Value,
     b: &Value,
-    f: impl Fn(f64, f64) -> f64,
+    f: impl Fn(f32, f32) -> f32,
 ) -> Result<Value, EvalError> {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => Ok(Value::Number(f(*x, *y))),
@@ -4266,7 +4266,7 @@ fn map_value3(
     a: &Value,
     b: &Value,
     c: &Value,
-    f: impl Fn(f64, f64, f64) -> f64,
+    f: impl Fn(f32, f32, f32) -> f32,
 ) -> Result<Value, EvalError> {
     match (a, b, c) {
         (Value::Number(x), Value::Number(y), Value::Number(z)) => Ok(Value::Number(f(*x, *y, *z))),
@@ -4283,27 +4283,27 @@ fn map_value3(
     }
 }
 
-fn fract64(x: f64) -> f64 {
+fn fract64(x: f32) -> f32 {
     x - x.floor()
 }
 
-fn hash_noise3(p: [f64; 3]) -> f64 {
-    let qx = fract64(p[0] * std::f64::consts::FRAC_1_PI + 0.11) * 17.0;
-    let qy = fract64(p[1] * std::f64::consts::FRAC_1_PI + 0.17) * 17.0;
-    let qz = fract64(p[2] * std::f64::consts::FRAC_1_PI + 0.13) * 17.0;
+fn hash_noise3(p: [f32; 3]) -> f32 {
+    let qx = fract64(p[0] * std::f32::consts::FRAC_1_PI + 0.11) * 17.0;
+    let qy = fract64(p[1] * std::f32::consts::FRAC_1_PI + 0.17) * 17.0;
+    let qz = fract64(p[2] * std::f32::consts::FRAC_1_PI + 0.13) * 17.0;
     fract64(qx * qy * qz * (qx + qy + qz))
 }
 
-fn lerp64(a: f64, b: f64, t: f64) -> f64 {
+fn lerp64(a: f32, b: f32, t: f32) -> f32 {
     a * (1.0 - t) + b * t
 }
 
-fn smoothstep01(t: f64) -> f64 {
+fn smoothstep01(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
-fn value_noise_3d(p: [f64; 3]) -> f64 {
+fn value_noise_3d(p: [f32; 3]) -> f32 {
     let i = [p[0].floor(), p[1].floor(), p[2].floor()];
     let f = [fract64(p[0]), fract64(p[1]), fract64(p[2])];
     let u = [smoothstep01(f[0]), smoothstep01(f[1]), smoothstep01(f[2])];
@@ -4326,11 +4326,11 @@ fn value_noise_3d(p: [f64; 3]) -> f64 {
     lerp64(nxy0, nxy1, u[2]) * 2.0 - 1.0
 }
 
-fn fbm_3d(p: [f64; 3], octaves: u32, scale: f64, lacunarity: f64) -> f64 {
+fn fbm_3d(p: [f32; 3], octaves: u32, scale: f32, lacunarity: f32) -> f32 {
     let mut q = [p[0] * scale, p[1] * scale, p[2] * scale];
     let mut amplitude = 0.5;
     let mut sum = 0.0;
-    let lac = if lacunarity.abs() < f64::EPSILON {
+    let lac = if lacunarity.abs() < f32::EPSILON {
         1.0
     } else {
         lacunarity
@@ -4343,7 +4343,7 @@ fn fbm_3d(p: [f64; 3], octaves: u32, scale: f64, lacunarity: f64) -> f64 {
     sum
 }
 
-fn as_broadcastable_vec3(value: &Value) -> Option<[f64; 3]> {
+fn as_broadcastable_vec3(value: &Value) -> Option<[f32; 3]> {
     match value {
         Value::Number(x) => Some([*x, *x, *x]),
         _ => as_vec3(value),
@@ -4352,17 +4352,17 @@ fn as_broadcastable_vec3(value: &Value) -> Option<[f64; 3]> {
 
 #[derive(Clone, Copy)]
 struct Bounds3 {
-    min: [f64; 3],
-    max: [f64; 3],
+    min: [f32; 3],
+    max: [f32; 3],
 }
 
 struct AnchorSpec {
     name: String,
-    offset: f64,
+    offset: f32,
 }
 
 impl Bounds3 {
-    fn center(&self) -> [f64; 3] {
+    fn center(&self) -> [f32; 3] {
         [
             (self.min[0] + self.max[0]) * 0.5,
             (self.min[1] + self.max[1]) * 0.5,
@@ -4385,7 +4385,7 @@ impl Bounds3 {
         }
     }
 
-    fn expand(self, amount: f64) -> Self {
+    fn expand(self, amount: f32) -> Self {
         Self {
             min: [
                 self.min[0] - amount,
@@ -4436,7 +4436,7 @@ fn anchor_spec(value: &Value) -> Option<AnchorSpec> {
     })
 }
 
-fn anchor_value(name: &str, offset: f64) -> Value {
+fn anchor_value(name: &str, offset: f32) -> Value {
     Value::Object(ObjectValue {
         type_name: Some("symbol".to_string()),
         fields: HashMap::from([
@@ -4454,7 +4454,7 @@ fn anchor_value(name: &str, offset: f64) -> Value {
 
 #[derive(Clone, Copy)]
 struct AnchorPoint {
-    point: [f64; 3],
+    point: [f32; 3],
 }
 
 #[derive(Clone, Copy)]
@@ -4547,7 +4547,7 @@ fn builtin_anchor_modes(name: &str) -> Option<[AxisAnchorMode; 3]> {
     Some(modes)
 }
 
-fn point_from_modes(bounds: Bounds3, modes: [AxisAnchorMode; 3]) -> [f64; 3] {
+fn point_from_modes(bounds: Bounds3, modes: [AxisAnchorMode; 3]) -> [f32; 3] {
     let center = bounds.center();
     [
         axis_anchor_value(bounds, center, 0, modes[0]),
@@ -4556,7 +4556,7 @@ fn point_from_modes(bounds: Bounds3, modes: [AxisAnchorMode; 3]) -> [f64; 3] {
     ]
 }
 
-fn axis_anchor_value(bounds: Bounds3, center: [f64; 3], axis: usize, mode: AxisAnchorMode) -> f64 {
+fn axis_anchor_value(bounds: Bounds3, center: [f32; 3], axis: usize, mode: AxisAnchorMode) -> f32 {
     match mode {
         AxisAnchorMode::Min => bounds.min[axis],
         AxisAnchorMode::Max => bounds.max[axis],
@@ -4585,7 +4585,7 @@ fn object_anchor_point(value: &Value, name: &str) -> Option<AnchorPoint> {
     })
 }
 
-fn anchor_sign(op: BinaryOp) -> f64 {
+fn anchor_sign(op: BinaryOp) -> f32 {
     match op {
         BinaryOp::Add => 1.0,
         BinaryOp::Sub => -1.0,
@@ -4593,21 +4593,21 @@ fn anchor_sign(op: BinaryOp) -> f64 {
     }
 }
 
-fn numeric_arg(value: &Value) -> Result<f64, EvalError> {
+fn numeric_arg(value: &Value) -> Result<f32, EvalError> {
     match value {
         Value::Number(v) => Ok(*v),
         _ => Err(EvalError::UnsupportedCall),
     }
 }
 
-fn unary_numeric_args(args: &[Value]) -> Result<f64, EvalError> {
+fn unary_numeric_args(args: &[Value]) -> Result<f32, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::UnsupportedCall);
     }
     numeric_arg(&args[0])
 }
 
-fn object_position(value: &Value) -> [f64; 3] {
+fn object_position(value: &Value) -> [f32; 3] {
     let Value::Object(obj) = value else {
         return [0.0, 0.0, 0.0];
     };
@@ -4629,7 +4629,7 @@ fn object_position(value: &Value) -> [f64; 3] {
     [num("x", "x"), num("y", "y"), num("z", "z")]
 }
 
-fn object_rotation(value: &Value) -> [f64; 3] {
+fn object_rotation(value: &Value) -> [f32; 3] {
     let Value::Object(obj) = value else {
         return [0.0, 0.0, 0.0];
     };
@@ -4651,13 +4651,13 @@ fn object_rotation(value: &Value) -> [f64; 3] {
     [num("x", "rot_x"), num("y", "rot_y"), num("z", "rot_z")]
 }
 
-fn set_object_position(value: &mut Value, pos: [f64; 3]) -> Result<(), EvalError> {
+fn set_object_position(value: &mut Value, pos: [f32; 3]) -> Result<(), EvalError> {
     let obj = as_object_mut(value)?;
     obj.fields.insert("pos".to_string(), vec3_value(pos));
     Ok(())
 }
 
-fn rotate_object_axis(mut value: Value, axis: usize, angle: f64) -> Result<Value, EvalError> {
+fn rotate_object_axis(mut value: Value, axis: usize, angle: f32) -> Result<Value, EvalError> {
     let obj = as_object_mut(&mut value)?;
     let mut rot = obj
         .fields
@@ -4669,7 +4669,7 @@ fn rotate_object_axis(mut value: Value, axis: usize, angle: f64) -> Result<Value
     Ok(value)
 }
 
-fn offset_object_axis(mut value: Value, axis: usize, delta: f64) -> Result<Value, EvalError> {
+fn offset_object_axis(mut value: Value, axis: usize, delta: f32) -> Result<Value, EvalError> {
     let mut pos = object_position(&value);
     pos[axis] += delta;
     set_object_position(&mut value, pos)?;
@@ -4712,7 +4712,7 @@ fn face_object_to(
     Ok(value)
 }
 
-fn rotate_xyz(p: [f64; 3], rot_deg: [f64; 3]) -> [f64; 3] {
+fn rotate_xyz(p: [f32; 3], rot_deg: [f32; 3]) -> [f32; 3] {
     let (sx, cx) = rot_deg[0].to_radians().sin_cos();
     let (sy, cy) = rot_deg[1].to_radians().sin_cos();
     let (sz, cz) = rot_deg[2].to_radians().sin_cos();
@@ -4730,7 +4730,7 @@ fn rotate_xyz(p: [f64; 3], rot_deg: [f64; 3]) -> [f64; 3] {
     [px3, py3, pz2]
 }
 
-fn rotate_vec3(v: [f64; 3], deg: f64, axis: &str) -> [f64; 3] {
+fn rotate_vec3(v: [f32; 3], deg: f32, axis: &str) -> [f32; 3] {
     let r = deg.to_radians();
     let (s, c) = r.sin_cos();
     match axis {
@@ -4740,9 +4740,9 @@ fn rotate_vec3(v: [f64; 3], deg: f64, axis: &str) -> [f64; 3] {
     }
 }
 
-fn transformed_bounds(center: [f64; 3], rot_deg: [f64; 3], corners: &[[f64; 3]]) -> Bounds3 {
-    let mut min = [f64::INFINITY; 3];
-    let mut max = [f64::NEG_INFINITY; 3];
+fn transformed_bounds(center: [f32; 3], rot_deg: [f32; 3], corners: &[[f32; 3]]) -> Bounds3 {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
     for corner in corners {
         let p = rotate_xyz(*corner, rot_deg);
         for axis in 0..3 {
@@ -4754,14 +4754,14 @@ fn transformed_bounds(center: [f64; 3], rot_deg: [f64; 3], corners: &[[f64; 3]])
     Bounds3 { min, max }
 }
 
-fn numeric_field(obj: &ObjectValue, names: &[&str]) -> Option<f64> {
+fn numeric_field(obj: &ObjectValue, names: &[&str]) -> Option<f32> {
     names.iter().find_map(|name| match obj.fields.get(*name) {
         Some(Value::Number(v)) => Some(*v),
         _ => None,
     })
 }
 
-fn bounds_from_value(value: &Value, pos: [f64; 3]) -> Option<Bounds3> {
+fn bounds_from_value(value: &Value, pos: [f32; 3]) -> Option<Bounds3> {
     match value {
         Value::Object(_) => {
             let half = as_vec3(value)?;
@@ -4883,17 +4883,17 @@ fn object_bounds(value: &Value) -> Option<Bounds3> {
                 "repeat_y" => 1,
                 _ => 2,
             };
-            let start = -0.5 * (count.saturating_sub(1) as f64) * spacing;
+            let start = -0.5 * (count.saturating_sub(1) as f32) * spacing;
             let mut bounds = offset_bounds_axis(base, axis, start);
             for i in 1..count {
-                bounds = bounds.union(offset_bounds_axis(base, axis, start + i as f64 * spacing));
+                bounds = bounds.union(offset_bounds_axis(base, axis, start + i as f32 * spacing));
             }
             Some(bounds)
         }
         "slice_x" | "slice_y" | "slice_z" => {
             let mut base = object_bounds(obj.fields.get("base")?)?;
-            let min = numeric_field(obj, &["min"]).unwrap_or(f64::NEG_INFINITY);
-            let max = numeric_field(obj, &["max"]).unwrap_or(f64::INFINITY);
+            let min = numeric_field(obj, &["min"]).unwrap_or(f32::NEG_INFINITY);
+            let max = numeric_field(obj, &["max"]).unwrap_or(f32::INFINITY);
             let axis = match obj.type_name.as_deref()? {
                 "slice_x" => 0,
                 "slice_y" => 1,
@@ -4923,7 +4923,7 @@ fn mirror_bounds_axis(bounds: Bounds3, axis: usize) -> Bounds3 {
     Bounds3 { min, max }
 }
 
-fn offset_bounds_axis(bounds: Bounds3, axis: usize, delta: f64) -> Bounds3 {
+fn offset_bounds_axis(bounds: Bounds3, axis: usize, delta: f32) -> Bounds3 {
     let mut min = bounds.min;
     let mut max = bounds.max;
     min[axis] += delta;
@@ -4936,7 +4936,7 @@ fn attach_object(
     other: Value,
     face: &Value,
     self_face: Option<&Value>,
-    gap: f64,
+    gap: f32,
 ) -> Result<Value, EvalError> {
     let self_bounds = object_bounds(&value).ok_or(EvalError::UnsupportedLayoutObject)?;
     let other_bounds = object_bounds(&other).ok_or(EvalError::UnsupportedLayoutObject)?;
@@ -5022,8 +5022,8 @@ fn place_object_relative(
     mut value: Value,
     other: Value,
     axis: usize,
-    sign: f64,
-    gap: f64,
+    sign: f32,
+    gap: f32,
 ) -> Result<Value, EvalError> {
     let self_bounds = object_bounds(&value).ok_or(EvalError::UnsupportedLayoutObject)?;
     let other_bounds = object_bounds(&other).ok_or(EvalError::UnsupportedLayoutObject)?;
@@ -5038,7 +5038,7 @@ fn place_object_relative(
     Ok(value)
 }
 
-fn as_vec3(value: &Value) -> Option<[f64; 3]> {
+fn as_vec3(value: &Value) -> Option<[f32; 3]> {
     let Value::Object(obj) = value else {
         return None;
     };
@@ -5057,7 +5057,7 @@ fn as_vec3(value: &Value) -> Option<[f64; 3]> {
     Some([x, y, z])
 }
 
-fn vec3_value(v: [f64; 3]) -> Value {
+fn vec3_value(v: [f32; 3]) -> Value {
     let mut fields = HashMap::new();
     fields.insert("x".to_string(), Value::Number(v[0]));
     fields.insert("y".to_string(), Value::Number(v[1]));

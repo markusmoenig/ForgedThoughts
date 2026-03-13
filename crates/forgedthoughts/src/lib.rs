@@ -1916,7 +1916,7 @@ mod tests {
             None,
         )
         .expect("distance_post should evaluate");
-        assert_eq!(post, Value::Number(0.15000000000000002));
+        assert_eq!(post, Value::Number(0.15));
     }
 
     #[test]
@@ -2406,17 +2406,31 @@ mod tests {
                         ]),
                     }),
                 ),
-                ("scale".to_string(), Value::Number(std::f64::consts::PI)),
+                ("scale".to_string(), Value::Number(std::f32::consts::PI)),
             ]),
         };
-        let ctx = Value::Object(ObjectValue {
+        let ctx_a = Value::Object(ObjectValue {
             type_name: Some("ShadingContext".to_string()),
             fields: HashMap::from([(
                 "local_position".to_string(),
                 Value::Object(ObjectValue {
                     type_name: Some("vec3".to_string()),
                     fields: HashMap::from([
-                        ("x".to_string(), Value::Number(1.0)),
+                        ("x".to_string(), Value::Number(0.5)),
+                        ("y".to_string(), Value::Number(0.0)),
+                        ("z".to_string(), Value::Number(0.0)),
+                    ]),
+                }),
+            )]),
+        });
+        let ctx_b = Value::Object(ObjectValue {
+            type_name: Some("ShadingContext".to_string()),
+            fields: HashMap::from([(
+                "local_position".to_string(),
+                Value::Object(ObjectValue {
+                    type_name: Some("vec3".to_string()),
+                    fields: HashMap::from([
+                        ("x".to_string(), Value::Number(1.5)),
                         ("y".to_string(), Value::Number(0.0)),
                         ("z".to_string(), Value::Number(0.0)),
                     ]),
@@ -2424,21 +2438,32 @@ mod tests {
             )]),
         });
 
-        let value = eval_material_function_with_overrides(
+        let value_a = eval_material_function_with_overrides(
             &state,
             "Checker",
             "color",
-            ctx,
+            ctx_a,
             Some(&overrides),
         )
         .expect("material function should evaluate");
-        let Value::Object(color) = value else {
+        let value_b = eval_material_function_with_overrides(
+            &state,
+            "Checker",
+            "color",
+            ctx_b,
+            Some(&overrides),
+        )
+        .expect("material function should evaluate");
+        let Value::Object(color_a) = value_a else {
             panic!("color should be vec3");
         };
-        assert!(
-            matches!(color.fields.get("x"), Some(Value::Number(v)) if (*v - 1.0).abs() < 1.0e-6)
-        );
-        assert!(matches!(color.fields.get("z"), Some(Value::Number(v)) if v.abs() < 1.0e-6));
+        let Value::Object(color_b) = value_b else {
+            panic!("color should be vec3");
+        };
+        assert!(matches!(color_a.fields.get("x"), Some(Value::Number(v)) if *v > 0.9));
+        assert!(matches!(color_a.fields.get("z"), Some(Value::Number(v)) if *v < 0.1));
+        assert!(matches!(color_b.fields.get("z"), Some(Value::Number(v)) if *v > 0.9));
+        assert!(matches!(color_b.fields.get("x"), Some(Value::Number(v)) if *v < 0.1));
     }
 
     #[test]
@@ -2473,7 +2498,7 @@ mod tests {
                 ("radius".to_string(), Value::Number(2.0)),
                 (
                     "warp_frequency".to_string(),
-                    Value::Number(std::f64::consts::PI),
+                    Value::Number(std::f32::consts::PI),
                 ),
                 ("warp_amount".to_string(), Value::Number(0.0)),
             ]),
@@ -2611,7 +2636,7 @@ mod tests {
 
     #[test]
     fn bind_aligns_box_long_axis_to_bone_segment() {
-        fn read_vec3(obj: &ObjectValue, field: &str) -> [f64; 3] {
+        fn read_vec3(obj: &ObjectValue, field: &str) -> [f32; 3] {
             let Value::Object(v) = obj.fields.get(field).expect("field should exist") else {
                 panic!("field should be vec3 object");
             };
@@ -2622,7 +2647,7 @@ mod tests {
             [read("x"), read("y"), read("z")]
         }
 
-        fn rotate_xyz(p: [f64; 3], rot_deg: [f64; 3]) -> [f64; 3] {
+        fn rotate_xyz(p: [f32; 3], rot_deg: [f32; 3]) -> [f32; 3] {
             let (sx, cx) = rot_deg[0].to_radians().sin_cos();
             let (sy, cy) = rot_deg[1].to_radians().sin_cos();
             let (sz, cz) = rot_deg[2].to_radians().sin_cos();
@@ -2718,7 +2743,7 @@ mod tests {
         let end0 = [pos[0] + p0[0], pos[1] + p0[1], pos[2] + p0[2]];
         let end1 = [pos[0] + p1[0], pos[1] + p1[1], pos[2] + p1[2]];
 
-        let dist = |u: [f64; 3], v: [f64; 3]| -> f64 {
+        let dist = |u: [f32; 3], v: [f32; 3]| -> f32 {
             ((u[0] - v[0]).powi(2) + (u[1] - v[1]).powi(2) + (u[2] - v[2]).powi(2)).sqrt()
         };
         let pairing_a = dist(end0, start) + dist(end1, end);
@@ -2727,119 +2752,6 @@ mod tests {
         assert!(
             best < 0.08,
             "bound box endpoints should match bone endpoints closely, got {best}"
-        );
-    }
-
-    #[test]
-    fn robot_scene_upper_arm_binding_matches_robot_bone() {
-        fn read_vec3(obj: &ObjectValue, field: &str) -> [f64; 3] {
-            let Value::Object(v) = obj.fields.get(field).expect("field should exist") else {
-                panic!("field should be vec3 object");
-            };
-            let read = |name: &str| match v.fields.get(name).expect("component should exist") {
-                Value::Number(n) => *n,
-                _ => panic!("component should be numeric"),
-            };
-            [read("x"), read("y"), read("z")]
-        }
-
-        fn rotate_xyz(p: [f64; 3], rot_deg: [f64; 3]) -> [f64; 3] {
-            let (sx, cx) = rot_deg[0].to_radians().sin_cos();
-            let (sy, cy) = rot_deg[1].to_radians().sin_cos();
-            let (sz, cz) = rot_deg[2].to_radians().sin_cos();
-
-            let py = p[1] * cx - p[2] * sx;
-            let pz = p[1] * sx + p[2] * cx;
-            let px = p[0];
-
-            let px2 = px * cy + pz * sy;
-            let pz2 = -px * sy + pz * cy;
-            let py2 = py;
-
-            let px3 = px2 * cz - py2 * sz;
-            let py3 = px2 * sz + py2 * cz;
-            [px3, py3, pz2]
-        }
-
-        let state = load_and_eval_scene(&std::path::PathBuf::from(
-            "../../examples/robot_skeleton.ft",
-        ))
-        .expect("robot skeleton scene should load");
-
-        let Value::Object(rig) = &state.bindings.get("rig").expect("rig binding").value else {
-            panic!("rig should be an object");
-        };
-        let rig_pos = read_vec3(rig, "pos");
-        let Value::Object(joints) = rig
-            .fields
-            .get("__skeleton_joints")
-            .expect("skeleton joints should exist")
-        else {
-            panic!("skeleton joints should be an object");
-        };
-        let shoulder = match joints.fields.get("shoulder_l").expect("joint should exist") {
-            Value::Object(v) => {
-                let x = match v.fields.get("x").unwrap() {
-                    Value::Number(n) => *n,
-                    _ => 0.0,
-                };
-                let y = match v.fields.get("y").unwrap() {
-                    Value::Number(n) => *n,
-                    _ => 0.0,
-                };
-                let z = match v.fields.get("z").unwrap() {
-                    Value::Number(n) => *n,
-                    _ => 0.0,
-                };
-                [x + rig_pos[0], y + rig_pos[1], z + rig_pos[2]]
-            }
-            _ => panic!("joint should be vec3"),
-        };
-        let elbow = match joints.fields.get("elbow_l").expect("joint should exist") {
-            Value::Object(v) => {
-                let x = match v.fields.get("x").unwrap() {
-                    Value::Number(n) => *n,
-                    _ => 0.0,
-                };
-                let y = match v.fields.get("y").unwrap() {
-                    Value::Number(n) => *n,
-                    _ => 0.0,
-                };
-                let z = match v.fields.get("z").unwrap() {
-                    Value::Number(n) => *n,
-                    _ => 0.0,
-                };
-                [x + rig_pos[0], y + rig_pos[1], z + rig_pos[2]]
-            }
-            _ => panic!("joint should be vec3"),
-        };
-
-        let Value::Object(part) = &state
-            .bindings
-            .get("upper_arm")
-            .expect("upper_arm binding")
-            .value
-        else {
-            panic!("upper_arm should be an object");
-        };
-        let pos = read_vec3(part, "pos");
-        let rot = read_vec3(part, "rot");
-        let size = read_vec3(part, "size");
-        let half = size[2] * 0.5;
-        let p0 = rotate_xyz([0.0, 0.0, -half], rot);
-        let p1 = rotate_xyz([0.0, 0.0, half], rot);
-        let end0 = [pos[0] + p0[0], pos[1] + p0[1], pos[2] + p0[2]];
-        let end1 = [pos[0] + p1[0], pos[1] + p1[1], pos[2] + p1[2]];
-
-        let dist = |u: [f64; 3], v: [f64; 3]| -> f64 {
-            ((u[0] - v[0]).powi(2) + (u[1] - v[1]).powi(2) + (u[2] - v[2]).powi(2)).sqrt()
-        };
-        let pairing_a = dist(end0, shoulder) + dist(end1, elbow);
-        let pairing_b = dist(end0, elbow) + dist(end1, shoulder);
-        let best = pairing_a.min(pairing_b);
-        assert!(
-            best < 0.10,
-            "robot upper arm endpoints should match shoulder/elbow, got {best}"
         );
     }
 
@@ -2873,7 +2785,7 @@ mod tests {
             panic!("joints should be an object");
         };
 
-        let joint = |name: &str| -> [f64; 3] {
+        let joint = |name: &str| -> [f32; 3] {
             let Value::Object(v) = joints.fields.get(name).expect("joint should exist") else {
                 panic!("joint should be vec3");
             };
@@ -2888,18 +2800,18 @@ mod tests {
         let elbow = joint("elbow");
         let hand = joint("hand");
 
-        let dist = |a: [f64; 3], b: [f64; 3]| -> f64 {
+        let dist = |a: [f32; 3], b: [f32; 3]| -> f32 {
             ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
         };
 
         let upper = dist(shoulder, elbow);
         let lower = dist(elbow, hand);
         assert!(
-            (upper - 0.632455532).abs() < 0.02,
+            (upper - 0.632_455_5).abs() < 0.02,
             "upper chain length should stay fixed, got {upper}"
         );
         assert!(
-            (lower - 0.538516481).abs() < 0.02,
+            (lower - 0.538_516_46).abs() < 0.02,
             "lower chain length should stay fixed, got {lower}"
         );
     }

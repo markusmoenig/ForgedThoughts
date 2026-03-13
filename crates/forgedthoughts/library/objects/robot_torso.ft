@@ -55,69 +55,77 @@ sdf RobotTorso {
 
   fn distance(p) {
     let q = vec3(p.x, p.y, -p.z);
-
-    let shoulder_half = max(
-      vec3(width * 0.76 - round, depth * 0.56 - round, length * 0.12 - round),
-      vec3(0.001)
-    );
-    let chest_half = max(
-      vec3(width * 0.56 - round, depth * 0.46 - round, length * 0.16 - round),
-      vec3(0.001)
-    );
-    let waist_half = max(
-      vec3(width * 0.34 - round, depth * 0.32 - round, length * 0.22 - round),
-      vec3(0.001)
-    );
-
-    let shoulder = box_shell_sdf(
-      vec3(q.x, q.y, q.z + length * 0.27),
-      vec3(width * 0.76, depth * 0.56, length * 0.12),
+    let yoke = box_shell_sdf(
+      vec3(q.x, q.y, q.z + length * 0.24),
+      vec3(width * 0.78, depth * 0.36, length * 0.10),
       0.026,
       round
     );
+    let collar = box_shell_sdf(
+      vec3(q.x, q.y, q.z + length * 0.42),
+      vec3(width * 0.14, depth * 0.18, length * 0.08),
+      0.022,
+      round * 0.7
+    );
     let chest = box_shell_sdf(
-      vec3(q.x, q.y, q.z + length * 0.06),
-      vec3(width * 0.56, depth * 0.46, length * 0.16),
+      vec3(q.x, q.y, q.z + length * 0.02),
+      vec3(width * 0.46, depth * 0.42, length * 0.18),
       0.026,
       round
     );
     let waist = box_shell_sdf(
-      vec3(q.x, q.y, q.z - length * 0.22),
-      vec3(width * 0.34, depth * 0.32, length * 0.22),
+      vec3(q.x, q.y, q.z - length * 0.24),
+      vec3(width * 0.28, depth * 0.30, length * 0.16),
       0.026,
       round
     );
-    let body = min(min(shoulder, chest), waist);
+    let spine = box_shell_sdf(
+      vec3(q.x, q.y, q.z - length * 0.08),
+      vec3(width * 0.12, depth * 0.24, length * 0.32),
+      0.022,
+      round * 0.7
+    );
+    let body = min(min(yoke, collar), min(chest, min(waist, spine)));
 
-    let channel = Box.distance(vec3(q.x, q.y, q.z - length * 0.01), vec3(width * 0.09, depth * 0.60, length * 0.46));
+    let center_slot = Box.distance(
+      vec3(q.x, q.y, q.z - length * 0.01),
+      vec3(width * 0.09, depth * 0.60, length * 0.44)
+    );
+    let vent_left = Box.distance(
+      vec3(q.x - width * 0.22, q.y, q.z + length * 0.02),
+      vec3(width * 0.07, depth * 0.55, length * 0.18)
+    );
+    let vent_right = Box.distance(
+      vec3(q.x + width * 0.22, q.y, q.z + length * 0.02),
+      vec3(width * 0.07, depth * 0.55, length * 0.18)
+    );
 
-    let shoulder_socket_radius = min(width, depth) * 0.15;
-    let shoulder_socket_len = width * 0.12;
+    let shoulder_socket_radius = min(width, depth) * 0.13;
+    let shoulder_socket_len = width * 0.16;
     let shoulder_l = cylinder_x_sdf(
-      vec3(q.x + width * 0.66, q.y, q.z + length * 0.25),
+      vec3(q.x + width * 0.70, q.y, q.z + length * 0.24),
       shoulder_socket_radius,
-      shoulder_socket_len * 1.4
+      shoulder_socket_len
     );
     let shoulder_r = cylinder_x_sdf(
-      vec3(q.x - width * 0.66, q.y, q.z + length * 0.25),
+      vec3(q.x - width * 0.70, q.y, q.z + length * 0.24),
       shoulder_socket_radius,
-      shoulder_socket_len * 1.4
+      shoulder_socket_len
     );
-    let hip_socket_radius = min(width, depth) * 0.11;
-    let hip_socket_len = width * 0.08;
+    let hip_socket_radius = min(width, depth) * 0.10;
+    let hip_socket_len = width * 0.10;
     let hip_l = cylinder_x_sdf(
-      vec3(q.x + width * 0.28, q.y, q.z - length * 0.30),
+      vec3(q.x + width * 0.24, q.y, q.z - length * 0.34),
       hip_socket_radius,
       hip_socket_len
     );
     let hip_r = cylinder_x_sdf(
-      vec3(q.x - width * 0.28, q.y, q.z - length * 0.30),
+      vec3(q.x - width * 0.24, q.y, q.z - length * 0.34),
       hip_socket_radius,
       hip_socket_len
     );
-    let sockets = min(min(shoulder_l, shoulder_r), min(hip_l, hip_r));
 
-    let carved = min(channel, sockets);
+    let carved = min(min(center_slot, min(vent_left, vent_right)), min(min(shoulder_l, shoulder_r), min(hip_l, hip_r)));
     return max(body, -carved);
   }
 };
