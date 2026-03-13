@@ -13,7 +13,9 @@ const sidebars: SidebarsConfig = {
       label: "Language",
       items: [
         "language",
+        "math",
         "objects",
+        "custom-modeling",
         "skeletons",
         "booleans",
         "materials",

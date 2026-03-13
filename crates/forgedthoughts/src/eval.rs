@@ -1948,6 +1948,66 @@ fn vec3_len(v: [f64; 3]) -> f64 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }
 
+fn box_distance_native(p: [f64; 3], b: [f64; 3]) -> f64 {
+    let d = [p[0].abs() - b[0], p[1].abs() - b[1], p[2].abs() - b[2]];
+    let outside = vec3_len([d[0].max(0.0), d[1].max(0.0), d[2].max(0.0)]);
+    let inside = d[0].max(d[1].max(d[2])).min(0.0);
+    outside + inside
+}
+
+fn axis_cylinder_distance_native(p: [f64; 3], axis: usize, radius: f64, half_len: f64) -> f64 {
+    let (axial, radial) = match axis {
+        0 => (p[0].abs() - half_len, [p[1], p[2]]),
+        1 => (p[1].abs() - half_len, [p[0], p[2]]),
+        _ => (p[2].abs() - half_len, [p[0], p[1]]),
+    };
+    let radial = vec2_len(radial) - radius;
+    let outside = vec2_len([radial.max(0.0), axial.max(0.0)]);
+    let inside = radial.max(axial).min(0.0);
+    outside + inside
+}
+
+fn box_shell_distance_native(p: [f64; 3], half: [f64; 3], wall: f64, round: f64) -> f64 {
+    let outer_half = [
+        (half[0] - round).max(0.001),
+        (half[1] - round).max(0.001),
+        (half[2] - round).max(0.001),
+    ];
+    let outer = box_distance_native(p, outer_half) - round;
+    let inner_half = [
+        (half[0] - wall - round).max(0.001),
+        (half[1] - wall - round).max(0.001),
+        (half[2] - wall - round).max(0.001),
+    ];
+    let inner_round = (round - wall * 0.4).max(0.0);
+    let inner = box_distance_native(p, inner_half) - inner_round;
+    outer.max(-inner)
+}
+
+fn hole_line_distance_native(
+    p: [f64; 3],
+    cylinder_axis: usize,
+    radius: f64,
+    half_len: f64,
+    spacing: f64,
+    count: usize,
+) -> f64 {
+    let count = count.max(1);
+    let start = -0.5 * (count.saturating_sub(1) as f64) * spacing;
+    let mut best = f64::INFINITY;
+    for i in 0..count {
+        let mut q = p;
+        q[2] -= start + i as f64 * spacing;
+        best = best.min(axis_cylinder_distance_native(
+            q,
+            cylinder_axis,
+            radius,
+            half_len,
+        ));
+    }
+    best
+}
+
 pub fn eval_function_value(
     state: &EvalState,
     function: &FunctionValue,
@@ -2370,6 +2430,157 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
                 octaves.round().clamp(1.0, 16.0) as u32,
                 scale,
                 lacunarity,
+            ))
+        }
+        "box_shell_sdf" => {
+            if args.len() != 4 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("box_shell_sdf"))?;
+            let half = as_vec3(&args[1]).ok_or(EvalError::BuiltinVec3Args("box_shell_sdf"))?;
+            let Value::Number(wall) = args[2] else {
+                return Err(EvalError::BuiltinNumericArgs("box_shell_sdf"));
+            };
+            let Value::Number(round) = args[3] else {
+                return Err(EvalError::BuiltinNumericArgs("box_shell_sdf"));
+            };
+            Value::Number(box_shell_distance_native(
+                [p[0], p[1], p[2]],
+                [half[0], half[1], half[2]],
+                wall,
+                round,
+            ))
+        }
+        "cylinder_x_sdf" => {
+            if args.len() != 3 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("cylinder_x_sdf"))?;
+            let Value::Number(radius) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs("cylinder_x_sdf"));
+            };
+            let Value::Number(half_len) = args[2] else {
+                return Err(EvalError::BuiltinNumericArgs("cylinder_x_sdf"));
+            };
+            Value::Number(axis_cylinder_distance_native(
+                [p[0], p[1], p[2]],
+                0,
+                radius,
+                half_len,
+            ))
+        }
+        "cylinder_y_sdf" => {
+            if args.len() != 3 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("cylinder_y_sdf"))?;
+            let Value::Number(radius) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs("cylinder_y_sdf"));
+            };
+            let Value::Number(half_len) = args[2] else {
+                return Err(EvalError::BuiltinNumericArgs("cylinder_y_sdf"));
+            };
+            Value::Number(axis_cylinder_distance_native(
+                [p[0], p[1], p[2]],
+                1,
+                radius,
+                half_len,
+            ))
+        }
+        "cylinder_z_sdf" => {
+            if args.len() != 3 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("cylinder_z_sdf"))?;
+            let Value::Number(radius) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs("cylinder_z_sdf"));
+            };
+            let Value::Number(half_len) = args[2] else {
+                return Err(EvalError::BuiltinNumericArgs("cylinder_z_sdf"));
+            };
+            Value::Number(axis_cylinder_distance_native(
+                [p[0], p[1], p[2]],
+                2,
+                radius,
+                half_len,
+            ))
+        }
+        "hole_line_x_sdf" => {
+            if args.len() != 5 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("hole_line_x_sdf"))?;
+            let Value::Number(radius) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_x_sdf"));
+            };
+            let Value::Number(half_len) = args[2] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_x_sdf"));
+            };
+            let Value::Number(spacing) = args[3] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_x_sdf"));
+            };
+            let Value::Number(count) = args[4] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_x_sdf"));
+            };
+            Value::Number(hole_line_distance_native(
+                [p[0], p[1], p[2]],
+                0,
+                radius,
+                half_len,
+                spacing,
+                count.round().clamp(1.0, 32.0) as usize,
+            ))
+        }
+        "hole_line_y_sdf" => {
+            if args.len() != 5 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("hole_line_y_sdf"))?;
+            let Value::Number(radius) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_y_sdf"));
+            };
+            let Value::Number(half_len) = args[2] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_y_sdf"));
+            };
+            let Value::Number(spacing) = args[3] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_y_sdf"));
+            };
+            let Value::Number(count) = args[4] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_y_sdf"));
+            };
+            Value::Number(hole_line_distance_native(
+                [p[0], p[1], p[2]],
+                1,
+                radius,
+                half_len,
+                spacing,
+                count.round().clamp(1.0, 32.0) as usize,
+            ))
+        }
+        "hole_line_z_sdf" => {
+            if args.len() != 5 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("hole_line_z_sdf"))?;
+            let Value::Number(radius) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_z_sdf"));
+            };
+            let Value::Number(half_len) = args[2] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_z_sdf"));
+            };
+            let Value::Number(spacing) = args[3] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_z_sdf"));
+            };
+            let Value::Number(count) = args[4] else {
+                return Err(EvalError::BuiltinNumericArgs("hole_line_z_sdf"));
+            };
+            Value::Number(hole_line_distance_native(
+                [p[0], p[1], p[2]],
+                2,
+                radius,
+                half_len,
+                spacing,
+                count.round().clamp(1.0, 32.0) as usize,
             ))
         }
         "min" => {

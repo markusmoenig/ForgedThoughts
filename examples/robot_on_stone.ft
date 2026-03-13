@@ -6,6 +6,7 @@ import "RobotTorso";
 import "RobotHead";
 import "RobotJoint";
 import "RobotFoot";
+import "RobotHand";
 
 let camera = Camera {
   origin: vec3(0.0, 2.15, 7.2),
@@ -14,18 +15,18 @@ let camera = Camera {
 };
 
 let key = SphereLight {
-  position: vec3(3.6, 4.6, 4.2),
+  position: vec3(4.2, 4.8, 3.6),
   radius: 0.65,
   color: #fff2d6,
-  intensity: 132.0,
+  intensity: 148.0,
   samples: 6
 };
 
 let fill = SphereLight {
-  position: vec3(-2.6, 2.5, 3.2),
+  position: vec3(-3.2, 2.4, 2.6),
   radius: 0.35,
   color: #cfe0ff,
-  intensity: 22.0,
+  intensity: 18.0,
   samples: 4
 };
 
@@ -53,15 +54,21 @@ let floor_mat = CheckerFloor {
 };
 
 let robot_mat = Material {
-  color: #4c5563,
-  roughness: 0.36,
-  metallic: 0.58
+  color: #3f4854,
+  roughness: 0.44,
+  metallic: 0.42
 };
 
 let accent_mat = Material {
-  color: #cfd5dc,
-  roughness: 0.16,
-  metallic: 0.82
+  color: #bfc6cf,
+  roughness: 0.22,
+  metallic: 0.88
+};
+
+let joint_mat = Material {
+  color: #8b7358,
+  roughness: 0.32,
+  metallic: 0.92
 };
 
 let stone_mat = StoneMoss {
@@ -92,18 +99,18 @@ let stone = Box {
 let rig = Robot {
   height: 1.85,
   ik: {
-    leg_l: vec3(-0.26, -0.925, 0.10),
-    leg_r: vec3(0.21, -0.90, -0.05),
-    arm_l: vec3(-0.62, 0.00, 0.20),
-    arm_r: vec3(0.54, 0.14, 0.10)
+    leg_l: vec3(-0.27, -0.925, 0.12),
+    leg_r: vec3(0.20, -0.90, -0.07),
+    arm_l: vec3(-0.74, -0.08, 0.28),
+    arm_r: vec3(0.42, 0.22, -0.12)
   }
 }
   .attach(stone, Top + 0.08);
 
 let torso = RobotTorso {
-  length: 0.78,
-  width: 0.42,
-  depth: 0.30,
+  length: 0.82,
+  width: 0.48,
+  depth: 0.32,
   round: 0.04,
   material: robot_mat
 }.bind(rig.torso);
@@ -117,19 +124,19 @@ let neck = RobotSegment {
 }.bind(rig.neck_link);
 
 let shoulder_bridge = RobotSegment {
-  length: 0.86,
-  width: 0.16,
-  depth: 0.16,
-  round: 0.025,
-  material: robot_mat
+  length: 0.78,
+  width: 0.10,
+  depth: 0.10,
+  round: 0.02,
+  material: accent_mat
 }.bind(rig.shoulder_span);
 
 let hip_bridge = RobotSegment {
   length: 0.42,
-  width: 0.15,
-  depth: 0.15,
-  round: 0.025,
-  material: robot_mat
+  width: 0.11,
+  depth: 0.11,
+  round: 0.02,
+  material: accent_mat
 }.bind(rig.hip_span);
 
 let upper_arm_l = RobotSegment {
@@ -231,11 +238,26 @@ let knee_r = RobotJoint {
   material: accent_mat
 }.attach(rig.knee_r, Center);
 let hand_l = RobotJoint {
-  radius: 0.08,
-  material: accent_mat
+  radius: 0.06,
+  material: joint_mat
 }.attach(rig.hand_l, Center);
 let hand_r = RobotJoint {
-  radius: 0.08,
+  radius: 0.06,
+  material: joint_mat
+}.attach(rig.hand_r, Center);
+
+let palm_l = RobotHand {
+  width: 0.16,
+  height: 0.10,
+  length: 0.22,
+  round: 0.02,
+  material: accent_mat
+}.attach(rig.hand_l, Center);
+let palm_r = RobotHand {
+  width: 0.16,
+  height: 0.10,
+  length: 0.22,
+  round: 0.02,
   material: accent_mat
 }.attach(rig.hand_r, Center);
 
@@ -259,7 +281,7 @@ let left_arm = (((upper_arm_l + forearm_l) + shoulder_l) + elbow_l) + hand_l;
 let right_arm = (((upper_arm_r + forearm_r) + shoulder_r) + elbow_r) + hand_r;
 let left_leg = ((thigh_l + shin_l) + knee_l) + foot_l;
 let right_leg = ((thigh_r + shin_r) + knee_r) + foot_r;
-
-let robot = ((core + left_arm) + right_arm) + (left_leg + right_leg);
+let hands = palm_l + palm_r;
+let robot = (((core + left_arm) + right_arm) + (left_leg + right_leg)) + hands;
 
 let scene = floor + stone + robot;

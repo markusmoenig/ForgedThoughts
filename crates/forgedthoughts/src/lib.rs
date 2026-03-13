@@ -181,6 +181,14 @@ const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
     },
     BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Objects,
+        name: "RobotHand",
+        path: "objects/robot_hand.ft",
+        description: "Simple clamp-like robot hand with a palm block and short fingers.",
+        tags: &["object", "robot", "hand", "part"],
+        source: include_str!("../library/objects/robot_hand.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Objects,
         name: "RobotBody",
         path: "objects/robot_body.ft",
         description: "Semantic assembled robot body driven by a skeleton.",

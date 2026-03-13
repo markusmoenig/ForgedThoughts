@@ -52,6 +52,10 @@ Forge is JIT-accelerated for performance-sensitive code paths.
 
 In practice, that means hot custom SDF functions and supported dynamic material hooks can run much faster than a purely interpreted implementation, while still keeping authoring in Forge instead of forcing everything into native Rust code.
 
+## Math
+
+Forge’s scalar, vector, noise, and primitive-distance helpers are documented on the dedicated [Math](./math.md) page.
+
 ## Booleans
 
 Forge uses operators for the hard CSG core:
@@ -71,66 +75,16 @@ let shape =
     .intersect_stairs(mask, 0.12, 6.0);
 ```
 
-## Modeling Helpers
+## Custom Modeling
 
-Forge now has a first domain-helper slice for object-level SDF composition:
+Forge has a dedicated custom-modeling layer for:
 
-- `mirror_x()`, `mirror_y()`, `mirror_z()`: Mirrors an object across its local X, Y, or Z axis.
-- `repeat_x(spacing, count)`, `repeat_y(...)`, `repeat_z(...)`: Repeats an object along one axis with a fixed spacing and finite count.
-- `slice_x(min, max)`, `slice_y(...)`, `slice_z(...)`: Keeps only the part of the object between two local-space planes on one axis.
-- `noise(octaves[, scale[, lacunarity]])`: Applies recursive subtractive FBM-style surface breakup to the object.
+- object helpers like `mirror_*`, `repeat_*`, `slice_*`, and `noise(...)`
+- native primitive distance intrinsics like `Box.distance(...)`
+- programmable SDF hooks such as `domain(p)` and `distance_post(d, p)`
+- 3D noise builtins like `value_noise_3d(...)` and `fbm_3d(...)`
 
-These helpers are lowered into native renderer structures before marching, so they do not depend on the interpreted hot path.
-
-```forge
-let rib = Box { size: vec3(0.2, 1.0, 0.4) };
-
-let columns = rib.repeat_x(0.6, 5.0);
-let mirrored = columns.mirror_z();
-let clipped = mirrored.slice_y(-0.4, 0.4);
-```
-
-`noise(...)` is useful for carved rock and terrain-like breakup on otherwise simple shapes:
-
-```forge
-let stone = Box {
-  size: vec3(1.0, 1.0, 1.0),
-  round: 0.08
-}
-  .noise(7.0, 1.6, 1.2);
-```
-
-Forge also exposes 3D scalar noise helpers for material and SDF code:
-
-```forge
-let n = value_noise_3d(ctx.local_position, 1.5);
-let f = fbm_3d(ctx.local_position, 5.0, 1.2, 2.0);
-```
-
-- `value_noise_3d(p[, scale])`: Samples smooth scalar value noise at a 3D point.
-- `fbm_3d(p, octaves[, scale[, lacunarity]])`: Builds multi-octave 3D fractal noise from repeated value-noise samples.
-
-For fully programmable shaping inside custom SDFs, use SDF hooks instead:
-
-- `fn domain(p)` transforms point space before `distance(p)`
-- `fn distance_post(d, p)` modifies the computed distance afterward
-- built-ins like `rotate_x/y/z(v, deg)` work in those hooks and stay on the JIT-accelerated path when they fit the supported subset
-
-You can also attach programmable hooks directly to ordinary objects:
-
-```forge
-var statue = Box {
-  size: vec3(0.55, 1.5, 0.42)
-};
-
-statue.domain = fn(p) {
-  return rotate_y(p, p.y * 18.0);
-};
-
-statue.distance_post = fn(d, p) {
-  return abs(d + sin((p.y + 0.75) * 115.0) * 0.0045) - 0.028;
-};
-```
+See [Modeling](./custom-modeling.md) for the full workflow and examples.
 
 ## Functions
 

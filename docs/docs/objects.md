@@ -132,50 +132,9 @@ var vase = Sphere {
   .offset_x(-0.35);
 ```
 
-Forge also has a first object-level modeling-helper layer for symmetry, repetition, and clipping:
+Forge also has a custom-modeling layer for symmetry, repetition, clipping, carved noise, primitive distance intrinsics, and programmable SDF hooks.
 
-- `mirror_x()`, `mirror_y()`, `mirror_z()`: Mirrors an object across its local X, Y, or Z axis.
-- `repeat_x(spacing, count)`, `repeat_y(...)`, `repeat_z(...)`: Repeats an object along one axis with fixed spacing and finite count.
-- `slice_x(min, max)`, `slice_y(...)`, `slice_z(...)`: Clips an object to a local-space range on one axis.
-- `noise(octaves[, scale[, lacunarity]])`: Applies recursive subtractive FBM-style breakup to the object surface.
-
-```forge
-let rib = Box { size: vec3(0.2, 1.0, 0.4) };
-let columns = rib.repeat_x(0.6, 5.0);
-let mirrored = columns.mirror_z();
-let clipped = mirrored.slice_y(-0.4, 0.4);
-```
-
-Forge also supports a built-in carved noise modifier for turning simple forms into more organic ones:
-
-```forge
-let stone = Box {
-  size: vec3(1.0, 1.0, 1.0),
-  round: 0.08
-}
-  .noise(7.0, 1.6, 1.2);
-```
-
-`noise(octaves[, scale[, lacunarity]])` keeps the same object API while applying recursive subtractive FBM-style breakup to the surface.
-
-For material and custom-SDF code, Forge also exposes:
-
-- `value_noise_3d(p[, scale])`: Samples smooth scalar value noise at a 3D point.
-- `fbm_3d(p, octaves[, scale[, lacunarity]])`: Builds multi-octave 3D fractal noise from repeated value-noise samples.
-
-Custom SDF assets can also call native primitive distance intrinsics directly instead of rewriting basic shape math:
-
-```forge
-let shell = Box.distance(p, vec3(0.4, 0.2, 0.8));
-let cap = Sphere.distance(p - vec3(0.0, 0.0, 0.8), 0.18);
-```
-
-Available now:
-
-- `Box.distance(p, half_size)`
-- `Sphere.distance(p, radius)`
-- `Cylinder.distance(p, radius, half_height)`
-- `Torus.distance(p, major_radius, minor_radius)`
+See [Modeling](./custom-modeling.md) for the full helper list and examples.
 
 Orientation-aware layout can then aim an asset toward another object or anchor:
 
@@ -380,41 +339,7 @@ Rules:
 - optional `fn domain(p)` can transform point space before `distance(p)`
 - optional `fn distance_post(d, p)` can modify the computed distance afterward
 
-Example programmable modifier pattern:
-
-```forge
-sdf TwistStatue {
-  fn bounds() {
-    return vec3(0.4, 0.9, 0.4);
-  }
-
-  fn domain(p) {
-    return rotate_y(p, p.y * 18.0);
-  }
-
-  fn distance(p) {
-    return length(p) - 0.5;
-  }
-
-  fn distance_post(d, p) {
-    return abs(d + sin(p.y * 120.0) * 0.004) - 0.03;
-  }
-}
-```
-
-The same programmable hooks can be attached directly to ordinary objects without wrapping them in a full `sdf` asset:
-
-```forge
-var statue = Box { size: vec3(0.55, 1.5, 0.42) };
-
-statue.domain = fn(p) {
-  return rotate_y(p, p.y * 18.0);
-};
-
-statue.distance_post = fn(d, p) {
-  return abs(d + sin((p.y + 0.75) * 115.0) * 0.0045) - 0.028;
-};
-```
+For programmable modifier patterns and direct object-level `domain` / `distance_post` hooks, see [Modeling](./custom-modeling.md).
 
 ## Why `bounds()` Matters
 

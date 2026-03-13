@@ -1163,6 +1163,105 @@ fn compile_sdf_primitive_distance_call(
     }
 }
 
+fn emit_box_distance_sdf(
+    ctx: &mut SdfJitContext<'_, '_>,
+    p: [cranelift_codegen::ir::Value; 3],
+    b: [cranelift_codegen::ir::Value; 3],
+) -> cranelift_codegen::ir::Value {
+    let ax = ctx.fb.ins().fabs(p[0]);
+    let ay = ctx.fb.ins().fabs(p[1]);
+    let az = ctx.fb.ins().fabs(p[2]);
+    let dx = ctx.fb.ins().fsub(ax, b[0]);
+    let dy = ctx.fb.ins().fsub(ay, b[1]);
+    let dz = ctx.fb.ins().fsub(az, b[2]);
+    let zero = ctx.fb.ins().f64const(0.0);
+    let ox = ctx.fb.ins().fmax(dx, zero);
+    let oy = ctx.fb.ins().fmax(dy, zero);
+    let oz = ctx.fb.ins().fmax(dz, zero);
+    let ox2 = ctx.fb.ins().fmul(ox, ox);
+    let oy2 = ctx.fb.ins().fmul(oy, oy);
+    let oz2 = ctx.fb.ins().fmul(oz, oz);
+    let sum_xy = ctx.fb.ins().fadd(ox2, oy2);
+    let sum = ctx.fb.ins().fadd(sum_xy, oz2);
+    let outside = ctx.fb.ins().sqrt(sum);
+    let dy_dz = ctx.fb.ins().fmax(dy, dz);
+    let dmax = ctx.fb.ins().fmax(dx, dy_dz);
+    let inside = ctx.fb.ins().fmin(dmax, zero);
+    ctx.fb.ins().fadd(outside, inside)
+}
+
+fn emit_axis_cylinder_distance_sdf(
+    ctx: &mut SdfJitContext<'_, '_>,
+    p: [cranelift_codegen::ir::Value; 3],
+    radius: cranelift_codegen::ir::Value,
+    half_len: cranelift_codegen::ir::Value,
+    axis: usize,
+) -> cranelift_codegen::ir::Value {
+    let (axial_source, r0, r1) = match axis {
+        0 => (p[0], p[1], p[2]),
+        1 => (p[1], p[0], p[2]),
+        _ => (p[2], p[0], p[1]),
+    };
+    let abs_axial = ctx.fb.ins().fabs(axial_source);
+    let axial = ctx.fb.ins().fsub(abs_axial, half_len);
+    let r0_2 = ctx.fb.ins().fmul(r0, r0);
+    let r1_2 = ctx.fb.ins().fmul(r1, r1);
+    let radial_sum = ctx.fb.ins().fadd(r0_2, r1_2);
+    let radial_len = ctx.fb.ins().sqrt(radial_sum);
+    let radial = ctx.fb.ins().fsub(radial_len, radius);
+    let zero = ctx.fb.ins().f64const(0.0);
+    let orad = ctx.fb.ins().fmax(radial, zero);
+    let oax = ctx.fb.ins().fmax(axial, zero);
+    let orad2 = ctx.fb.ins().fmul(orad, orad);
+    let oax2 = ctx.fb.ins().fmul(oax, oax);
+    let outside_sum = ctx.fb.ins().fadd(orad2, oax2);
+    let outside = ctx.fb.ins().sqrt(outside_sum);
+    let inside_max = ctx.fb.ins().fmax(radial, axial);
+    let inside = ctx.fb.ins().fmin(inside_max, zero);
+    ctx.fb.ins().fadd(outside, inside)
+}
+
+fn emit_box_shell_distance_sdf(
+    ctx: &mut SdfJitContext<'_, '_>,
+    p: [cranelift_codegen::ir::Value; 3],
+    half: [cranelift_codegen::ir::Value; 3],
+    wall: cranelift_codegen::ir::Value,
+    round: cranelift_codegen::ir::Value,
+) -> cranelift_codegen::ir::Value {
+    let eps = ctx.fb.ins().f64const(0.001);
+    let outer_x = ctx.fb.ins().fsub(half[0], round);
+    let outer_y = ctx.fb.ins().fsub(half[1], round);
+    let outer_z = ctx.fb.ins().fsub(half[2], round);
+    let outer_half = [
+        ctx.fb.ins().fmax(outer_x, eps),
+        ctx.fb.ins().fmax(outer_y, eps),
+        ctx.fb.ins().fmax(outer_z, eps),
+    ];
+    let outer_box = emit_box_distance_sdf(ctx, p, outer_half);
+    let outer = ctx.fb.ins().fsub(outer_box, round);
+
+    let inner_x = ctx.fb.ins().fsub(half[0], wall);
+    let inner_y = ctx.fb.ins().fsub(half[1], wall);
+    let inner_z = ctx.fb.ins().fsub(half[2], wall);
+    let inner_x = ctx.fb.ins().fsub(inner_x, round);
+    let inner_y = ctx.fb.ins().fsub(inner_y, round);
+    let inner_z = ctx.fb.ins().fsub(inner_z, round);
+    let inner_half = [
+        ctx.fb.ins().fmax(inner_x, eps),
+        ctx.fb.ins().fmax(inner_y, eps),
+        ctx.fb.ins().fmax(inner_z, eps),
+    ];
+    let four_tenths = ctx.fb.ins().f64const(0.4);
+    let wall_term = ctx.fb.ins().fmul(wall, four_tenths);
+    let inner_round_raw = ctx.fb.ins().fsub(round, wall_term);
+    let zero = ctx.fb.ins().f64const(0.0);
+    let inner_round = ctx.fb.ins().fmax(inner_round_raw, zero);
+    let inner_box = emit_box_distance_sdf(ctx, p, inner_half);
+    let inner = ctx.fb.ins().fsub(inner_box, inner_round);
+    let neg_inner = ctx.fb.ins().fneg(inner);
+    ctx.fb.ins().fmax(outer, neg_inner)
+}
+
 fn compile_inline_sdf_function(
     params: &[String],
     body: &[SdfFunctionStatement],
@@ -1499,6 +1598,47 @@ fn compile_sdf_builtin(
         ("rotate_z", [SdfJitValue::Vec3(v), SdfJitValue::Scalar(deg)]) => {
             Some(SdfJitValue::Vec3(emit_rotate_vec3(ctx, *v, *deg, 2)?))
         }
+        (
+            "box_shell_sdf",
+            [
+                SdfJitValue::Vec3(p),
+                SdfJitValue::Vec3(half),
+                SdfJitValue::Scalar(wall),
+                SdfJitValue::Scalar(round),
+            ],
+        ) => Some(SdfJitValue::Scalar(emit_box_shell_distance_sdf(
+            ctx, *p, *half, *wall, *round,
+        ))),
+        (
+            "cylinder_x_sdf",
+            [
+                SdfJitValue::Vec3(p),
+                SdfJitValue::Scalar(radius),
+                SdfJitValue::Scalar(half_len),
+            ],
+        ) => Some(SdfJitValue::Scalar(emit_axis_cylinder_distance_sdf(
+            ctx, *p, *radius, *half_len, 0,
+        ))),
+        (
+            "cylinder_y_sdf",
+            [
+                SdfJitValue::Vec3(p),
+                SdfJitValue::Scalar(radius),
+                SdfJitValue::Scalar(half_len),
+            ],
+        ) => Some(SdfJitValue::Scalar(emit_axis_cylinder_distance_sdf(
+            ctx, *p, *radius, *half_len, 1,
+        ))),
+        (
+            "cylinder_z_sdf",
+            [
+                SdfJitValue::Vec3(p),
+                SdfJitValue::Scalar(radius),
+                SdfJitValue::Scalar(half_len),
+            ],
+        ) => Some(SdfJitValue::Scalar(emit_axis_cylinder_distance_sdf(
+            ctx, *p, *radius, *half_len, 2,
+        ))),
         _ => None,
     }
 }
@@ -1589,7 +1729,8 @@ fn infer_material_expr_kind(
                 "vec3" | "normalize" | "rotate_x" | "rotate_y" | "rotate_z" => {
                     Some(JitCaptureKind::Vec3)
                 }
-                "length" | "step" | "smoothstep" | "sin" | "cos" | "floor" | "ceil" | "sqrt" => {
+                "length" | "step" | "smoothstep" | "sin" | "cos" | "floor" | "ceil" | "sqrt"
+                | "box_shell_sdf" | "cylinder_x_sdf" | "cylinder_y_sdf" | "cylinder_z_sdf" => {
                     Some(JitCaptureKind::Scalar)
                 }
                 "abs" | "min" | "max" | "clamp" | "mix" => {
@@ -2176,6 +2317,47 @@ fn compile_material_builtin(
         ("rotate_z", [MaterialJitValue::Vec3(v), MaterialJitValue::Scalar(deg)]) => Some(
             MaterialJitValue::Vec3(emit_material_rotate_vec3(ctx, *v, *deg, 2)?),
         ),
+        (
+            "box_shell_sdf",
+            [
+                MaterialJitValue::Vec3(p),
+                MaterialJitValue::Vec3(half),
+                MaterialJitValue::Scalar(wall),
+                MaterialJitValue::Scalar(round),
+            ],
+        ) => Some(MaterialJitValue::Scalar(emit_material_box_shell_distance(
+            ctx, *p, *half, *wall, *round,
+        ))),
+        (
+            "cylinder_x_sdf",
+            [
+                MaterialJitValue::Vec3(p),
+                MaterialJitValue::Scalar(radius),
+                MaterialJitValue::Scalar(half_len),
+            ],
+        ) => Some(MaterialJitValue::Scalar(
+            emit_material_axis_cylinder_distance(ctx, *p, *radius, *half_len, 0),
+        )),
+        (
+            "cylinder_y_sdf",
+            [
+                MaterialJitValue::Vec3(p),
+                MaterialJitValue::Scalar(radius),
+                MaterialJitValue::Scalar(half_len),
+            ],
+        ) => Some(MaterialJitValue::Scalar(
+            emit_material_axis_cylinder_distance(ctx, *p, *radius, *half_len, 1),
+        )),
+        (
+            "cylinder_z_sdf",
+            [
+                MaterialJitValue::Vec3(p),
+                MaterialJitValue::Scalar(radius),
+                MaterialJitValue::Scalar(half_len),
+            ],
+        ) => Some(MaterialJitValue::Scalar(
+            emit_material_axis_cylinder_distance(ctx, *p, *radius, *half_len, 2),
+        )),
         ("mix", [lhs, rhs, MaterialJitValue::Scalar(a)]) => {
             let one = ctx.fb.ins().f64const(1.0);
             let inv = ctx.fb.ins().fsub(one, *a);
@@ -2286,6 +2468,105 @@ fn emit_material_rotate_vec3(
             Some([ctx.fb.ins().fsub(cx, sy), ctx.fb.ins().fadd(sx, cy), v[2]])
         }
     }
+}
+
+fn emit_material_box_distance(
+    ctx: &mut MaterialJitContext<'_, '_>,
+    p: [cranelift_codegen::ir::Value; 3],
+    b: [cranelift_codegen::ir::Value; 3],
+) -> cranelift_codegen::ir::Value {
+    let ax = ctx.fb.ins().fabs(p[0]);
+    let ay = ctx.fb.ins().fabs(p[1]);
+    let az = ctx.fb.ins().fabs(p[2]);
+    let dx = ctx.fb.ins().fsub(ax, b[0]);
+    let dy = ctx.fb.ins().fsub(ay, b[1]);
+    let dz = ctx.fb.ins().fsub(az, b[2]);
+    let zero = ctx.fb.ins().f64const(0.0);
+    let ox = ctx.fb.ins().fmax(dx, zero);
+    let oy = ctx.fb.ins().fmax(dy, zero);
+    let oz = ctx.fb.ins().fmax(dz, zero);
+    let ox2 = ctx.fb.ins().fmul(ox, ox);
+    let oy2 = ctx.fb.ins().fmul(oy, oy);
+    let oz2 = ctx.fb.ins().fmul(oz, oz);
+    let sum_xy = ctx.fb.ins().fadd(ox2, oy2);
+    let sum = ctx.fb.ins().fadd(sum_xy, oz2);
+    let outside = ctx.fb.ins().sqrt(sum);
+    let dy_dz = ctx.fb.ins().fmax(dy, dz);
+    let dmax = ctx.fb.ins().fmax(dx, dy_dz);
+    let inside = ctx.fb.ins().fmin(dmax, zero);
+    ctx.fb.ins().fadd(outside, inside)
+}
+
+fn emit_material_axis_cylinder_distance(
+    ctx: &mut MaterialJitContext<'_, '_>,
+    p: [cranelift_codegen::ir::Value; 3],
+    radius: cranelift_codegen::ir::Value,
+    half_len: cranelift_codegen::ir::Value,
+    axis: usize,
+) -> cranelift_codegen::ir::Value {
+    let (axial_source, r0, r1) = match axis {
+        0 => (p[0], p[1], p[2]),
+        1 => (p[1], p[0], p[2]),
+        _ => (p[2], p[0], p[1]),
+    };
+    let abs_axial = ctx.fb.ins().fabs(axial_source);
+    let axial = ctx.fb.ins().fsub(abs_axial, half_len);
+    let r0_2 = ctx.fb.ins().fmul(r0, r0);
+    let r1_2 = ctx.fb.ins().fmul(r1, r1);
+    let radial_sum = ctx.fb.ins().fadd(r0_2, r1_2);
+    let radial_len = ctx.fb.ins().sqrt(radial_sum);
+    let radial = ctx.fb.ins().fsub(radial_len, radius);
+    let zero = ctx.fb.ins().f64const(0.0);
+    let orad = ctx.fb.ins().fmax(radial, zero);
+    let oax = ctx.fb.ins().fmax(axial, zero);
+    let orad2 = ctx.fb.ins().fmul(orad, orad);
+    let oax2 = ctx.fb.ins().fmul(oax, oax);
+    let outside_sum = ctx.fb.ins().fadd(orad2, oax2);
+    let outside = ctx.fb.ins().sqrt(outside_sum);
+    let inside_max = ctx.fb.ins().fmax(radial, axial);
+    let inside = ctx.fb.ins().fmin(inside_max, zero);
+    ctx.fb.ins().fadd(outside, inside)
+}
+
+fn emit_material_box_shell_distance(
+    ctx: &mut MaterialJitContext<'_, '_>,
+    p: [cranelift_codegen::ir::Value; 3],
+    half: [cranelift_codegen::ir::Value; 3],
+    wall: cranelift_codegen::ir::Value,
+    round: cranelift_codegen::ir::Value,
+) -> cranelift_codegen::ir::Value {
+    let eps = ctx.fb.ins().f64const(0.001);
+    let outer_x = ctx.fb.ins().fsub(half[0], round);
+    let outer_y = ctx.fb.ins().fsub(half[1], round);
+    let outer_z = ctx.fb.ins().fsub(half[2], round);
+    let outer_half = [
+        ctx.fb.ins().fmax(outer_x, eps),
+        ctx.fb.ins().fmax(outer_y, eps),
+        ctx.fb.ins().fmax(outer_z, eps),
+    ];
+    let outer_box = emit_material_box_distance(ctx, p, outer_half);
+    let outer = ctx.fb.ins().fsub(outer_box, round);
+
+    let inner_x = ctx.fb.ins().fsub(half[0], wall);
+    let inner_y = ctx.fb.ins().fsub(half[1], wall);
+    let inner_z = ctx.fb.ins().fsub(half[2], wall);
+    let inner_x = ctx.fb.ins().fsub(inner_x, round);
+    let inner_y = ctx.fb.ins().fsub(inner_y, round);
+    let inner_z = ctx.fb.ins().fsub(inner_z, round);
+    let inner_half = [
+        ctx.fb.ins().fmax(inner_x, eps),
+        ctx.fb.ins().fmax(inner_y, eps),
+        ctx.fb.ins().fmax(inner_z, eps),
+    ];
+    let four_tenths = ctx.fb.ins().f64const(0.4);
+    let wall_term = ctx.fb.ins().fmul(wall, four_tenths);
+    let inner_round_raw = ctx.fb.ins().fsub(round, wall_term);
+    let zero = ctx.fb.ins().f64const(0.0);
+    let inner_round = ctx.fb.ins().fmax(inner_round_raw, zero);
+    let inner_box = emit_material_box_distance(ctx, p, inner_half);
+    let inner = ctx.fb.ins().fsub(inner_box, inner_round);
+    let neg_inner = ctx.fb.ins().fneg(inner);
+    ctx.fb.ins().fmax(outer, neg_inner)
 }
 
 fn compile_material_min_max(

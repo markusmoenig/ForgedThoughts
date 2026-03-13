@@ -1,0 +1,87 @@
+sdf RobotHand {
+  name: "RobotHand";
+  description: "Simple clamp-like robot hand with a palm block and two short fingers.";
+  tags: ["object", "robot", "hand", "part"];
+  params: [
+    {
+      name: "width",
+      type: "number",
+      description: "Overall hand width.",
+      default: 0.16,
+      min: 0.03
+    },
+    {
+      name: "height",
+      type: "number",
+      description: "Overall hand height.",
+      default: 0.10,
+      min: 0.02
+    },
+    {
+      name: "length",
+      type: "number",
+      description: "Overall hand length.",
+      default: 0.20,
+      min: 0.04
+    },
+    {
+      name: "round",
+      type: "number",
+      description: "Hand edge roundness.",
+      default: 0.02,
+      min: 0.0
+    },
+    {
+      name: "material",
+      type: "material",
+      description: "Material for the hand."
+    }
+  ];
+
+  let width = 0.16;
+  let height = 0.10;
+  let length = 0.20;
+  let round = 0.02;
+
+  let anchors = {
+    Center: vec3(0.0, 0.0, 0.0),
+    Wrist: vec3(0.0, 0.0, -length * 0.35),
+    Grip: vec3(0.0, 0.0, length * 0.30)
+  };
+
+  fn bounds() {
+    return vec3(width * 0.5, height * 0.5, length * 0.5);
+  }
+
+  fn distance(p) {
+    let palm = Box.distance(
+      vec3(p.x, p.y, p.z - length * 0.06),
+      max(
+        vec3(width * 0.44 - round, height * 0.28 - round, length * 0.34 - round),
+        vec3(0.001)
+      )
+    ) - round;
+
+    let finger_half = vec3(width * 0.10, height * 0.10, length * 0.18);
+    let finger_a = Box.distance(
+      vec3(p.x - width * 0.18, p.y - height * 0.10, p.z + length * 0.18),
+      max(finger_half - vec3(round), vec3(0.001))
+    ) - round;
+    let finger_b = Box.distance(
+      vec3(p.x + width * 0.18, p.y - height * 0.10, p.z + length * 0.18),
+      max(finger_half - vec3(round), vec3(0.001))
+    ) - round;
+
+    let thumb = Box.distance(
+      vec3(p.x + width * 0.28, p.y + height * 0.02, p.z + length * 0.02),
+      max(
+        vec3(width * 0.08 - round, height * 0.08 - round, length * 0.12 - round),
+        vec3(0.001)
+      )
+    ) - round;
+
+    return min(min(palm, min(finger_a, finger_b)), thumb);
+  }
+};
+
+export { RobotHand };
