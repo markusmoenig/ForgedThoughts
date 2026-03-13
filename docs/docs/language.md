@@ -41,6 +41,7 @@ Current supported pieces include:
 - material definitions with local bindings and functions
 - environment definitions with local bindings and functions
 - custom SDF definitions with programmable hooks like `distance(p)`, optional `domain(p)`, and optional `distance_post(d, p)`
+- skeleton definitions with explicit `joint` and `bone` declarations
 - object layout methods for relative placement
 - semantic part material assignment like `table.legs.material = ...`
 - semantic part placement like `vase.attach(table.top, Top)`
@@ -163,6 +164,12 @@ fn make_highlight() {
   return metals.Gold {};
 }
 ```
+
+## Skeletons
+
+Forge supports semantic `skeleton` assets with explicit joints, bones, and rigid part binding.
+
+See [Skeletons](./skeletons.md) for the full syntax, the `bind(...)` workflow, and the built-in `Robot` / `RobotBody` assets.
 
 ## Layout
 

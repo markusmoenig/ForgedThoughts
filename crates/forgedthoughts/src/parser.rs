@@ -2,7 +2,8 @@ use thiserror::Error;
 
 use crate::ast::{
     BinaryOp, EnvironmentDef, Expr, FunctionDef, MaterialDef, MaterialFunctionStatement,
-    MaterialStatement, Program, SdfDef, SdfStatement, Statement, UnaryOp,
+    MaterialStatement, Program, SdfDef, SdfStatement, SkeletonDef, SkeletonStatement, Statement,
+    UnaryOp,
 };
 use crate::lexer::{LexError, Token, TokenKind, tokenize};
 
@@ -55,6 +56,10 @@ impl Parser {
 
         if self.matches_ident_literal("sdf") {
             return self.parse_sdf_def();
+        }
+
+        if self.matches_ident_literal("skeleton") {
+            return self.parse_skeleton_def();
         }
 
         if self.matches_ident_literal("environment") {
@@ -304,6 +309,93 @@ impl Parser {
 
         self.expect_kind(TokenKind::Semicolon, ";")?;
         Ok(Statement::EnvironmentDef(EnvironmentDef {
+            name,
+            metadata,
+            statements,
+        }))
+    }
+
+    fn parse_skeleton_def(&mut self) -> Result<Statement, ParseError> {
+        let name = self.expect_ident()?;
+        self.expect_kind(TokenKind::LBrace, "{")?;
+        let mut metadata = Vec::new();
+        let mut statements = Vec::new();
+
+        while !self.matches_kind(TokenKind::RBrace) {
+            if self.matches_kind(TokenKind::Let) {
+                let binding_name = self.expect_ident()?;
+                self.expect_kind(TokenKind::Equal, "=")?;
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                statements.push(SkeletonStatement::Binding {
+                    name: binding_name,
+                    expr,
+                });
+                continue;
+            }
+
+            if self.matches_ident_literal("joint") {
+                let joint_name = self.expect_ident()?;
+                self.expect_kind(TokenKind::Equal, "=")?;
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                statements.push(SkeletonStatement::Joint {
+                    name: joint_name,
+                    expr,
+                });
+                continue;
+            }
+
+            if self.matches_ident_literal("bone") {
+                let bone_name = self.expect_ident()?;
+                self.expect_kind(TokenKind::Equal, "=")?;
+                let start = self.expect_ident()?;
+                self.expect_kind(TokenKind::Comma, ",")?;
+                let end = self.expect_ident()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                statements.push(SkeletonStatement::Bone {
+                    name: bone_name,
+                    start,
+                    end,
+                });
+                continue;
+            }
+
+            if self.matches_ident_literal("chain") {
+                let chain_name = self.expect_ident()?;
+                self.expect_kind(TokenKind::Equal, "=")?;
+                let start = self.expect_ident()?;
+                self.expect_kind(TokenKind::Comma, ",")?;
+                let mid = self.expect_ident()?;
+                self.expect_kind(TokenKind::Comma, ",")?;
+                let end = self.expect_ident()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                statements.push(SkeletonStatement::Chain {
+                    name: chain_name,
+                    start,
+                    mid,
+                    end,
+                });
+                continue;
+            }
+
+            let field = self.expect_ident()?;
+            if matches!(field.as_str(), "name" | "description" | "tags" | "params") {
+                self.expect_kind(TokenKind::Colon, ":")?;
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                metadata.push((field, expr));
+                continue;
+            }
+
+            return Err(ParseError::Expected {
+                expected: "let, joint, bone, chain, or metadata field",
+                offset: self.current_offset(),
+            });
+        }
+
+        self.expect_kind(TokenKind::Semicolon, ";")?;
+        Ok(Statement::SkeletonDef(SkeletonDef {
             name,
             metadata,
             statements,

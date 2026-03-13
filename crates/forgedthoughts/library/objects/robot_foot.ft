@@ -1,0 +1,73 @@
+sdf RobotFoot {
+  name: "RobotFoot";
+  description: "Simple robot foot block with a forward toe offset.";
+  tags: ["object", "robot", "foot", "part"];
+  params: [
+    {
+      name: "width",
+      type: "number",
+      description: "Foot width.",
+      default: 0.16,
+      min: 0.03
+    },
+    {
+      name: "height",
+      type: "number",
+      description: "Foot height.",
+      default: 0.08,
+      min: 0.02
+    },
+    {
+      name: "length",
+      type: "number",
+      description: "Foot length.",
+      default: 0.30,
+      min: 0.05
+    },
+    {
+      name: "round",
+      type: "number",
+      description: "Foot edge roundness.",
+      default: 0.02,
+      min: 0.0
+    },
+    {
+      name: "material",
+      type: "material",
+      description: "Material for the foot."
+    }
+  ];
+
+  let width = 0.16;
+  let height = 0.08;
+  let length = 0.30;
+  let round = 0.02;
+
+  let anchors = {
+    Center: vec3(0.0, 0.0, 0.0),
+    Heel: vec3(0.0, 0.0, -length * 0.3),
+    Toe: vec3(0.0, 0.0, length * 0.5)
+  };
+
+  fn sd_box(p, half_size) {
+    let q = abs(p) - half_size;
+    let outside = length(max(q, vec3(0.0)));
+    let inside = min(max(q.x, max(q.y, q.z)), 0.0);
+    return outside + inside;
+  }
+
+  fn bounds() {
+    return vec3(width * 0.5, height * 0.5, length * 0.5);
+  }
+
+  fn distance(p) {
+    let center_z = length * 0.1;
+    let half = max(
+      vec3(width * 0.5 - round, height * 0.5 - round, length * 0.5 - round),
+      vec3(0.001)
+    );
+    return sd_box(vec3(p.x, p.y, p.z - center_z), half) - round;
+  }
+};
+
+export { RobotFoot };

@@ -1,0 +1,72 @@
+sdf RobotSegment {
+  name: "RobotSegment";
+  description: "Reusable rigid robot limb segment modeled in a canonical bind pose along local +Z.";
+  tags: ["object", "robot", "part", "limb", "bindable"];
+  params: [
+    {
+      name: "length",
+      type: "number",
+      description: "Segment length from Start to End along the local bind axis.",
+      default: 0.5,
+      min: 0.05
+    },
+    {
+      name: "width",
+      type: "number",
+      description: "Width of the segment cross section.",
+      default: 0.15,
+      min: 0.02
+    },
+    {
+      name: "depth",
+      type: "number",
+      description: "Depth of the segment cross section.",
+      default: 0.15,
+      min: 0.02
+    },
+    {
+      name: "round",
+      type: "number",
+      description: "Corner roundness of the segment body.",
+      default: 0.03,
+      min: 0.0
+    },
+    {
+      name: "material",
+      type: "material",
+      description: "Material for the segment."
+    }
+  ];
+
+  let length = 0.5;
+  let width = 0.15;
+  let depth = 0.15;
+  let round = 0.03;
+
+  let anchors = {
+    Start: vec3(0.0, 0.0, -length * 0.5),
+    End: vec3(0.0, 0.0, length * 0.5),
+    Center: vec3(0.0, 0.0, 0.0)
+  };
+
+  fn sd_box(p, half_size) {
+    let q = abs(p) - half_size;
+    let outside = length(max(q, vec3(0.0)));
+    let inside = min(max(q.x, max(q.y, q.z)), 0.0);
+    return outside + inside;
+  }
+
+  fn bounds() {
+    return vec3(width * 0.5, depth * 0.5, length * 0.5);
+  }
+
+  fn distance(p) {
+    let half = max(
+      vec3(width * 0.5 - round, depth * 0.5 - round, length * 0.5 - round),
+      vec3(0.001)
+    );
+    return sd_box(p, half) - round;
+  }
+};
+
+export { RobotSegment };

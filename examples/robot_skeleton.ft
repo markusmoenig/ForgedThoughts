@@ -1,0 +1,71 @@
+import "Robot";
+import "RobotBody";
+
+let camera = Camera {
+  origin: vec3(0.0, 1.7, 5.8),
+  target: vec3(0.0, 1.2, 0.0),
+  fov_y: 28.0
+};
+
+let key = SphereLight {
+  position: vec3(3.5, 4.8, 4.5),
+  radius: 0.65,
+  color: #fff2d6,
+  intensity: 135.0,
+  samples: 6
+};
+
+environment Sky {
+  let zenith = #4d86ff;
+  let horizon = #d9ebff;
+
+  fn color(dir) {
+    let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    return mix(horizon, zenith, pow(t, 0.7));
+  }
+};
+
+let render = RenderSettings {
+  width: 800,
+  height: 800,
+  max_steps: 420,
+  max_dist: 40.0,
+  epsilon: 0.0002,
+  step_scale: 0.7,
+  accel: Bvh{}
+};
+
+let floor_mat = Material {
+  color: #7a7f89,
+  roughness: 0.72
+};
+
+let robot_mat = Material {
+  color: #c8d0d8,
+  roughness: 0.22,
+  metallic: 0.72
+};
+
+let accent_mat = Material {
+  color: #f4a261,
+  roughness: 0.35,
+  metallic: 0.18
+};
+
+let floor = Box {
+  size: vec3(8.0, 0.4, 8.0),
+  material: floor_mat
+};
+
+let rig = Robot {
+  height: 1.9
+}
+  .attach(floor, Top);
+
+let robot = RobotBody {
+  skeleton: rig,
+  material: robot_mat,
+  accent_material: accent_mat
+};
+
+let scene = floor + robot;

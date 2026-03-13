@@ -10,6 +10,7 @@ List built-in library assets with descriptions and tags:
 ```bash
 ftc list materials
 ftc list objects
+ftc list skeletons
 ftc list scenes
 ```
 

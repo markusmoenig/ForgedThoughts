@@ -1,0 +1,105 @@
+import "CheckerFloor";
+import "StoneMoss";
+import "Robot";
+import "RobotBody";
+
+let camera = Camera {
+  origin: vec3(0.0, 2.15, 7.2),
+  target: vec3(0.0, 1.15, 0.0),
+  fov_y: 27.0
+};
+
+let key = SphereLight {
+  position: vec3(3.6, 4.6, 4.2),
+  radius: 0.65,
+  color: #fff2d6,
+  intensity: 132.0,
+  samples: 6
+};
+
+let fill = SphereLight {
+  position: vec3(-2.6, 2.5, 3.2),
+  radius: 0.35,
+  color: #cfe0ff,
+  intensity: 22.0,
+  samples: 4
+};
+
+environment Sky {
+  fn color(dir) {
+    let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    return mix(#ddeaff, #7098e9, pow(t, 0.7));
+  }
+};
+
+let render = RenderSettings {
+  width: 800,
+  height: 800,
+  max_steps: 460,
+  max_dist: 45.0,
+  epsilon: 0.0002,
+  step_scale: 0.7,
+  accel: Bvh{}
+};
+
+let floor_mat = CheckerFloor {
+  color_a: #f0f2f5,
+  color_b: #7f8792,
+  scale: 3.2
+};
+
+let robot_mat = Material {
+  color: #c4cdd6,
+  roughness: 0.22,
+  metallic: 0.72
+};
+
+let accent_mat = Material {
+  color: #f2a65a,
+  roughness: 0.34,
+  metallic: 0.18
+};
+
+let stone_mat = StoneMoss {
+  stone_color: #5e564d,
+  moss_color: #233a12,
+  moss_amount: 0.46,
+  moss_scale: 1.35,
+  up_bias: 0.12,
+  stone_roughness: 0.46,
+  moss_roughness: 0.98,
+  detail_scale: 2.6,
+  moss_bulge: 0.42
+};
+
+let floor = Box {
+  size: vec3(8.0, 0.4, 8.0),
+  material: floor_mat
+};
+
+let stone = Box {
+  size: vec3(1.6, 0.5, 1.1),
+  round: 0.08,
+  material: stone_mat
+}
+  .attach(floor, Top)
+  .noise(7.0, 1.0, 1.15);
+
+let rig = Robot {
+  height: 1.85,
+  ik: {
+    leg_l: vec3(-0.26, -0.925, 0.10),
+    leg_r: vec3(0.21, -0.90, -0.05),
+    arm_l: vec3(-0.56, 0.02, 0.20),
+    arm_r: vec3(0.48, 0.10, 0.08)
+  }
+}
+  .attach(stone, Top + 0.08);
+
+let robot = RobotBody {
+  skeleton: rig,
+  material: robot_mat,
+  accent_material: accent_mat
+};
+
+let scene = floor + stone + robot;

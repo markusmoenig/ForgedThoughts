@@ -1,0 +1,72 @@
+sdf RobotTorso {
+  name: "RobotTorso";
+  description: "Robot torso segment modeled in a canonical bind pose along local +Z.";
+  tags: ["object", "robot", "torso", "part", "bindable"];
+  params: [
+    {
+      name: "length",
+      type: "number",
+      description: "Torso height along the bind axis.",
+      default: 0.72,
+      min: 0.1
+    },
+    {
+      name: "width",
+      type: "number",
+      description: "Torso width.",
+      default: 0.32,
+      min: 0.05
+    },
+    {
+      name: "depth",
+      type: "number",
+      description: "Torso depth.",
+      default: 0.26,
+      min: 0.05
+    },
+    {
+      name: "round",
+      type: "number",
+      description: "Torso edge roundness.",
+      default: 0.04,
+      min: 0.0
+    },
+    {
+      name: "material",
+      type: "material",
+      description: "Material for the torso."
+    }
+  ];
+
+  let length = 0.72;
+  let width = 0.32;
+  let depth = 0.26;
+  let round = 0.04;
+
+  let anchors = {
+    Start: vec3(0.0, 0.0, -length * 0.5),
+    End: vec3(0.0, 0.0, length * 0.5),
+    Center: vec3(0.0, 0.0, 0.0)
+  };
+
+  fn sd_box(p, half_size) {
+    let q = abs(p) - half_size;
+    let outside = length(max(q, vec3(0.0)));
+    let inside = min(max(q.x, max(q.y, q.z)), 0.0);
+    return outside + inside;
+  }
+
+  fn bounds() {
+    return vec3(width * 0.5, depth * 0.5, length * 0.5);
+  }
+
+  fn distance(p) {
+    let half = max(
+      vec3(width * 0.5 - round, depth * 0.5 - round, length * 0.5 - round),
+      vec3(0.001)
+    );
+    return sd_box(p, half) - round;
+  }
+};
+
+export { RobotTorso };

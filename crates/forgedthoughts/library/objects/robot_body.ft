@@ -1,0 +1,36 @@
+sdf RobotBody {
+  name: "RobotBody";
+  description: "Semantic assembled robot body driven by a skeleton and bindable rigid part conventions.";
+  tags: ["object", "robot", "body", "skeleton", "semantic"];
+  params: [
+    {
+      name: "skeleton",
+      type: "skeleton",
+      description: "Skeleton instance that provides the robot joints and bones."
+    },
+    {
+      name: "material",
+      type: "material",
+      description: "Main material for torso, limbs, pelvis, and feet."
+    },
+    {
+      name: "accent_material",
+      type: "material",
+      description: "Accent material for head and visible joints."
+    }
+  ];
+
+  let anchors = {
+    Center: vec3(0.0, 0.0, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(1.5);
+  }
+
+  fn distance(p) {
+    return 1000000.0;
+  }
+};
+
+export { RobotBody };

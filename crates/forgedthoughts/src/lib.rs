@@ -46,6 +46,7 @@ use thiserror::Error;
 pub enum BuiltinLibraryCategory {
     Materials,
     Objects,
+    Skeletons,
     Scenes,
 }
 
@@ -137,6 +138,62 @@ const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
         description: "Procedural twisted shell statue with fine horizontal banding for sculptural accents.",
         tags: &["object", "statue", "sculpture", "procedural", "decor"],
         source: include_str!("../library/objects/twisted_statue.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Objects,
+        name: "RobotSegment",
+        path: "objects/robot_segment.ft",
+        description: "Reusable rigid robot limb segment modeled in a canonical bind pose.",
+        tags: &["object", "robot", "part", "limb", "bindable"],
+        source: include_str!("../library/objects/robot_segment.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Objects,
+        name: "RobotTorso",
+        path: "objects/robot_torso.ft",
+        description: "Reusable robot torso segment modeled in a canonical bind pose.",
+        tags: &["object", "robot", "torso", "part", "bindable"],
+        source: include_str!("../library/objects/robot_torso.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Objects,
+        name: "RobotHead",
+        path: "objects/robot_head.ft",
+        description: "Simple rounded robot head for skeleton scenes.",
+        tags: &["object", "robot", "head", "part"],
+        source: include_str!("../library/objects/robot_head.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Objects,
+        name: "RobotJoint",
+        path: "objects/robot_joint.ft",
+        description: "Spherical robot joint marker for articulated assemblies.",
+        tags: &["object", "robot", "joint", "part"],
+        source: include_str!("../library/objects/robot_joint.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Objects,
+        name: "RobotFoot",
+        path: "objects/robot_foot.ft",
+        description: "Simple forward-offset robot foot block.",
+        tags: &["object", "robot", "foot", "part"],
+        source: include_str!("../library/objects/robot_foot.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Objects,
+        name: "RobotBody",
+        path: "objects/robot_body.ft",
+        description: "Semantic assembled robot body driven by a skeleton.",
+        tags: &["object", "robot", "body", "skeleton", "semantic"],
+        source: include_str!("../library/objects/robot_body.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Skeletons,
+        name: "Robot",
+        path: "skeletons/robot.ft",
+        description: "Simplified rigid biped robot skeleton with named joints and segment bones.",
+        tags: &["skeleton", "robot", "biped", "rig", "semantic"],
+        source: include_str!("../library/skeletons/robot.ft"),
     },
     BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Scenes,
@@ -422,6 +479,14 @@ fn extract_builtin_metadata(item: &BuiltinLibraryItem) -> Option<BuiltinLibraryM
                     &def.metadata,
                 ));
             }
+            Statement::SkeletonDef(def) if def.name == item.name => {
+                return Some(metadata_from_pairs(
+                    item.name,
+                    item.description,
+                    item.tags,
+                    &def.metadata,
+                ));
+            }
             Statement::EnvironmentDef(def) if def.name == item.name => {
                 return Some(metadata_from_pairs(
                     item.name,
@@ -561,6 +626,9 @@ fn namespace_statements(statements: Vec<Statement>, alias: &str) -> Vec<Statemen
                 top_level_names.insert(def.name.clone());
             }
             Statement::SdfDef(def) => {
+                top_level_names.insert(def.name.clone());
+            }
+            Statement::SkeletonDef(def) => {
                 top_level_names.insert(def.name.clone());
             }
             Statement::EnvironmentDef(def) => {
@@ -784,6 +852,54 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                 .collect();
             Statement::EnvironmentDef(def)
         }
+        Statement::SkeletonDef(mut def) => {
+            let mut scope = HashSet::new();
+            for stmt in &def.statements {
+                if let ast::SkeletonStatement::Binding { name, .. } = stmt {
+                    scope.insert(name.clone());
+                }
+                if let ast::SkeletonStatement::Joint { name, .. } = stmt {
+                    scope.insert(name.clone());
+                }
+            }
+            def.name = qualify_name(alias, &def.name);
+            def.metadata = def
+                .metadata
+                .into_iter()
+                .map(|(name, expr)| (name, namespace_expr(expr, alias, names, &scope)))
+                .collect();
+            def.statements = def
+                .statements
+                .into_iter()
+                .map(|stmt| match stmt {
+                    ast::SkeletonStatement::Binding { name, expr } => {
+                        ast::SkeletonStatement::Binding {
+                            name,
+                            expr: namespace_expr(expr, alias, names, &scope),
+                        }
+                    }
+                    ast::SkeletonStatement::Joint { name, expr } => ast::SkeletonStatement::Joint {
+                        name,
+                        expr: namespace_expr(expr, alias, names, &scope),
+                    },
+                    ast::SkeletonStatement::Bone { name, start, end } => {
+                        ast::SkeletonStatement::Bone { name, start, end }
+                    }
+                    ast::SkeletonStatement::Chain {
+                        name,
+                        start,
+                        mid,
+                        end,
+                    } => ast::SkeletonStatement::Chain {
+                        name,
+                        start,
+                        mid,
+                        end,
+                    },
+                })
+                .collect();
+            Statement::SkeletonDef(def)
+        }
         Statement::Import { path, alias } => Statement::Import { path, alias },
         Statement::Export(names) => Statement::Export(names),
     }
@@ -820,6 +936,9 @@ fn filter_exported_statements(
             Statement::SdfDef(def) => {
                 by_name.insert(def.name.clone(), stmt.clone());
             }
+            Statement::SkeletonDef(def) => {
+                by_name.insert(def.name.clone(), stmt.clone());
+            }
             Statement::EnvironmentDef(def) => {
                 by_name.insert(def.name.clone(), stmt.clone());
             }
@@ -850,6 +969,7 @@ fn filter_exported_statements(
             Statement::FunctionDef(def) => keep.contains(&def.name),
             Statement::MaterialDef(def) => keep.contains(&def.name),
             Statement::SdfDef(def) => keep.contains(&def.name),
+            Statement::SkeletonDef(def) => keep.contains(&def.name),
             Statement::EnvironmentDef(def) => keep.contains(&def.name),
             Statement::Assign { path, .. } => path.first().is_some_and(|name| keep.contains(name)),
             Statement::Import { .. } | Statement::Export(_) => false,
@@ -949,6 +1069,52 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
                                     deps.extend(expr_dependencies(expr, &fn_scope));
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            deps
+        }
+        Statement::SkeletonDef(def) => {
+            let mut deps = HashSet::new();
+            let mut scope = HashSet::new();
+            for stmt in &def.statements {
+                match stmt {
+                    ast::SkeletonStatement::Binding { name, .. }
+                    | ast::SkeletonStatement::Joint { name, .. } => {
+                        scope.insert(name.clone());
+                    }
+                    ast::SkeletonStatement::Bone { .. } | ast::SkeletonStatement::Chain { .. } => {}
+                }
+            }
+            for (_, expr) in &def.metadata {
+                deps.extend(expr_dependencies(expr, &scope));
+            }
+            for stmt in &def.statements {
+                match stmt {
+                    ast::SkeletonStatement::Binding { expr, .. }
+                    | ast::SkeletonStatement::Joint { expr, .. } => {
+                        deps.extend(expr_dependencies(expr, &scope));
+                    }
+                    ast::SkeletonStatement::Bone { start, end, .. } => {
+                        if !scope.contains(start) {
+                            deps.insert(start.clone());
+                        }
+                        if !scope.contains(end) {
+                            deps.insert(end.clone());
+                        }
+                    }
+                    ast::SkeletonStatement::Chain {
+                        start, mid, end, ..
+                    } => {
+                        if !scope.contains(start) {
+                            deps.insert(start.clone());
+                        }
+                        if !scope.contains(mid) {
+                            deps.insert(mid.clone());
+                        }
+                        if !scope.contains(end) {
+                            deps.insert(end.clone());
                         }
                     }
                 }
@@ -2384,6 +2550,350 @@ mod tests {
             panic!("roughness should be numeric");
         };
         assert!(value.is_finite());
+    }
+
+    #[test]
+    fn supports_skeleton_assets_and_semantic_bones() {
+        let source = r#"
+            skeleton Robot {
+              joint pelvis = vec3(0.0, 1.0, 0.0);
+              joint neck = vec3(0.0, 1.6, 0.0);
+              joint elbow_l = vec3(-0.6, 1.3, 0.0);
+              joint hand_l = vec3(-0.85, 1.05, 0.0);
+              bone torso = pelvis, neck;
+              bone forearm_l = elbow_l, hand_l;
+            };
+
+            let robot = Robot {};
+            let hand = robot.hand_l;
+            let forearm = robot.forearm_l;
+        "#;
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+
+        let Value::Object(robot) = &state.bindings.get("robot").expect("robot binding").value
+        else {
+            panic!("robot should be an object");
+        };
+        assert!(robot.fields.contains_key("anchors"));
+        assert!(robot.fields.contains_key("__skeleton_joints"));
+        assert!(robot.fields.contains_key("__skeleton_bones"));
+
+        let Value::Object(hand) = &state.bindings.get("hand").expect("hand binding").value else {
+            panic!("hand should be an object");
+        };
+        assert_eq!(hand.type_name.as_deref(), Some("SkeletonJoint"));
+        assert!(hand.fields.contains_key("__bounds"));
+
+        let Value::Object(forearm) = &state
+            .bindings
+            .get("forearm")
+            .expect("forearm binding")
+            .value
+        else {
+            panic!("forearm should be an object");
+        };
+        assert_eq!(forearm.type_name.as_deref(), Some("SkeletonBone"));
+        let Value::Object(anchors) = forearm.fields.get("anchors").expect("anchors field") else {
+            panic!("forearm anchors should be an object");
+        };
+        assert!(anchors.fields.contains_key("Start"));
+        assert!(anchors.fields.contains_key("End"));
+    }
+
+    #[test]
+    fn bind_aligns_box_long_axis_to_bone_segment() {
+        fn read_vec3(obj: &ObjectValue, field: &str) -> [f64; 3] {
+            let Value::Object(v) = obj.fields.get(field).expect("field should exist") else {
+                panic!("field should be vec3 object");
+            };
+            let read = |name: &str| match v.fields.get(name).expect("component should exist") {
+                Value::Number(n) => *n,
+                _ => panic!("component should be numeric"),
+            };
+            [read("x"), read("y"), read("z")]
+        }
+
+        fn rotate_xyz(p: [f64; 3], rot_deg: [f64; 3]) -> [f64; 3] {
+            let (sx, cx) = rot_deg[0].to_radians().sin_cos();
+            let (sy, cy) = rot_deg[1].to_radians().sin_cos();
+            let (sz, cz) = rot_deg[2].to_radians().sin_cos();
+
+            let py = p[1] * cx - p[2] * sx;
+            let pz = p[1] * sx + p[2] * cx;
+            let px = p[0];
+
+            let px2 = px * cy + pz * sy;
+            let pz2 = -px * sy + pz * cy;
+            let py2 = py;
+
+            let px3 = px2 * cz - py2 * sz;
+            let py3 = px2 * sz + py2 * cz;
+            [px3, py3, pz2]
+        }
+
+        let source = r#"
+            skeleton Rig {
+              joint a = vec3(0.0, 1.6, 0.0);
+              joint b = vec3(-0.3, 1.0, 0.0);
+              bone arm = a, b;
+            };
+
+            let rig = Rig {};
+            let part = Box {
+              size: vec3(0.1, 0.1, 0.5)
+            }.bind(rig.arm);
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+
+        let Value::Object(rig) = &state.bindings.get("rig").expect("rig binding").value else {
+            panic!("rig should be an object");
+        };
+        let Value::Object(joints) = rig
+            .fields
+            .get("__skeleton_joints")
+            .expect("skeleton joints should exist")
+        else {
+            panic!("skeleton joints should be an object");
+        };
+        let a = match joints.fields.get("a").expect("joint a should exist") {
+            Value::Object(v) => {
+                let x = match v.fields.get("x").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                let y = match v.fields.get("y").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                let z = match v.fields.get("z").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                [x, y, z]
+            }
+            _ => panic!("joint a should be vec3"),
+        };
+        let b = match joints.fields.get("b").expect("joint b should exist") {
+            Value::Object(v) => {
+                let x = match v.fields.get("x").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                let y = match v.fields.get("y").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                let z = match v.fields.get("z").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                [x, y, z]
+            }
+            _ => panic!("joint b should be vec3"),
+        };
+        let rig_pos = read_vec3(rig, "pos");
+        let start = [a[0] + rig_pos[0], a[1] + rig_pos[1], a[2] + rig_pos[2]];
+        let end = [b[0] + rig_pos[0], b[1] + rig_pos[1], b[2] + rig_pos[2]];
+
+        let Value::Object(part) = &state.bindings.get("part").expect("part binding").value else {
+            panic!("part should be an object");
+        };
+        let pos = read_vec3(part, "pos");
+        let rot = read_vec3(part, "rot");
+        let size = read_vec3(part, "size");
+        let half = size[2] * 0.5;
+        let p0 = rotate_xyz([0.0, 0.0, -half], rot);
+        let p1 = rotate_xyz([0.0, 0.0, half], rot);
+        let end0 = [pos[0] + p0[0], pos[1] + p0[1], pos[2] + p0[2]];
+        let end1 = [pos[0] + p1[0], pos[1] + p1[1], pos[2] + p1[2]];
+
+        let dist = |u: [f64; 3], v: [f64; 3]| -> f64 {
+            ((u[0] - v[0]).powi(2) + (u[1] - v[1]).powi(2) + (u[2] - v[2]).powi(2)).sqrt()
+        };
+        let pairing_a = dist(end0, start) + dist(end1, end);
+        let pairing_b = dist(end0, end) + dist(end1, start);
+        let best = pairing_a.min(pairing_b);
+        assert!(
+            best < 0.08,
+            "bound box endpoints should match bone endpoints closely, got {best}"
+        );
+    }
+
+    #[test]
+    fn robot_scene_upper_arm_binding_matches_robot_bone() {
+        fn read_vec3(obj: &ObjectValue, field: &str) -> [f64; 3] {
+            let Value::Object(v) = obj.fields.get(field).expect("field should exist") else {
+                panic!("field should be vec3 object");
+            };
+            let read = |name: &str| match v.fields.get(name).expect("component should exist") {
+                Value::Number(n) => *n,
+                _ => panic!("component should be numeric"),
+            };
+            [read("x"), read("y"), read("z")]
+        }
+
+        fn rotate_xyz(p: [f64; 3], rot_deg: [f64; 3]) -> [f64; 3] {
+            let (sx, cx) = rot_deg[0].to_radians().sin_cos();
+            let (sy, cy) = rot_deg[1].to_radians().sin_cos();
+            let (sz, cz) = rot_deg[2].to_radians().sin_cos();
+
+            let py = p[1] * cx - p[2] * sx;
+            let pz = p[1] * sx + p[2] * cx;
+            let px = p[0];
+
+            let px2 = px * cy + pz * sy;
+            let pz2 = -px * sy + pz * cy;
+            let py2 = py;
+
+            let px3 = px2 * cz - py2 * sz;
+            let py3 = px2 * sz + py2 * cz;
+            [px3, py3, pz2]
+        }
+
+        let state = load_and_eval_scene(&std::path::PathBuf::from(
+            "../../examples/robot_skeleton.ft",
+        ))
+        .expect("robot skeleton scene should load");
+
+        let Value::Object(rig) = &state.bindings.get("rig").expect("rig binding").value else {
+            panic!("rig should be an object");
+        };
+        let rig_pos = read_vec3(rig, "pos");
+        let Value::Object(joints) = rig
+            .fields
+            .get("__skeleton_joints")
+            .expect("skeleton joints should exist")
+        else {
+            panic!("skeleton joints should be an object");
+        };
+        let shoulder = match joints.fields.get("shoulder_l").expect("joint should exist") {
+            Value::Object(v) => {
+                let x = match v.fields.get("x").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                let y = match v.fields.get("y").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                let z = match v.fields.get("z").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                [x + rig_pos[0], y + rig_pos[1], z + rig_pos[2]]
+            }
+            _ => panic!("joint should be vec3"),
+        };
+        let elbow = match joints.fields.get("elbow_l").expect("joint should exist") {
+            Value::Object(v) => {
+                let x = match v.fields.get("x").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                let y = match v.fields.get("y").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                let z = match v.fields.get("z").unwrap() {
+                    Value::Number(n) => *n,
+                    _ => 0.0,
+                };
+                [x + rig_pos[0], y + rig_pos[1], z + rig_pos[2]]
+            }
+            _ => panic!("joint should be vec3"),
+        };
+
+        let Value::Object(part) = &state
+            .bindings
+            .get("upper_arm")
+            .expect("upper_arm binding")
+            .value
+        else {
+            panic!("upper_arm should be an object");
+        };
+        let pos = read_vec3(part, "pos");
+        let rot = read_vec3(part, "rot");
+        let size = read_vec3(part, "size");
+        let half = size[2] * 0.5;
+        let p0 = rotate_xyz([0.0, 0.0, -half], rot);
+        let p1 = rotate_xyz([0.0, 0.0, half], rot);
+        let end0 = [pos[0] + p0[0], pos[1] + p0[1], pos[2] + p0[2]];
+        let end1 = [pos[0] + p1[0], pos[1] + p1[1], pos[2] + p1[2]];
+
+        let dist = |u: [f64; 3], v: [f64; 3]| -> f64 {
+            ((u[0] - v[0]).powi(2) + (u[1] - v[1]).powi(2) + (u[2] - v[2]).powi(2)).sqrt()
+        };
+        let pairing_a = dist(end0, shoulder) + dist(end1, elbow);
+        let pairing_b = dist(end0, elbow) + dist(end1, shoulder);
+        let best = pairing_a.min(pairing_b);
+        assert!(
+            best < 0.10,
+            "robot upper arm endpoints should match shoulder/elbow, got {best}"
+        );
+    }
+
+    #[test]
+    fn skeleton_ik_preserves_two_bone_chain_lengths() {
+        let source = r#"
+            skeleton Rig {
+              joint shoulder = vec3(0.0, 1.6, 0.0);
+              joint elbow = vec3(-0.2, 1.0, 0.0);
+              joint hand = vec3(-0.4, 0.5, 0.0);
+              chain arm = shoulder, elbow, hand;
+            };
+
+            let rig = Rig {
+              ik: {
+                arm: vec3(-0.6, 0.1, 0.2)
+              }
+            };
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let Value::Object(rig) = &state.bindings.get("rig").expect("rig binding").value else {
+            panic!("rig should be an object");
+        };
+        let Value::Object(joints) = rig
+            .fields
+            .get("__skeleton_joints")
+            .expect("joints should exist")
+        else {
+            panic!("joints should be an object");
+        };
+
+        let joint = |name: &str| -> [f64; 3] {
+            let Value::Object(v) = joints.fields.get(name).expect("joint should exist") else {
+                panic!("joint should be vec3");
+            };
+            let read = |field: &str| match v.fields.get(field).expect("component should exist") {
+                Value::Number(n) => *n,
+                _ => panic!("component should be numeric"),
+            };
+            [read("x"), read("y"), read("z")]
+        };
+
+        let shoulder = joint("shoulder");
+        let elbow = joint("elbow");
+        let hand = joint("hand");
+
+        let dist = |a: [f64; 3], b: [f64; 3]| -> f64 {
+            ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+        };
+
+        let upper = dist(shoulder, elbow);
+        let lower = dist(elbow, hand);
+        assert!(
+            (upper - 0.632455532).abs() < 0.02,
+            "upper chain length should stay fixed, got {upper}"
+        );
+        assert!(
+            (lower - 0.538516481).abs() < 0.02,
+            "lower chain length should stay fixed, got {lower}"
+        );
     }
 
     fn temp_test_dir(label: &str) -> PathBuf {

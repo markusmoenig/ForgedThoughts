@@ -26,6 +26,13 @@ pub struct EnvironmentDef {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SkeletonDef {
+    pub name: String,
+    pub metadata: Vec<(String, Expr)>,
+    pub statements: Vec<SkeletonStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDef {
     pub name: String,
     pub params: Vec<String>,
@@ -71,6 +78,29 @@ pub enum SdfStatement {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum SkeletonStatement {
+    Binding {
+        name: String,
+        expr: Expr,
+    },
+    Joint {
+        name: String,
+        expr: Expr,
+    },
+    Bone {
+        name: String,
+        start: String,
+        end: String,
+    },
+    Chain {
+        name: String,
+        start: String,
+        mid: String,
+        end: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Import {
         path: String,
@@ -89,6 +119,7 @@ pub enum Statement {
     FunctionDef(FunctionDef),
     MaterialDef(MaterialDef),
     SdfDef(SdfDef),
+    SkeletonDef(SkeletonDef),
     EnvironmentDef(EnvironmentDef),
 }
 

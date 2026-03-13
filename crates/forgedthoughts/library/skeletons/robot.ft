@@ -1,0 +1,64 @@
+skeleton Robot {
+  name: "Robot";
+  description: "Simplified rigid biped robot skeleton with named joints and semantic limb bones.";
+  tags: ["skeleton", "robot", "biped", "rig"];
+
+  params: [
+    {
+      name: "height",
+      type: "number",
+      description: "Overall skeleton height from foot to head.",
+      default: 1.8,
+      min: 0.5,
+      max: 4.0
+    }
+  ];
+
+  let height = max(height, 0.5);
+  let leg = height * 0.47;
+  let torso = height * 0.30;
+  let neck_len = height * 0.06;
+  let head_len = height * 0.10;
+  let shoulder_span = height * 0.16;
+  let hip_span = height * 0.10;
+  let upper_arm = height * 0.17;
+  let forearm = height * 0.15;
+
+  joint pelvis = vec3(0.0, leg + torso * 0.25, 0.0);
+  joint neck = pelvis + vec3(0.0, torso, 0.0);
+  joint head = neck + vec3(0.0, neck_len + head_len, 0.0);
+
+  joint shoulder_l = neck + vec3(-shoulder_span, -neck_len * 0.15, 0.0);
+  joint elbow_l = shoulder_l + vec3(-upper_arm * 0.28, -upper_arm * 1.12, 0.0);
+  joint hand_l = elbow_l + vec3(-forearm * 0.10, -forearm * 1.08, 0.0);
+
+  joint shoulder_r = neck + vec3(shoulder_span, -neck_len * 0.15, 0.0);
+  joint elbow_r = shoulder_r + vec3(upper_arm * 0.28, -upper_arm * 1.12, 0.0);
+  joint hand_r = elbow_r + vec3(forearm * 0.10, -forearm * 1.08, 0.0);
+
+  joint hip_l = pelvis + vec3(-hip_span, 0.0, 0.0);
+  joint knee_l = hip_l + vec3(0.0, -leg * 0.52, 0.0);
+  joint foot_l = vec3(hip_l.x, 0.0, 0.0);
+
+  joint hip_r = pelvis + vec3(hip_span, 0.0, 0.0);
+  joint knee_r = hip_r + vec3(0.0, -leg * 0.52, 0.0);
+  joint foot_r = vec3(hip_r.x, 0.0, 0.0);
+
+  bone torso = pelvis, neck;
+  bone neck_link = neck, head;
+  bone upper_arm_l = shoulder_l, elbow_l;
+  bone forearm_l = elbow_l, hand_l;
+  bone upper_arm_r = shoulder_r, elbow_r;
+  bone forearm_r = elbow_r, hand_r;
+  bone thigh_l = hip_l, knee_l;
+  bone shin_l = knee_l, foot_l;
+  bone thigh_r = hip_r, knee_r;
+  bone shin_r = knee_r, foot_r;
+
+  chain arm_l = shoulder_l, elbow_l, hand_l;
+  chain arm_r = shoulder_r, elbow_r, hand_r;
+  chain leg_l = hip_l, knee_l, foot_l;
+  chain leg_r = hip_r, knee_r, foot_r;
+};
+
+export { Robot };

@@ -2416,10 +2416,18 @@ fn compile_lowered_library_object(
     object: &ObjectValue,
     ctx: &mut CompileContext,
 ) -> Option<Result<SdfNode, RenderError>> {
+    if name == "RobotBody" {
+        return Some(lower_robot_body_asset(state, object, ctx));
+    }
     let lowering = match name {
         "Table" => Some(lower_table_asset(state, object, ctx)),
         "Cupboard" => Some(lower_cupboard_asset(state, object, ctx)),
         "Lamp" => Some(lower_lamp_asset(state, object, ctx)),
+        "RobotSegment" => Some(lower_robot_segment_asset(state, object, ctx)),
+        "RobotTorso" => Some(lower_robot_torso_asset(state, object, ctx)),
+        "RobotHead" => Some(lower_robot_head_asset(state, object, ctx)),
+        "RobotJoint" => Some(lower_robot_joint_asset(state, object, ctx)),
+        "RobotFoot" => Some(lower_robot_foot_asset(state, object, ctx)),
         _ => None,
     }?;
     Some(instantiate_semantic_asset(
@@ -2768,6 +2776,381 @@ fn lower_lamp_asset(
     ])
 }
 
+fn lower_robot_segment_asset(
+    state: &Arc<EvalState>,
+    object: &ObjectValue,
+    ctx: &mut CompileContext,
+) -> LoweredNodeSpec {
+    let width = read_number_field(object, &["width"])
+        .unwrap_or(0.15)
+        .max(0.02);
+    let depth = read_number_field(object, &["depth"])
+        .unwrap_or(0.15)
+        .max(0.02);
+    let length = read_number_field(object, &["length"])
+        .unwrap_or(0.5)
+        .max(0.05);
+    let round = read_number_field(object, &["round"])
+        .unwrap_or(0.03)
+        .max(0.0);
+    let material_id = object_material_id(state, object, "material", ctx);
+    LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        half_size: Vec3::new(width * 0.5, depth * 0.5, length * 0.5),
+        round,
+        material_id,
+    }
+}
+
+fn lower_robot_torso_asset(
+    state: &Arc<EvalState>,
+    object: &ObjectValue,
+    ctx: &mut CompileContext,
+) -> LoweredNodeSpec {
+    let width = read_number_field(object, &["width"])
+        .unwrap_or(0.32)
+        .max(0.05);
+    let depth = read_number_field(object, &["depth"])
+        .unwrap_or(0.26)
+        .max(0.05);
+    let length = read_number_field(object, &["length"])
+        .unwrap_or(0.72)
+        .max(0.1);
+    let round = read_number_field(object, &["round"])
+        .unwrap_or(0.04)
+        .max(0.0);
+    let material_id = object_material_id(state, object, "material", ctx);
+    LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        half_size: Vec3::new(width * 0.5, depth * 0.5, length * 0.5),
+        round,
+        material_id,
+    }
+}
+
+fn lower_robot_head_asset(
+    state: &Arc<EvalState>,
+    object: &ObjectValue,
+    ctx: &mut CompileContext,
+) -> LoweredNodeSpec {
+    let radius = read_number_field(object, &["radius"])
+        .unwrap_or(0.16)
+        .max(0.03);
+    let material_id = object_material_id(state, object, "material", ctx);
+    LoweredNodeSpec::Sphere {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        radius,
+        material_id,
+    }
+}
+
+fn lower_robot_joint_asset(
+    state: &Arc<EvalState>,
+    object: &ObjectValue,
+    ctx: &mut CompileContext,
+) -> LoweredNodeSpec {
+    let radius = read_number_field(object, &["radius"])
+        .unwrap_or(0.07)
+        .max(0.01);
+    let material_id = object_material_id(state, object, "material", ctx);
+    LoweredNodeSpec::Sphere {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        radius,
+        material_id,
+    }
+}
+
+fn lower_robot_foot_asset(
+    state: &Arc<EvalState>,
+    object: &ObjectValue,
+    ctx: &mut CompileContext,
+) -> LoweredNodeSpec {
+    let width = read_number_field(object, &["width"])
+        .unwrap_or(0.16)
+        .max(0.03);
+    let height = read_number_field(object, &["height"])
+        .unwrap_or(0.08)
+        .max(0.02);
+    let length = read_number_field(object, &["length"])
+        .unwrap_or(0.30)
+        .max(0.05);
+    let round = read_number_field(object, &["round"])
+        .unwrap_or(0.02)
+        .max(0.0);
+    let material_id = object_material_id(state, object, "material", ctx);
+    LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, length * 0.1),
+        half_size: Vec3::new(width * 0.5, height * 0.5, length * 0.5),
+        round,
+        material_id,
+    }
+}
+
+fn lower_robot_body_asset(
+    state: &Arc<EvalState>,
+    object: &ObjectValue,
+    ctx: &mut CompileContext,
+) -> Result<SdfNode, RenderError> {
+    let Some(Value::Object(skeleton)) = object.fields.get("skeleton") else {
+        return Err(RenderError::ExpectedObject);
+    };
+    let body_material_id = object_material_id(state, object, "material", ctx);
+    let accent_material_id =
+        object_material_id_with_fallback(state, object, "accent_material", "material", ctx);
+
+    let mut parts = Vec::new();
+
+    let torso = instantiate_bone_box(
+        ctx,
+        skeleton,
+        "torso",
+        Vec3::new(0.16, 0.13, 0.36),
+        0.04,
+        body_material_id,
+    )?;
+    parts.push(torso);
+    let neck_link = instantiate_bone_box(
+        ctx,
+        skeleton,
+        "neck_link",
+        Vec3::new(0.06, 0.06, 0.09),
+        0.02,
+        body_material_id,
+    )?;
+    parts.push(neck_link);
+
+    for bone in ["upper_arm_l", "upper_arm_r"] {
+        parts.push(instantiate_bone_box(
+            ctx,
+            skeleton,
+            bone,
+            Vec3::new(0.075, 0.075, 0.22),
+            0.03,
+            body_material_id,
+        )?);
+    }
+    for bone in ["forearm_l", "forearm_r"] {
+        parts.push(instantiate_bone_box(
+            ctx,
+            skeleton,
+            bone,
+            Vec3::new(0.07, 0.07, 0.24),
+            0.03,
+            body_material_id,
+        )?);
+    }
+    for bone in ["thigh_l", "thigh_r"] {
+        parts.push(instantiate_bone_box(
+            ctx,
+            skeleton,
+            bone,
+            Vec3::new(0.08, 0.08, 0.26),
+            0.035,
+            body_material_id,
+        )?);
+    }
+    for bone in ["shin_l", "shin_r"] {
+        parts.push(instantiate_bone_box(
+            ctx,
+            skeleton,
+            bone,
+            Vec3::new(0.07, 0.07, 0.26),
+            0.03,
+            body_material_id,
+        )?);
+    }
+
+    parts.push(instantiate_joint_sphere(
+        ctx,
+        skeleton,
+        "head",
+        0.16,
+        accent_material_id,
+    )?);
+    parts.push(instantiate_joint_sphere(
+        ctx,
+        skeleton,
+        "pelvis",
+        0.12,
+        body_material_id,
+    )?);
+    for joint in [
+        "shoulder_l",
+        "shoulder_r",
+        "elbow_l",
+        "elbow_r",
+        "knee_l",
+        "knee_r",
+        "hand_l",
+        "hand_r",
+    ] {
+        let radius = if joint.starts_with("knee") {
+            0.075
+        } else if joint.starts_with("hand") {
+            0.08
+        } else {
+            0.07
+        };
+        parts.push(instantiate_joint_sphere(
+            ctx,
+            skeleton,
+            joint,
+            radius,
+            accent_material_id,
+        )?);
+    }
+
+    parts.push(instantiate_foot_box(
+        ctx,
+        skeleton,
+        "foot_l",
+        Vec3::new(0.08, 0.04, 0.15),
+        0.02,
+        body_material_id,
+    )?);
+    parts.push(instantiate_foot_box(
+        ctx,
+        skeleton,
+        "foot_r",
+        Vec3::new(0.08, 0.04, 0.15),
+        0.02,
+        body_material_id,
+    )?);
+
+    let mut parts = parts.into_iter();
+    let Some(mut root) = parts.next() else {
+        return Err(RenderError::ExpectedObject);
+    };
+    for part in parts {
+        root = SdfNode::Union {
+            lhs: Box::new(root),
+            rhs: Box::new(part),
+        };
+    }
+    Ok(root)
+}
+
+fn skeleton_joint_world(skeleton: &ObjectValue, name: &str) -> Option<Vec3> {
+    let transform = read_transform(skeleton);
+    let Value::Object(joints) = skeleton.fields.get("__skeleton_joints")? else {
+        return None;
+    };
+    let local = joints.fields.get(name).and_then(value_as_vec3)?;
+    Some(transform.center.add(transform_offset(transform, local)))
+}
+
+fn skeleton_bone_world(skeleton: &ObjectValue, name: &str) -> Option<(Vec3, Vec3)> {
+    let Value::Object(bones) = skeleton.fields.get("__skeleton_bones")? else {
+        return None;
+    };
+    let Value::Object(bone) = bones.fields.get(name)? else {
+        return None;
+    };
+    let Value::String(start_name) = bone.fields.get("start")? else {
+        return None;
+    };
+    let Value::String(end_name) = bone.fields.get("end")? else {
+        return None;
+    };
+    Some((
+        skeleton_joint_world(skeleton, start_name)?,
+        skeleton_joint_world(skeleton, end_name)?,
+    ))
+}
+
+fn segment_transform(start: Vec3, end: Vec3) -> (PrimitiveTransform, f32) {
+    let center = start.add(end).mul(0.5);
+    let delta = end.sub(start);
+    let length = delta.length().max(1.0e-6);
+    let horizontal = (delta.x * delta.x + delta.z * delta.z).sqrt();
+    let yaw = delta.x.atan2(delta.z).to_degrees();
+    let pitch = (-delta.y).atan2(horizontal.max(1.0e-9)).to_degrees();
+    (
+        PrimitiveTransform {
+            center,
+            rot_deg: Vec3::new(pitch, yaw, 0.0),
+        },
+        length,
+    )
+}
+
+fn instantiate_bone_box(
+    ctx: &mut CompileContext,
+    skeleton: &ObjectValue,
+    bone: &str,
+    canonical_half: Vec3,
+    round: f32,
+    material_id: u32,
+) -> Result<SdfNode, RenderError> {
+    let Some((start, end)) = skeleton_bone_world(skeleton, bone) else {
+        return Err(RenderError::ExpectedObject);
+    };
+    let (transform, length) = segment_transform(start, end);
+    let half_size = Vec3::new(canonical_half.x, canonical_half.y, (length * 1.03) * 0.5);
+    let object_id = ctx.alloc_object_id();
+    ctx.register_object_transform(object_id, transform);
+    Ok(SdfNode::Box {
+        transform,
+        half_size,
+        round,
+        shell: 0.0,
+        object_id,
+        material_id,
+    })
+}
+
+fn instantiate_joint_sphere(
+    ctx: &mut CompileContext,
+    skeleton: &ObjectValue,
+    joint: &str,
+    radius: f32,
+    material_id: u32,
+) -> Result<SdfNode, RenderError> {
+    let Some(center) = skeleton_joint_world(skeleton, joint) else {
+        return Err(RenderError::ExpectedObject);
+    };
+    let transform = PrimitiveTransform {
+        center,
+        rot_deg: Vec3::new(0.0, 0.0, 0.0),
+    };
+    let object_id = ctx.alloc_object_id();
+    ctx.register_object_transform(object_id, transform);
+    Ok(SdfNode::Sphere {
+        transform,
+        radius,
+        shell: 0.0,
+        object_id,
+        material_id,
+    })
+}
+
+fn instantiate_foot_box(
+    ctx: &mut CompileContext,
+    skeleton: &ObjectValue,
+    joint: &str,
+    canonical_half: Vec3,
+    round: f32,
+    material_id: u32,
+) -> Result<SdfNode, RenderError> {
+    let Some(center) = skeleton_joint_world(skeleton, joint) else {
+        return Err(RenderError::ExpectedObject);
+    };
+    let transform = PrimitiveTransform {
+        center: center.add(Vec3::new(0.0, 0.0, canonical_half.z * 0.53333336)),
+        rot_deg: Vec3::new(0.0, 0.0, 0.0),
+    };
+    let object_id = ctx.alloc_object_id();
+    ctx.register_object_transform(object_id, transform);
+    Ok(SdfNode::Box {
+        transform,
+        half_size: canonical_half,
+        round,
+        shell: 0.0,
+        object_id,
+        material_id,
+    })
+}
+
 fn compile_room(
     state: &Arc<EvalState>,
     object: &ObjectValue,
@@ -3015,6 +3398,18 @@ fn read_vec3_field(obj: &ObjectValue, name: &str) -> Option<Vec3> {
     let y = read_number_field(vec_obj, &["y"])?;
     let z = read_number_field(vec_obj, &["z"])?;
     Some(Vec3::new(x, y, z))
+}
+
+fn value_as_vec3(value: &Value) -> Option<Vec3> {
+    match value {
+        Value::Number(v) => Some(Vec3::new(*v as f32, *v as f32, *v as f32)),
+        Value::Object(obj) => Some(Vec3::new(
+            read_number_field(obj, &["x"])?,
+            read_number_field(obj, &["y"])?,
+            read_number_field(obj, &["z"])?,
+        )),
+        _ => None,
+    }
 }
 
 fn render_with_accel<A: Accelerator + Sync>(
@@ -5615,9 +6010,9 @@ fn sd_regular_ngon(p: Vec3, sides: u32, radius: f32) -> f32 {
 
 fn to_local(p: Vec3, transform: PrimitiveTransform) -> Vec3 {
     let mut q = p.sub(transform.center);
-    q = rotate_x(q, -transform.rot_deg.x);
-    q = rotate_y(q, -transform.rot_deg.y);
     q = rotate_z(q, -transform.rot_deg.z);
+    q = rotate_y(q, -transform.rot_deg.y);
+    q = rotate_x(q, -transform.rot_deg.x);
     q
 }
 
@@ -7172,6 +7567,7 @@ fn resolve_dynamic_normal(
     Some(normal)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_dynamic_bump(
     state: &EvalState,
     material_def_names: &[String],
@@ -7380,6 +7776,7 @@ mod tests {
             compiled_sdf_functions: HashMap::new(),
             material_defs: HashMap::new(),
             sdf_defs: HashMap::new(),
+            skeleton_defs: HashMap::new(),
             environment_defs: HashMap::new(),
         }
     }

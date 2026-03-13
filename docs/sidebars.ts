@@ -11,7 +11,14 @@ const sidebars: SidebarsConfig = {
     {
       type: "category",
       label: "Language",
-      items: ["language", "objects", "booleans", "materials", "lights"],
+      items: [
+        "language",
+        "objects",
+        "skeletons",
+        "booleans",
+        "materials",
+        "lights",
+      ],
     },
     {
       type: "category",

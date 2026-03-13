@@ -1,0 +1,35 @@
+sdf RobotHead {
+  name: "RobotHead";
+  description: "Simple rounded robot head sphere for skeleton scenes.";
+  tags: ["object", "robot", "head", "part"];
+  params: [
+    {
+      name: "radius",
+      type: "number",
+      description: "Head radius.",
+      default: 0.16,
+      min: 0.03
+    },
+    {
+      name: "material",
+      type: "material",
+      description: "Material for the head."
+    }
+  ];
+
+  let radius = 0.16;
+  let anchors = {
+    Center: vec3(0.0, 0.0, 0.0),
+    Bottom: vec3(0.0, -radius, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(radius);
+  }
+
+  fn distance(p) {
+    return length(p) - radius;
+  }
+};
+
+export { RobotHead };

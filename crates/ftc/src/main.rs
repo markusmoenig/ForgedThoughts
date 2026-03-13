@@ -158,6 +158,7 @@ enum Command {
 enum ListCommand {
     Materials,
     Objects,
+    Skeletons,
     Scenes,
 }
 
@@ -579,6 +580,7 @@ fn run_list(kind: ListCommand) -> ExitCode {
     let category = match kind {
         ListCommand::Materials => BuiltinLibraryCategory::Materials,
         ListCommand::Objects => BuiltinLibraryCategory::Objects,
+        ListCommand::Skeletons => BuiltinLibraryCategory::Skeletons,
         ListCommand::Scenes => BuiltinLibraryCategory::Scenes,
     };
 

@@ -17,6 +17,7 @@ Current built-ins include:
 - `Torus`
 - `ExtrudePolygon`
 - `Room`
+- semantic skeleton assets such as `Robot`
 
 Custom Forge SDF assets can also be parameterized and instantiated with per-instance overrides, just like materials:
 
@@ -169,6 +170,17 @@ var wall_lamp = Lamp {}
   .attach(cupboard.body, Top, Bottom)
   .face_to(table.top);
 ```
+
+## Skeleton Assets
+
+Skeletons now have their own page.
+
+See [Skeletons](./skeletons.md) for:
+
+- `skeleton` definitions
+- joints and bones
+- `bind(...)`
+- built-in `Robot` / `RobotBody`
 
 Supported fields today:
 

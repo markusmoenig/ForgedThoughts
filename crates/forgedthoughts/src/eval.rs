@@ -8,7 +8,8 @@ use thiserror::Error;
 
 use crate::ast::{
     BinaryOp, EnvironmentDef, Expr, FunctionDef, MaterialDef, MaterialFunctionStatement,
-    MaterialStatement, Program, SdfDef, SdfFunctionStatement, SdfStatement, Statement, UnaryOp,
+    MaterialStatement, Program, SdfDef, SdfFunctionStatement, SdfStatement, SkeletonDef,
+    SkeletonStatement, Statement, UnaryOp,
 };
 use crate::jit::{
     JitCapture, JitFunction, JitModifierDistanceFunction, JitSdfDistanceFunction,
@@ -82,6 +83,7 @@ pub struct EvalState {
     pub compiled_sdf_functions: HashMap<String, HashMap<String, VmFunction>>,
     pub material_defs: HashMap<String, MaterialDef>,
     pub sdf_defs: HashMap<String, SdfDef>,
+    pub skeleton_defs: HashMap<String, SkeletonDef>,
     pub environment_defs: HashMap<String, EnvironmentDef>,
 }
 
@@ -148,6 +150,7 @@ pub fn eval_program(program: &Program) -> Result<EvalState, EvalError> {
         compiled_sdf_functions: HashMap::new(),
         material_defs: HashMap::new(),
         sdf_defs: HashMap::new(),
+        skeleton_defs: HashMap::new(),
         environment_defs: HashMap::new(),
     };
 
@@ -315,6 +318,10 @@ fn eval_statement(stmt: &Statement, state: &mut EvalState) -> Result<(), EvalErr
             if !jitted.is_empty() {
                 state.jitted_sdf_functions.insert(def.name.clone(), jitted);
             }
+            Ok(())
+        }
+        Statement::SkeletonDef(def) => {
+            state.skeleton_defs.insert(def.name.clone(), def.clone());
             Ok(())
         }
         Statement::EnvironmentDef(def) => {
@@ -542,27 +549,338 @@ fn augment_object_literal_fields(
     type_name: &str,
     fields: &mut HashMap<String, Value>,
 ) -> Result<(), EvalError> {
-    if !state.sdf_defs.contains_key(type_name) {
-        return Ok(());
+    if state.sdf_defs.contains_key(type_name) {
+        let overrides = ObjectValue {
+            type_name: Some(type_name.to_string()),
+            fields: fields.clone(),
+        };
+        if !fields.contains_key("__bounds")
+            && let Ok(value) = eval_sdf_zero_arg_function_with_overrides(
+                state,
+                type_name,
+                "bounds",
+                Some(&overrides),
+            )
+        {
+            fields.insert("__bounds".to_string(), value);
+        }
+        if !fields.contains_key("anchors")
+            && let Ok(value) =
+                eval_sdf_binding_with_overrides(state, type_name, "anchors", Some(&overrides))
+        {
+            fields.insert("anchors".to_string(), value);
+        }
     }
 
-    let overrides = ObjectValue {
-        type_name: Some(type_name.to_string()),
-        fields: fields.clone(),
-    };
-    if !fields.contains_key("__bounds")
-        && let Ok(value) =
-            eval_sdf_zero_arg_function_with_overrides(state, type_name, "bounds", Some(&overrides))
-    {
-        fields.insert("__bounds".to_string(), value);
-    }
-    if !fields.contains_key("anchors")
-        && let Ok(value) =
-            eval_sdf_binding_with_overrides(state, type_name, "anchors", Some(&overrides))
-    {
-        fields.insert("anchors".to_string(), value);
+    if state.skeleton_defs.contains_key(type_name) {
+        let skeleton_fields = instantiate_skeleton_fields(state, type_name, fields)?;
+        for (key, value) in skeleton_fields {
+            fields.insert(key, value);
+        }
     }
     Ok(())
+}
+
+fn instantiate_skeleton_fields(
+    state: &EvalState,
+    type_name: &str,
+    instance_fields: &HashMap<String, Value>,
+) -> Result<HashMap<String, Value>, EvalError> {
+    let def = state
+        .skeleton_defs
+        .get(type_name)
+        .ok_or_else(|| EvalError::UndefinedIdentifier(type_name.to_string()))?;
+    let mut locals = instance_fields.clone();
+    let mut joints = HashMap::new();
+    let mut bones = HashMap::new();
+    let mut chains = HashMap::new();
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+
+    for stmt in &def.statements {
+        match stmt {
+            SkeletonStatement::Binding { name, expr } => {
+                let value = eval_expr_in_material_scope(expr, state, &locals, None, 0)?;
+                locals.insert(name.clone(), value);
+            }
+            SkeletonStatement::Joint { name, expr } => {
+                let value = eval_expr_in_material_scope(expr, state, &locals, None, 0)?;
+                let point = as_vec3(&value).ok_or(EvalError::UnsupportedLayoutObject)?;
+                joints.insert(name.clone(), vec3_value(point));
+                locals.insert(name.clone(), vec3_value(point));
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(point[axis]);
+                    max[axis] = max[axis].max(point[axis]);
+                }
+            }
+            SkeletonStatement::Bone { name, start, end } => {
+                bones.insert(
+                    name.clone(),
+                    Value::Object(ObjectValue {
+                        type_name: Some("SkeletonBone".to_string()),
+                        fields: HashMap::from([
+                            ("start".to_string(), Value::String(start.clone())),
+                            ("end".to_string(), Value::String(end.clone())),
+                        ]),
+                    }),
+                );
+            }
+            SkeletonStatement::Chain {
+                name,
+                start,
+                mid,
+                end,
+            } => {
+                chains.insert(name.clone(), (start.clone(), mid.clone(), end.clone()));
+            }
+        }
+    }
+
+    if let Some(Value::Object(ik_targets)) = instance_fields.get("ik") {
+        if joints.is_empty() {
+            return Err(EvalError::UnsupportedLayoutObject);
+        }
+        let initial_bounds_center = [
+            (min[0] + max[0]) * 0.5,
+            (min[1] + max[1]) * 0.5,
+            (min[2] + max[2]) * 0.5,
+        ];
+        apply_skeleton_ik_targets(&mut joints, &chains, ik_targets, initial_bounds_center)?;
+        let mut ik_min = [f64::INFINITY; 3];
+        let mut ik_max = [f64::NEG_INFINITY; 3];
+        for point in joints.values().filter_map(as_vec3) {
+            for axis in 0..3 {
+                ik_min[axis] = ik_min[axis].min(point[axis]);
+                ik_max[axis] = ik_max[axis].max(point[axis]);
+            }
+        }
+        min = ik_min;
+        max = ik_max;
+    }
+
+    if joints.is_empty() {
+        min = [0.0, 0.0, 0.0];
+        max = [0.0, 0.0, 0.0];
+    }
+    let bounds_center = [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5,
+    ];
+    let half = [
+        (max[0] - min[0]) * 0.5,
+        (max[1] - min[1]) * 0.5,
+        (max[2] - min[2]) * 0.5,
+    ];
+    let joints = joints
+        .into_iter()
+        .map(|(name, value)| {
+            let point = as_vec3(&value).unwrap_or([0.0, 0.0, 0.0]);
+            (
+                name,
+                vec3_value([
+                    point[0] - bounds_center[0],
+                    point[1] - bounds_center[1],
+                    point[2] - bounds_center[2],
+                ]),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut fields = HashMap::new();
+    if !instance_fields.contains_key("anchors") {
+        fields.insert(
+            "anchors".to_string(),
+            Value::Object(ObjectValue {
+                type_name: None,
+                fields: joints.clone(),
+            }),
+        );
+    }
+    if !instance_fields.contains_key("__bounds") {
+        fields.insert("__bounds".to_string(), vec3_value(half));
+    }
+    if !instance_fields.contains_key("pos") {
+        fields.insert("pos".to_string(), vec3_value(bounds_center));
+    }
+    fields.insert(
+        "__skeleton_joints".to_string(),
+        Value::Object(ObjectValue {
+            type_name: None,
+            fields: joints,
+        }),
+    );
+    fields.insert(
+        "__skeleton_bones".to_string(),
+        Value::Object(ObjectValue {
+            type_name: None,
+            fields: bones,
+        }),
+    );
+    if !chains.is_empty() {
+        let chain_fields = chains
+            .into_iter()
+            .map(|(name, (start, mid, end))| {
+                (
+                    name,
+                    Value::Object(ObjectValue {
+                        type_name: Some("SkeletonChain".to_string()),
+                        fields: HashMap::from([
+                            ("start".to_string(), Value::String(start)),
+                            ("mid".to_string(), Value::String(mid)),
+                            ("end".to_string(), Value::String(end)),
+                        ]),
+                    }),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        fields.insert(
+            "__skeleton_chains".to_string(),
+            Value::Object(ObjectValue {
+                type_name: None,
+                fields: chain_fields,
+            }),
+        );
+    }
+    Ok(fields)
+}
+
+fn apply_skeleton_ik_targets(
+    joints: &mut HashMap<String, Value>,
+    chains: &HashMap<String, (String, String, String)>,
+    ik_targets: &ObjectValue,
+    bounds_center: [f64; 3],
+) -> Result<(), EvalError> {
+    for (target_name, target_value) in &ik_targets.fields {
+        let Some((start_name, mid_name, end_name)) = resolve_skeleton_chain(chains, target_name)
+        else {
+            continue;
+        };
+        let Some(start) = joints.get(start_name).and_then(as_vec3) else {
+            continue;
+        };
+        let Some(mid) = joints.get(mid_name).and_then(as_vec3) else {
+            continue;
+        };
+        let Some(end) = joints.get(end_name).and_then(as_vec3) else {
+            continue;
+        };
+        let target = skeleton_ik_target_point(target_value, bounds_center)
+            .ok_or(EvalError::UnsupportedLayoutObject)?;
+        let (new_mid, new_end) = solve_two_bone_chain(start, mid, end, target);
+        joints.insert(mid_name.to_string(), vec3_value(new_mid));
+        joints.insert(end_name.to_string(), vec3_value(new_end));
+    }
+    Ok(())
+}
+
+fn resolve_skeleton_chain<'a>(
+    chains: &'a HashMap<String, (String, String, String)>,
+    target_name: &str,
+) -> Option<(&'a str, &'a str, &'a str)> {
+    if let Some((start, mid, end)) = chains.get(target_name) {
+        return Some((start.as_str(), mid.as_str(), end.as_str()));
+    }
+    chains.values().find_map(|(start, mid, end)| {
+        if end == target_name {
+            Some((start.as_str(), mid.as_str(), end.as_str()))
+        } else {
+            None
+        }
+    })
+}
+
+fn skeleton_ik_target_point(value: &Value, bounds_center: [f64; 3]) -> Option<[f64; 3]> {
+    if let Some(local) = as_vec3(value) {
+        return Some([
+            local[0] + bounds_center[0],
+            local[1] + bounds_center[1],
+            local[2] + bounds_center[2],
+        ]);
+    }
+    object_anchor_point(value, "Center")
+        .or_else(|| object_anchor_point(value, "Top"))
+        .map(|anchor| anchor.point)
+}
+
+fn solve_two_bone_chain(
+    start: [f64; 3],
+    mid: [f64; 3],
+    end: [f64; 3],
+    target: [f64; 3],
+) -> ([f64; 3], [f64; 3]) {
+    let upper = sub3(mid, start);
+    let lower = sub3(end, mid);
+    let upper_len = length3(upper).max(1.0e-6);
+    let lower_len = length3(lower).max(1.0e-6);
+    let target_vec = sub3(target, start);
+    let target_len = length3(target_vec).max(1.0e-6);
+    let max_reach = (upper_len + lower_len - 1.0e-6).max(1.0e-6);
+    let min_reach = (upper_len - lower_len).abs() + 1.0e-6;
+    let clamped_len = target_len.clamp(min_reach, max_reach);
+    let dir = scale3(target_vec, 1.0 / target_len);
+
+    let original_plane = cross3(sub3(mid, start), sub3(end, start));
+    let mut bend_dir = sub3(sub3(mid, start), scale3(dir, dot3(sub3(mid, start), dir)));
+    if length3(bend_dir) < 1.0e-6 {
+        let plane_normal = if length3(original_plane) > 1.0e-6 {
+            normalize3(original_plane)
+        } else {
+            fallback_perpendicular(dir)
+        };
+        bend_dir = cross3(plane_normal, dir);
+    }
+    bend_dir = normalize3(bend_dir);
+
+    let along = ((clamped_len * clamped_len) + (upper_len * upper_len) - (lower_len * lower_len))
+        / (2.0 * clamped_len.max(1.0e-6));
+    let height_sq = (upper_len * upper_len - along * along).max(0.0);
+    let height = height_sq.sqrt();
+    let new_mid = add3(add3(start, scale3(dir, along)), scale3(bend_dir, height));
+    let new_end = add3(start, scale3(dir, clamped_len));
+    (new_mid, new_end)
+}
+
+fn add3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn scale3(v: [f64; 3], s: f64) -> [f64; 3] {
+    [v[0] * s, v[1] * s, v[2] * s]
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn length3(v: [f64; 3]) -> f64 {
+    dot3(v, v).sqrt()
+}
+
+fn normalize3(v: [f64; 3]) -> [f64; 3] {
+    let len = length3(v).max(1.0e-9);
+    [v[0] / len, v[1] / len, v[2] / len]
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn fallback_perpendicular(dir: [f64; 3]) -> [f64; 3] {
+    let seed = if dir[1].abs() < 0.9 {
+        [0.0, 1.0, 0.0]
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    normalize3(cross3(dir, seed))
 }
 
 fn semantic_part_value(base: &Value, field: &str) -> Option<Value> {
@@ -570,6 +888,54 @@ fn semantic_part_value(base: &Value, field: &str) -> Option<Value> {
     let pos = object_position(base);
     let rot = object_rotation(base);
     match obj.type_name.as_deref()? {
+        skeleton_name
+            if obj.fields.contains_key("__skeleton_joints")
+                || obj.fields.contains_key("__skeleton_bones") =>
+        {
+            let _ = skeleton_name;
+            if let Some(Value::Object(joints)) = obj.fields.get("__skeleton_joints")
+                && let Some(joint) = joints.fields.get(field).and_then(as_vec3)
+            {
+                return Some(proxy_skeleton_joint(pos, rot, joint, 0.04));
+            }
+            if let Some(Value::Object(bones)) = obj.fields.get("__skeleton_bones")
+                && let Some(Value::Object(bone)) = bones.fields.get(field)
+            {
+                let start_name = match bone.fields.get("start") {
+                    Some(Value::String(value)) => value,
+                    _ => return None,
+                };
+                let end_name = match bone.fields.get("end") {
+                    Some(Value::String(value)) => value,
+                    _ => return None,
+                };
+                let Value::Object(joints) = obj.fields.get("__skeleton_joints")? else {
+                    return None;
+                };
+                let start = joints.fields.get(start_name).and_then(as_vec3)?;
+                let end = joints.fields.get(end_name).and_then(as_vec3)?;
+                return Some(proxy_skeleton_bone(pos, rot, start, end, 0.04));
+            }
+            if let Some(Value::Object(chains)) = obj.fields.get("__skeleton_chains")
+                && let Some(Value::Object(chain)) = chains.fields.get(field)
+            {
+                let start_name = match chain.fields.get("start") {
+                    Some(Value::String(value)) => value,
+                    _ => return None,
+                };
+                let end_name = match chain.fields.get("end") {
+                    Some(Value::String(value)) => value,
+                    _ => return None,
+                };
+                let Value::Object(joints) = obj.fields.get("__skeleton_joints")? else {
+                    return None;
+                };
+                let start = joints.fields.get(start_name).and_then(as_vec3)?;
+                let end = joints.fields.get(end_name).and_then(as_vec3)?;
+                return Some(proxy_skeleton_bone(pos, rot, start, end, 0.05));
+            }
+            None
+        }
         "Table" => {
             let width = numeric_field(obj, &["width"]).unwrap_or(1.8).max(0.2);
             let depth = numeric_field(obj, &["depth"]).unwrap_or(0.9).max(0.2);
@@ -759,6 +1125,89 @@ fn proxy_sphere(base_pos: [f64; 3], local_offset: [f64; 3], radius: f64) -> Valu
     fields.insert("radius".to_string(), Value::Number(radius));
     Value::Object(ObjectValue {
         type_name: Some("Sphere".to_string()),
+        fields,
+    })
+}
+
+fn proxy_skeleton_joint(
+    base_pos: [f64; 3],
+    base_rot: [f64; 3],
+    local_offset: [f64; 3],
+    radius: f64,
+) -> Value {
+    let world = rotate_xyz(local_offset, base_rot);
+    let center = [
+        base_pos[0] + world[0],
+        base_pos[1] + world[1],
+        base_pos[2] + world[2],
+    ];
+    let mut fields = HashMap::new();
+    fields.insert("pos".to_string(), vec3_value(center));
+    fields.insert("__bounds".to_string(), vec3_value([radius, radius, radius]));
+    fields.insert(
+        "anchors".to_string(),
+        Value::Object(ObjectValue {
+            type_name: None,
+            fields: HashMap::from([("Center".to_string(), vec3_value([0.0, 0.0, 0.0]))]),
+        }),
+    );
+    Value::Object(ObjectValue {
+        type_name: Some("SkeletonJoint".to_string()),
+        fields,
+    })
+}
+
+fn proxy_skeleton_bone(
+    base_pos: [f64; 3],
+    base_rot: [f64; 3],
+    local_start: [f64; 3],
+    local_end: [f64; 3],
+    radius: f64,
+) -> Value {
+    let start_world = rotate_xyz(local_start, base_rot);
+    let end_world = rotate_xyz(local_end, base_rot);
+    let start = [
+        base_pos[0] + start_world[0],
+        base_pos[1] + start_world[1],
+        base_pos[2] + start_world[2],
+    ];
+    let end = [
+        base_pos[0] + end_world[0],
+        base_pos[1] + end_world[1],
+        base_pos[2] + end_world[2],
+    ];
+    let center = [
+        (start[0] + end[0]) * 0.5,
+        (start[1] + end[1]) * 0.5,
+        (start[2] + end[2]) * 0.5,
+    ];
+    let half = [
+        ((start[0] - end[0]).abs() * 0.5) + radius,
+        ((start[1] - end[1]).abs() * 0.5) + radius,
+        ((start[2] - end[2]).abs() * 0.5) + radius,
+    ];
+    let local_start_anchor = [
+        start[0] - center[0],
+        start[1] - center[1],
+        start[2] - center[2],
+    ];
+    let local_end_anchor = [end[0] - center[0], end[1] - center[1], end[2] - center[2]];
+    let mut fields = HashMap::new();
+    fields.insert("pos".to_string(), vec3_value(center));
+    fields.insert("__bounds".to_string(), vec3_value(half));
+    fields.insert(
+        "anchors".to_string(),
+        Value::Object(ObjectValue {
+            type_name: None,
+            fields: HashMap::from([
+                ("Start".to_string(), vec3_value(local_start_anchor)),
+                ("End".to_string(), vec3_value(local_end_anchor)),
+                ("Center".to_string(), vec3_value([0.0, 0.0, 0.0])),
+            ]),
+        }),
+    );
+    Value::Object(ObjectValue {
+        type_name: Some("SkeletonBone".to_string()),
         fields,
     })
 }
@@ -1092,6 +1541,12 @@ fn build_layout_member_value(
     args: Vec<Value>,
 ) -> Result<Option<Value>, EvalError> {
     let value = match field {
+        "bind" => {
+            if args.len() != 1 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            bind_object_to_bone(base, args[0].clone())?
+        }
         "attach" => {
             if args.len() != 2 && args.len() != 3 {
                 return Err(EvalError::UnsupportedCall);
@@ -1181,7 +1636,8 @@ fn build_layout_member_value(
 fn is_layout_member_operator(field: &str) -> bool {
     matches!(
         field,
-        "attach"
+        "bind"
+            | "attach"
             | "align_x"
             | "align_y"
             | "align_z"
@@ -1199,6 +1655,59 @@ fn is_layout_member_operator(field: &str) -> bool {
             | "offset_z"
             | "face_to"
     )
+}
+
+fn bind_object_to_bone(mut value: Value, target: Value) -> Result<Value, EvalError> {
+    let start = object_anchor_point(&target, "Start")
+        .or_else(|| object_anchor_point(&target, "Bottom"))
+        .ok_or(EvalError::UnsupportedLayoutObject)?
+        .point;
+    let end = object_anchor_point(&target, "End")
+        .or_else(|| object_anchor_point(&target, "Top"))
+        .ok_or(EvalError::UnsupportedLayoutObject)?
+        .point;
+    let center = [
+        (start[0] + end[0]) * 0.5,
+        (start[1] + end[1]) * 0.5,
+        (start[2] + end[2]) * 0.5,
+    ];
+    let dx = end[0] - start[0];
+    let dy = end[1] - start[1];
+    let dz = end[2] - start[2];
+    let length = (dx * dx + dy * dy + dz * dz).sqrt().max(1.0e-6);
+    let horizontal = (dx * dx + dz * dz).sqrt();
+    let yaw = dx.atan2(dz).to_degrees();
+    let pitch = (-dy).atan2(horizontal.max(1.0e-9)).to_degrees();
+
+    set_object_position(&mut value, center)?;
+    let obj = as_object_mut(&mut value)?;
+    obj.fields
+        .insert("rot".to_string(), vec3_value([pitch, yaw, 0.0]));
+    fit_object_length_to_bone(obj, length);
+    Ok(value)
+}
+
+fn fit_object_length_to_bone(obj: &mut ObjectValue, length: f64) {
+    let fit_length = length * 1.03;
+    match obj.type_name.as_deref() {
+        Some("Box") => {
+            if let Some(size) = obj.fields.get("size").and_then(as_broadcastable_vec3) {
+                obj.fields.insert(
+                    "size".to_string(),
+                    vec3_value([size[0], size[1], fit_length]),
+                );
+            }
+        }
+        Some("Cylinder") => {
+            obj.fields
+                .insert("height".to_string(), Value::Number(fit_length));
+        }
+        _ if obj.fields.contains_key("length") => {
+            obj.fields
+                .insert("length".to_string(), Value::Number(fit_length));
+        }
+        _ => {}
+    }
 }
 
 fn is_sdf_member_operator(field: &str) -> bool {
@@ -1566,6 +2075,19 @@ fn eval_arg_values(
 
 fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalError> {
     let value = match name {
+        "anchor" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let anchor_name = match &args[1] {
+                Value::String(name) => name.as_str(),
+                _ => return Err(EvalError::UnsupportedCall),
+            };
+            let point = object_anchor_point(&args[0], anchor_name)
+                .ok_or(EvalError::UnsupportedLayoutObject)?
+                .point;
+            vec3_value(point)
+        }
         "vec3" => {
             if args.len() != 1 && args.len() != 3 {
                 return Err(EvalError::InvalidVec3Call);
@@ -3581,7 +4103,9 @@ fn builtin_symbol_value(name: &str) -> Option<Value> {
         "Top" | "Bottom" | "Left" | "Right" | "Front" | "Back" | "Center" | "FrontLeftCorner"
         | "FrontRightCorner" | "BackLeftCorner" | "BackRightCorner" | "BottomFrontLeft"
         | "BottomFrontRight" | "BottomBackLeft" | "BottomBackRight" | "TopFrontLeft"
-        | "TopFrontRight" | "TopBackLeft" | "TopBackRight" => Some(anchor_value(name, 0.0)),
+        | "TopFrontRight" | "TopBackLeft" | "TopBackRight" | "Start" | "End" => {
+            Some(anchor_value(name, 0.0))
+        }
         _ => None,
     }
 }
@@ -3714,6 +4238,7 @@ fn builtin_anchor_modes(name: &str) -> Option<[AxisAnchorMode; 3]> {
             AxisAnchorMode::Max,
             AxisAnchorMode::Min,
         ],
+        "Start" | "End" => return None,
         _ => return None,
     };
     Some(modes)
