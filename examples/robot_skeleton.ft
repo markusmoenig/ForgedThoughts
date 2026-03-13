@@ -1,5 +1,9 @@
 import "Robot";
-import "RobotBody";
+import "RobotSegment";
+import "RobotTorso";
+import "RobotHead";
+import "RobotJoint";
+import "RobotFoot";
 
 let camera = Camera {
   origin: vec3(0.0, 1.7, 5.8),
@@ -62,10 +66,156 @@ let rig = Robot {
 }
   .attach(floor, Top);
 
-let robot = RobotBody {
-  skeleton: rig,
-  material: robot_mat,
-  accent_material: accent_mat
-};
+let torso = RobotTorso {
+  length: 0.72,
+  width: 0.32,
+  depth: 0.26,
+  round: 0.04,
+  material: robot_mat
+}.bind(rig.torso);
+
+let shoulder_bridge = RobotSegment {
+  length: 0.72,
+  width: 0.15,
+  depth: 0.15,
+  round: 0.025,
+  material: robot_mat
+}.bind(rig.shoulder_span);
+
+let hip_bridge = RobotSegment {
+  length: 0.38,
+  width: 0.14,
+  depth: 0.14,
+  round: 0.025,
+  material: robot_mat
+}.bind(rig.hip_span);
+
+let neck = RobotSegment {
+  length: 0.18,
+  width: 0.12,
+  depth: 0.12,
+  round: 0.02,
+  material: robot_mat
+}.bind(rig.neck_link);
+
+let upper_arm_l = RobotSegment {
+  length: 0.44,
+  width: 0.15,
+  depth: 0.15,
+  round: 0.03,
+  material: robot_mat
+}.bind(rig.upper_arm_l);
+let upper_arm_r = RobotSegment {
+  length: 0.44,
+  width: 0.15,
+  depth: 0.15,
+  round: 0.03,
+  material: robot_mat
+}.bind(rig.upper_arm_r);
+let forearm_l = RobotSegment {
+  length: 0.48,
+  width: 0.14,
+  depth: 0.14,
+  round: 0.03,
+  material: robot_mat
+}.bind(rig.forearm_l);
+let forearm_r = RobotSegment {
+  length: 0.48,
+  width: 0.14,
+  depth: 0.14,
+  round: 0.03,
+  material: robot_mat
+}.bind(rig.forearm_r);
+let thigh_l = RobotSegment {
+  length: 0.52,
+  width: 0.16,
+  depth: 0.16,
+  round: 0.035,
+  material: robot_mat
+}.bind(rig.thigh_l);
+let thigh_r = RobotSegment {
+  length: 0.52,
+  width: 0.16,
+  depth: 0.16,
+  round: 0.035,
+  material: robot_mat
+}.bind(rig.thigh_r);
+let shin_l = RobotSegment {
+  length: 0.52,
+  width: 0.14,
+  depth: 0.14,
+  round: 0.03,
+  material: robot_mat
+}.bind(rig.shin_l);
+let shin_r = RobotSegment {
+  length: 0.52,
+  width: 0.14,
+  depth: 0.14,
+  round: 0.03,
+  material: robot_mat
+}.bind(rig.shin_r);
+
+let head = RobotHead {
+  radius: 0.16,
+  material: accent_mat
+}.attach(rig.head, Center);
+let pelvis = RobotJoint {
+  radius: 0.12,
+  material: robot_mat
+}.attach(rig.pelvis, Center);
+let shoulder_l = RobotJoint {
+  radius: 0.07,
+  material: accent_mat
+}.attach(rig.shoulder_l, Center);
+let shoulder_r = RobotJoint {
+  radius: 0.07,
+  material: accent_mat
+}.attach(rig.shoulder_r, Center);
+let elbow_l = RobotJoint {
+  radius: 0.07,
+  material: accent_mat
+}.attach(rig.elbow_l, Center);
+let elbow_r = RobotJoint {
+  radius: 0.07,
+  material: accent_mat
+}.attach(rig.elbow_r, Center);
+let knee_l = RobotJoint {
+  radius: 0.075,
+  material: accent_mat
+}.attach(rig.knee_l, Center);
+let knee_r = RobotJoint {
+  radius: 0.075,
+  material: accent_mat
+}.attach(rig.knee_r, Center);
+let hand_l = RobotJoint {
+  radius: 0.08,
+  material: accent_mat
+}.attach(rig.hand_l, Center);
+let hand_r = RobotJoint {
+  radius: 0.08,
+  material: accent_mat
+}.attach(rig.hand_r, Center);
+let foot_l = RobotFoot {
+  width: 0.16,
+  height: 0.08,
+  length: 0.30,
+  round: 0.02,
+  material: robot_mat
+}.attach(rig.foot_l, Center);
+let foot_r = RobotFoot {
+  width: 0.16,
+  height: 0.08,
+  length: 0.30,
+  round: 0.02,
+  material: robot_mat
+}.attach(rig.foot_r, Center);
+
+let core = ((((torso + shoulder_bridge) + hip_bridge) + neck) + head) + pelvis;
+let left_arm = (((upper_arm_l + forearm_l) + shoulder_l) + elbow_l) + hand_l;
+let right_arm = (((upper_arm_r + forearm_r) + shoulder_r) + elbow_r) + hand_r;
+let left_leg = ((thigh_l + shin_l) + knee_l) + foot_l;
+let right_leg = ((thigh_r + shin_r) + knee_r) + foot_r;
+
+let robot = ((core + left_arm) + right_arm) + (left_leg + right_leg);
 
 let scene = floor + robot;

@@ -49,24 +49,36 @@ sdf RobotFoot {
     Toe: vec3(0.0, 0.0, length * 0.5)
   };
 
-  fn sd_box(p, half_size) {
-    let q = abs(p) - half_size;
-    let outside = length(max(q, vec3(0.0)));
-    let inside = min(max(q.x, max(q.y, q.z)), 0.0);
-    return outside + inside;
-  }
-
   fn bounds() {
     return vec3(width * 0.5, height * 0.5, length * 0.5);
   }
 
   fn distance(p) {
-    let center_z = length * 0.1;
-    let half = max(
-      vec3(width * 0.5 - round, height * 0.5 - round, length * 0.5 - round),
-      vec3(0.001)
-    );
-    return sd_box(vec3(p.x, p.y, p.z - center_z), half) - round;
+    let sole = Box.distance(
+      vec3(p.x, p.y + height * 0.10, p.z - length * 0.10),
+      max(
+        vec3(width * 0.52 - round, height * 0.26 - round, length * 0.50 - round),
+        vec3(0.001)
+      )
+    ) - round;
+
+    let ankle = Box.distance(
+      vec3(p.x, p.y - height * 0.18, p.z - length * 0.16),
+      max(
+        vec3(width * 0.24 - round, height * 0.34 - round, length * 0.16 - round),
+        vec3(0.001)
+      )
+    ) - round;
+
+    let toe = Box.distance(
+      vec3(p.x, p.y + height * 0.04, p.z - length * 0.34),
+      max(
+        vec3(width * 0.38 - round, height * 0.16 - round, length * 0.18 - round),
+        vec3(0.001)
+      )
+    ) - round;
+
+    return min(min(sole, ankle), toe);
   }
 };
 

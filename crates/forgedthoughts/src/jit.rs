@@ -1059,7 +1059,105 @@ fn compile_sdf_expr(expr: &Expr, ctx: &mut SdfJitContext<'_, '_>) -> Option<SdfJ
                     .collect::<Option<Vec<_>>>()?;
                 return compile_sdf_builtin(name, &arg_values, ctx);
             }
+            if let Expr::Member { target, field } = callee.as_ref()
+                && let Expr::Ident(type_name) = target.as_ref()
+            {
+                let arg_values = args
+                    .iter()
+                    .map(|arg| compile_sdf_expr(arg, ctx))
+                    .collect::<Option<Vec<_>>>()?;
+                return compile_sdf_primitive_distance_call(type_name, field, &arg_values, ctx);
+            }
             None
+        }
+        _ => None,
+    }
+}
+
+fn compile_sdf_primitive_distance_call(
+    type_name: &str,
+    field: &str,
+    args: &[SdfJitValue],
+    ctx: &mut SdfJitContext<'_, '_>,
+) -> Option<SdfJitValue> {
+    match (type_name, field, args) {
+        ("Box", "distance", [SdfJitValue::Vec3(p), SdfJitValue::Vec3(b)]) => {
+            let ax = ctx.fb.ins().fabs(p[0]);
+            let ay = ctx.fb.ins().fabs(p[1]);
+            let az = ctx.fb.ins().fabs(p[2]);
+            let dx = ctx.fb.ins().fsub(ax, b[0]);
+            let dy = ctx.fb.ins().fsub(ay, b[1]);
+            let dz = ctx.fb.ins().fsub(az, b[2]);
+            let zero = ctx.fb.ins().f64const(0.0);
+            let ox = ctx.fb.ins().fmax(dx, zero);
+            let oy = ctx.fb.ins().fmax(dy, zero);
+            let oz = ctx.fb.ins().fmax(dz, zero);
+            let ox2 = ctx.fb.ins().fmul(ox, ox);
+            let oy2 = ctx.fb.ins().fmul(oy, oy);
+            let oz2 = ctx.fb.ins().fmul(oz, oz);
+            let sum_xy = ctx.fb.ins().fadd(ox2, oy2);
+            let sum = ctx.fb.ins().fadd(sum_xy, oz2);
+            let outside = ctx.fb.ins().sqrt(sum);
+            let dy_dz = ctx.fb.ins().fmax(dy, dz);
+            let dmax = ctx.fb.ins().fmax(dx, dy_dz);
+            let inside = ctx.fb.ins().fmin(dmax, zero);
+            Some(SdfJitValue::Scalar(ctx.fb.ins().fadd(outside, inside)))
+        }
+        ("Sphere", "distance", [SdfJitValue::Vec3(p), SdfJitValue::Scalar(r)]) => {
+            let x2 = ctx.fb.ins().fmul(p[0], p[0]);
+            let y2 = ctx.fb.ins().fmul(p[1], p[1]);
+            let z2 = ctx.fb.ins().fmul(p[2], p[2]);
+            let sum_xy = ctx.fb.ins().fadd(x2, y2);
+            let sum = ctx.fb.ins().fadd(sum_xy, z2);
+            let len = ctx.fb.ins().sqrt(sum);
+            Some(SdfJitValue::Scalar(ctx.fb.ins().fsub(len, *r)))
+        }
+        (
+            "Cylinder",
+            "distance",
+            [
+                SdfJitValue::Vec3(p),
+                SdfJitValue::Scalar(radius),
+                SdfJitValue::Scalar(half_height),
+            ],
+        ) => {
+            let x2 = ctx.fb.ins().fmul(p[0], p[0]);
+            let z2 = ctx.fb.ins().fmul(p[2], p[2]);
+            let radial_sum = ctx.fb.ins().fadd(x2, z2);
+            let radial = ctx.fb.ins().sqrt(radial_sum);
+            let dx = ctx.fb.ins().fsub(radial, *radius);
+            let abs_y = ctx.fb.ins().fabs(p[1]);
+            let dy = ctx.fb.ins().fsub(abs_y, *half_height);
+            let zero = ctx.fb.ins().f64const(0.0);
+            let ox = ctx.fb.ins().fmax(dx, zero);
+            let oy = ctx.fb.ins().fmax(dy, zero);
+            let ox2 = ctx.fb.ins().fmul(ox, ox);
+            let oy2 = ctx.fb.ins().fmul(oy, oy);
+            let outside_sum = ctx.fb.ins().fadd(ox2, oy2);
+            let outside = ctx.fb.ins().sqrt(outside_sum);
+            let dmax = ctx.fb.ins().fmax(dx, dy);
+            let inside = ctx.fb.ins().fmin(dmax, zero);
+            Some(SdfJitValue::Scalar(ctx.fb.ins().fadd(outside, inside)))
+        }
+        (
+            "Torus",
+            "distance",
+            [
+                SdfJitValue::Vec3(p),
+                SdfJitValue::Scalar(major),
+                SdfJitValue::Scalar(minor),
+            ],
+        ) => {
+            let x2 = ctx.fb.ins().fmul(p[0], p[0]);
+            let z2 = ctx.fb.ins().fmul(p[2], p[2]);
+            let radial_sum = ctx.fb.ins().fadd(x2, z2);
+            let radial = ctx.fb.ins().sqrt(radial_sum);
+            let qx = ctx.fb.ins().fsub(radial, *major);
+            let qx2 = ctx.fb.ins().fmul(qx, qx);
+            let y2 = ctx.fb.ins().fmul(p[1], p[1]);
+            let qsum = ctx.fb.ins().fadd(qx2, y2);
+            let qlen = ctx.fb.ins().sqrt(qsum);
+            Some(SdfJitValue::Scalar(ctx.fb.ins().fsub(qlen, *minor)))
         }
         _ => None,
     }
@@ -1810,7 +1908,110 @@ fn compile_material_expr(
                     .collect::<Option<Vec<_>>>()?;
                 return compile_material_builtin(name, &arg_values, ctx);
             }
+            if let Expr::Member { target, field } = callee.as_ref()
+                && let Expr::Ident(type_name) = target.as_ref()
+            {
+                let arg_values = args
+                    .iter()
+                    .map(|arg| compile_material_expr(arg, ctx))
+                    .collect::<Option<Vec<_>>>()?;
+                return compile_material_primitive_distance_call(
+                    type_name,
+                    field,
+                    &arg_values,
+                    ctx,
+                );
+            }
             None
+        }
+        _ => None,
+    }
+}
+
+fn compile_material_primitive_distance_call(
+    type_name: &str,
+    field: &str,
+    args: &[MaterialJitValue],
+    ctx: &mut MaterialJitContext<'_, '_>,
+) -> Option<MaterialJitValue> {
+    match (type_name, field, args) {
+        ("Box", "distance", [MaterialJitValue::Vec3(p), MaterialJitValue::Vec3(b)]) => {
+            let ax = ctx.fb.ins().fabs(p[0]);
+            let ay = ctx.fb.ins().fabs(p[1]);
+            let az = ctx.fb.ins().fabs(p[2]);
+            let dx = ctx.fb.ins().fsub(ax, b[0]);
+            let dy = ctx.fb.ins().fsub(ay, b[1]);
+            let dz = ctx.fb.ins().fsub(az, b[2]);
+            let zero = ctx.fb.ins().f64const(0.0);
+            let ox = ctx.fb.ins().fmax(dx, zero);
+            let oy = ctx.fb.ins().fmax(dy, zero);
+            let oz = ctx.fb.ins().fmax(dz, zero);
+            let ox2 = ctx.fb.ins().fmul(ox, ox);
+            let oy2 = ctx.fb.ins().fmul(oy, oy);
+            let oz2 = ctx.fb.ins().fmul(oz, oz);
+            let sum_xy = ctx.fb.ins().fadd(ox2, oy2);
+            let sum = ctx.fb.ins().fadd(sum_xy, oz2);
+            let outside = ctx.fb.ins().sqrt(sum);
+            let dy_dz = ctx.fb.ins().fmax(dy, dz);
+            let dmax = ctx.fb.ins().fmax(dx, dy_dz);
+            let inside = ctx.fb.ins().fmin(dmax, zero);
+            Some(MaterialJitValue::Scalar(ctx.fb.ins().fadd(outside, inside)))
+        }
+        ("Sphere", "distance", [MaterialJitValue::Vec3(p), MaterialJitValue::Scalar(r)]) => {
+            let x2 = ctx.fb.ins().fmul(p[0], p[0]);
+            let y2 = ctx.fb.ins().fmul(p[1], p[1]);
+            let z2 = ctx.fb.ins().fmul(p[2], p[2]);
+            let sum_xy = ctx.fb.ins().fadd(x2, y2);
+            let sum = ctx.fb.ins().fadd(sum_xy, z2);
+            let len = ctx.fb.ins().sqrt(sum);
+            Some(MaterialJitValue::Scalar(ctx.fb.ins().fsub(len, *r)))
+        }
+        (
+            "Cylinder",
+            "distance",
+            [
+                MaterialJitValue::Vec3(p),
+                MaterialJitValue::Scalar(radius),
+                MaterialJitValue::Scalar(half_height),
+            ],
+        ) => {
+            let x2 = ctx.fb.ins().fmul(p[0], p[0]);
+            let z2 = ctx.fb.ins().fmul(p[2], p[2]);
+            let radial_sum = ctx.fb.ins().fadd(x2, z2);
+            let radial = ctx.fb.ins().sqrt(radial_sum);
+            let dx = ctx.fb.ins().fsub(radial, *radius);
+            let abs_y = ctx.fb.ins().fabs(p[1]);
+            let dy = ctx.fb.ins().fsub(abs_y, *half_height);
+            let zero = ctx.fb.ins().f64const(0.0);
+            let ox = ctx.fb.ins().fmax(dx, zero);
+            let oy = ctx.fb.ins().fmax(dy, zero);
+            let ox2 = ctx.fb.ins().fmul(ox, ox);
+            let oy2 = ctx.fb.ins().fmul(oy, oy);
+            let outside_sum = ctx.fb.ins().fadd(ox2, oy2);
+            let outside = ctx.fb.ins().sqrt(outside_sum);
+            let dmax = ctx.fb.ins().fmax(dx, dy);
+            let inside = ctx.fb.ins().fmin(dmax, zero);
+            Some(MaterialJitValue::Scalar(ctx.fb.ins().fadd(outside, inside)))
+        }
+        (
+            "Torus",
+            "distance",
+            [
+                MaterialJitValue::Vec3(p),
+                MaterialJitValue::Scalar(major),
+                MaterialJitValue::Scalar(minor),
+            ],
+        ) => {
+            let x2 = ctx.fb.ins().fmul(p[0], p[0]);
+            let z2 = ctx.fb.ins().fmul(p[2], p[2]);
+            let radial_sum = ctx.fb.ins().fadd(x2, z2);
+            let radial = ctx.fb.ins().sqrt(radial_sum);
+            let qx = ctx.fb.ins().fsub(radial, *major);
+            let qx2 = ctx.fb.ins().fmul(qx, qx);
+            let y2 = ctx.fb.ins().fmul(p[1], p[1]);
+            let qsum = ctx.fb.ins().fadd(qx2, y2);
+            let qlen = ctx.fb.ins().sqrt(qsum);
+            Some(MaterialJitValue::Scalar(ctx.fb.ins().fsub(qlen, *minor)))
         }
         _ => None,
     }

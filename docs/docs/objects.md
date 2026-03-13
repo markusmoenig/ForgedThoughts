@@ -163,6 +163,20 @@ For material and custom-SDF code, Forge also exposes:
 - `value_noise_3d(p[, scale])`: Samples smooth scalar value noise at a 3D point.
 - `fbm_3d(p, octaves[, scale[, lacunarity]])`: Builds multi-octave 3D fractal noise from repeated value-noise samples.
 
+Custom SDF assets can also call native primitive distance intrinsics directly instead of rewriting basic shape math:
+
+```forge
+let shell = Box.distance(p, vec3(0.4, 0.2, 0.8));
+let cap = Sphere.distance(p - vec3(0.0, 0.0, 0.8), 0.18);
+```
+
+Available now:
+
+- `Box.distance(p, half_size)`
+- `Sphere.distance(p, radius)`
+- `Cylinder.distance(p, radius, half_height)`
+- `Torus.distance(p, major_radius, minor_radius)`
+
 Orientation-aware layout can then aim an asset toward another object or anchor:
 
 ```forge

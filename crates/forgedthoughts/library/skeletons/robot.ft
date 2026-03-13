@@ -22,7 +22,7 @@ skeleton Robot {
   let shoulder_span = height * 0.16;
   let hip_span = height * 0.10;
   let upper_arm = height * 0.17;
-  let forearm = height * 0.15;
+  let forearm = height * 0.17;
 
   joint pelvis = vec3(0.0, leg + torso * 0.25, 0.0);
   joint neck = pelvis + vec3(0.0, torso, 0.0);
@@ -46,6 +46,8 @@ skeleton Robot {
 
   bone torso = pelvis, neck;
   bone neck_link = neck, head;
+  bone shoulder_span = shoulder_l, shoulder_r;
+  bone hip_span = hip_l, hip_r;
   bone upper_arm_l = shoulder_l, elbow_l;
   bone forearm_l = elbow_l, hand_l;
   bone upper_arm_r = shoulder_r, elbow_r;

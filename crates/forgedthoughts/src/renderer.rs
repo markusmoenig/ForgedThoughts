@@ -2416,18 +2416,10 @@ fn compile_lowered_library_object(
     object: &ObjectValue,
     ctx: &mut CompileContext,
 ) -> Option<Result<SdfNode, RenderError>> {
-    if name == "RobotBody" {
-        return Some(lower_robot_body_asset(state, object, ctx));
-    }
     let lowering = match name {
         "Table" => Some(lower_table_asset(state, object, ctx)),
         "Cupboard" => Some(lower_cupboard_asset(state, object, ctx)),
         "Lamp" => Some(lower_lamp_asset(state, object, ctx)),
-        "RobotSegment" => Some(lower_robot_segment_asset(state, object, ctx)),
-        "RobotTorso" => Some(lower_robot_torso_asset(state, object, ctx)),
-        "RobotHead" => Some(lower_robot_head_asset(state, object, ctx)),
-        "RobotJoint" => Some(lower_robot_joint_asset(state, object, ctx)),
-        "RobotFoot" => Some(lower_robot_foot_asset(state, object, ctx)),
         _ => None,
     }?;
     Some(instantiate_semantic_asset(
@@ -2776,6 +2768,7 @@ fn lower_lamp_asset(
     ])
 }
 
+#[allow(dead_code)]
 fn lower_robot_segment_asset(
     state: &Arc<EvalState>,
     object: &ObjectValue,
@@ -2794,14 +2787,14 @@ fn lower_robot_segment_asset(
         .unwrap_or(0.03)
         .max(0.0);
     let material_id = object_material_id(state, object, "material", ctx);
-    LoweredNodeSpec::Box {
-        offset: Vec3::new(0.0, 0.0, 0.0),
-        half_size: Vec3::new(width * 0.5, depth * 0.5, length * 0.5),
+    lowered_robot_segment_spec(
+        Vec3::new(width * 0.5, depth * 0.5, length * 0.5),
         round,
         material_id,
-    }
+    )
 }
 
+#[allow(dead_code)]
 fn lower_robot_torso_asset(
     state: &Arc<EvalState>,
     object: &ObjectValue,
@@ -2820,14 +2813,14 @@ fn lower_robot_torso_asset(
         .unwrap_or(0.04)
         .max(0.0);
     let material_id = object_material_id(state, object, "material", ctx);
-    LoweredNodeSpec::Box {
-        offset: Vec3::new(0.0, 0.0, 0.0),
-        half_size: Vec3::new(width * 0.5, depth * 0.5, length * 0.5),
+    lowered_robot_torso_spec(
+        Vec3::new(width * 0.5, depth * 0.5, length * 0.5),
         round,
         material_id,
-    }
+    )
 }
 
+#[allow(dead_code)]
 fn lower_robot_head_asset(
     state: &Arc<EvalState>,
     object: &ObjectValue,
@@ -2844,6 +2837,7 @@ fn lower_robot_head_asset(
     }
 }
 
+#[allow(dead_code)]
 fn lower_robot_joint_asset(
     state: &Arc<EvalState>,
     object: &ObjectValue,
@@ -2853,13 +2847,10 @@ fn lower_robot_joint_asset(
         .unwrap_or(0.07)
         .max(0.01);
     let material_id = object_material_id(state, object, "material", ctx);
-    LoweredNodeSpec::Sphere {
-        offset: Vec3::new(0.0, 0.0, 0.0),
-        radius,
-        material_id,
-    }
+    lowered_robot_joint_spec(radius, material_id)
 }
 
+#[allow(dead_code)]
 fn lower_robot_foot_asset(
     state: &Arc<EvalState>,
     object: &ObjectValue,
@@ -2878,14 +2869,232 @@ fn lower_robot_foot_asset(
         .unwrap_or(0.02)
         .max(0.0);
     let material_id = object_material_id(state, object, "material", ctx);
-    LoweredNodeSpec::Box {
-        offset: Vec3::new(0.0, 0.0, length * 0.1),
-        half_size: Vec3::new(width * 0.5, height * 0.5, length * 0.5),
+    lowered_robot_foot_spec(
+        Vec3::new(width * 0.5, height * 0.5, length * 0.5),
         round,
+        material_id,
+    )
+}
+
+#[allow(dead_code)]
+fn lowered_robot_segment_spec(half: Vec3, round: f32, material_id: u32) -> LoweredNodeSpec {
+    let shell_thickness = (half.x.min(half.y) * 0.22).max(0.012);
+    let hole_half = Vec3::new(
+        half.x * 0.9,
+        (half.y * 0.26).max(0.012),
+        (half.y * 0.26).max(0.012),
+    );
+
+    let shell = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        half_size: half,
+        round,
+        material_id,
+    };
+    let cavity = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        half_size: Vec3::new(
+            (half.x - shell_thickness).max(0.01),
+            (half.y - shell_thickness).max(0.01),
+            (half.z - 0.02).max(0.02),
+        ),
+        round: (round - shell_thickness * 0.35).max(0.0),
+        material_id,
+    };
+    let mut carved = LoweredNodeSpec::Subtract {
+        lhs: Box::new(shell),
+        rhs: Box::new(cavity),
+    };
+
+    // Carve a strong longitudinal center slot so the part clearly reads as a
+    // modeled mechanical shell instead of a solid rounded bar.
+    let center_slot = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        half_size: Vec3::new(
+            (half.x * 0.22).max(0.014),
+            (half.y * 1.05).max(0.03),
+            (half.z * 0.86).max(0.05),
+        ),
+        round: 0.006,
+        material_id,
+    };
+    carved = LoweredNodeSpec::Subtract {
+        lhs: Box::new(carved),
+        rhs: Box::new(center_slot),
+    };
+
+    for z in [-(half.z * 0.36), 0.0, half.z * 0.36] {
+        let hole = LoweredNodeSpec::Box {
+            offset: Vec3::new(0.0, 0.0, z),
+            half_size: hole_half,
+            round: hole_half.y * 0.4,
+            material_id,
+        };
+        carved = LoweredNodeSpec::Subtract {
+            lhs: Box::new(carved),
+            rhs: Box::new(hole),
+        };
+    }
+
+    let side_hole_half = Vec3::new(
+        (half.x * 0.28).max(0.016),
+        (half.y * 0.18).max(0.012),
+        (half.y * 0.18).max(0.012),
+    );
+    for x in [-(half.x * 0.76), half.x * 0.76] {
+        for z in [-(half.z * 0.28), half.z * 0.28] {
+            let side_hole = LoweredNodeSpec::Box {
+                offset: Vec3::new(x, 0.0, z),
+                half_size: side_hole_half,
+                round: side_hole_half.y * 0.45,
+                material_id,
+            };
+            carved = LoweredNodeSpec::Subtract {
+                lhs: Box::new(carved),
+                rhs: Box::new(side_hole),
+            };
+        }
+    }
+
+    let cap_radius = (half.x.max(half.y) * 0.48).max(0.02);
+    let front_cap = LoweredNodeSpec::Sphere {
+        offset: Vec3::new(0.0, 0.0, half.z * 0.82),
+        radius: cap_radius,
+        material_id,
+    };
+    let back_cap = LoweredNodeSpec::Sphere {
+        offset: Vec3::new(0.0, 0.0, -half.z * 0.82),
+        radius: cap_radius,
+        material_id,
+    };
+
+    LoweredNodeSpec::Union(vec![carved, front_cap, back_cap])
+}
+
+#[allow(dead_code)]
+fn lowered_robot_torso_spec(half: Vec3, round: f32, material_id: u32) -> LoweredNodeSpec {
+    let shell_thickness = (half.x.min(half.y) * 0.18).max(0.014);
+    let lower_shell = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, -half.y * 0.18, 0.0),
+        half_size: Vec3::new(half.x * 0.62, half.y * 0.54, half.z * 0.96),
+        round,
+        material_id,
+    };
+    let upper_shell = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, half.y * 0.26, 0.0),
+        half_size: Vec3::new(half.x * 0.84, half.y * 0.42, half.z * 0.92),
+        round,
+        material_id,
+    };
+    let shoulder_yoke = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, half.y * 0.48, -half.z * 0.02),
+        half_size: Vec3::new(half.x * 1.18, half.y * 0.12, half.z * 0.22),
+        round: round * 0.7,
+        material_id,
+    };
+    let shell = LoweredNodeSpec::Union(vec![lower_shell, upper_shell, shoulder_yoke]);
+    let cavity = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        half_size: Vec3::new(
+            (half.x * 0.42).max(0.02),
+            (half.y * 0.78 - shell_thickness).max(0.04),
+            (half.z * 0.78).max(0.04),
+        ),
+        round: (round - shell_thickness * 0.4).max(0.0),
+        material_id,
+    };
+    let slot = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, half.y * 0.12, 0.0),
+        half_size: Vec3::new(
+            half.x * 0.88,
+            (half.y * 0.18).max(0.02),
+            (half.z * 0.32).max(0.03),
+        ),
+        round: 0.01,
+        material_id,
+    };
+    let chest_hole = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, half.z * 0.18),
+        half_size: Vec3::new(half.x * 0.75, half.y * 0.22, (half.z * 0.11).max(0.02)),
+        round: 0.01,
+        material_id,
+    };
+    let center_channel = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        half_size: Vec3::new(
+            (half.x * 0.14).max(0.018),
+            (half.y * 1.05).max(0.04),
+            (half.z * 0.68).max(0.06),
+        ),
+        round: 0.006,
+        material_id,
+    };
+    LoweredNodeSpec::Subtract {
+        lhs: Box::new(LoweredNodeSpec::Subtract {
+            lhs: Box::new(LoweredNodeSpec::Subtract {
+                lhs: Box::new(LoweredNodeSpec::Subtract {
+                    lhs: Box::new(shell),
+                    rhs: Box::new(cavity),
+                }),
+                rhs: Box::new(center_channel),
+            }),
+            rhs: Box::new(slot),
+        }),
+        rhs: Box::new(chest_hole),
+    }
+}
+
+#[allow(dead_code)]
+fn lowered_robot_joint_spec(radius: f32, material_id: u32) -> LoweredNodeSpec {
+    let core = LoweredNodeSpec::Sphere {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        radius,
+        material_id,
+    };
+    let bolt = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        half_size: Vec3::new(
+            (radius * 0.18).max(0.01),
+            radius * 0.88,
+            (radius * 0.18).max(0.01),
+        ),
+        round: radius * 0.08,
+        material_id,
+    };
+    LoweredNodeSpec::Union(vec![core, bolt])
+}
+
+#[allow(dead_code)]
+fn lowered_robot_head_spec(radius: f32, material_id: u32) -> LoweredNodeSpec {
+    LoweredNodeSpec::Sphere {
+        offset: Vec3::new(0.0, 0.0, 0.0),
+        radius,
         material_id,
     }
 }
 
+#[allow(dead_code)]
+fn lowered_robot_foot_spec(half: Vec3, round: f32, material_id: u32) -> LoweredNodeSpec {
+    let sole = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, -half.y * 0.15, half.z * 0.12),
+        half_size: half,
+        round,
+        material_id,
+    };
+    let ankle = LoweredNodeSpec::Box {
+        offset: Vec3::new(0.0, half.y * 0.55, -half.z * 0.2),
+        half_size: Vec3::new(
+            (half.x * 0.34).max(0.02),
+            half.y * 0.65,
+            (half.x * 0.34).max(0.02),
+        ),
+        round: 0.01,
+        material_id,
+    };
+    LoweredNodeSpec::Union(vec![sole, ankle])
+}
+
+#[allow(dead_code)]
 fn lower_robot_body_asset(
     state: &Arc<EvalState>,
     object: &ObjectValue,
@@ -2900,79 +3109,71 @@ fn lower_robot_body_asset(
 
     let mut parts = Vec::new();
 
-    let torso = instantiate_bone_box(
+    let torso = instantiate_bone_spec(
         ctx,
         skeleton,
         "torso",
-        Vec3::new(0.16, 0.13, 0.36),
-        0.04,
-        body_material_id,
+        0.72,
+        lowered_robot_torso_spec(Vec3::new(0.16, 0.13, 0.36), 0.04, body_material_id),
     )?;
     parts.push(torso);
-    let neck_link = instantiate_bone_box(
+    let neck_link = instantiate_bone_spec(
         ctx,
         skeleton,
         "neck_link",
-        Vec3::new(0.06, 0.06, 0.09),
-        0.02,
-        body_material_id,
+        0.18,
+        lowered_robot_segment_spec(Vec3::new(0.06, 0.06, 0.09), 0.02, body_material_id),
     )?;
     parts.push(neck_link);
 
     for bone in ["upper_arm_l", "upper_arm_r"] {
-        parts.push(instantiate_bone_box(
+        parts.push(instantiate_bone_spec(
             ctx,
             skeleton,
             bone,
-            Vec3::new(0.075, 0.075, 0.22),
-            0.03,
-            body_material_id,
+            0.44,
+            lowered_robot_segment_spec(Vec3::new(0.075, 0.075, 0.22), 0.03, body_material_id),
         )?);
     }
     for bone in ["forearm_l", "forearm_r"] {
-        parts.push(instantiate_bone_box(
+        parts.push(instantiate_bone_spec(
             ctx,
             skeleton,
             bone,
-            Vec3::new(0.07, 0.07, 0.24),
-            0.03,
-            body_material_id,
+            0.48,
+            lowered_robot_segment_spec(Vec3::new(0.07, 0.07, 0.24), 0.03, body_material_id),
         )?);
     }
     for bone in ["thigh_l", "thigh_r"] {
-        parts.push(instantiate_bone_box(
+        parts.push(instantiate_bone_spec(
             ctx,
             skeleton,
             bone,
-            Vec3::new(0.08, 0.08, 0.26),
-            0.035,
-            body_material_id,
+            0.52,
+            lowered_robot_segment_spec(Vec3::new(0.08, 0.08, 0.26), 0.035, body_material_id),
         )?);
     }
     for bone in ["shin_l", "shin_r"] {
-        parts.push(instantiate_bone_box(
+        parts.push(instantiate_bone_spec(
             ctx,
             skeleton,
             bone,
-            Vec3::new(0.07, 0.07, 0.26),
-            0.03,
-            body_material_id,
+            0.52,
+            lowered_robot_segment_spec(Vec3::new(0.07, 0.07, 0.26), 0.03, body_material_id),
         )?);
     }
 
-    parts.push(instantiate_joint_sphere(
+    parts.push(instantiate_joint_spec(
         ctx,
         skeleton,
         "head",
-        0.16,
-        accent_material_id,
+        lowered_robot_head_spec(0.16, accent_material_id),
     )?);
-    parts.push(instantiate_joint_sphere(
+    parts.push(instantiate_joint_spec(
         ctx,
         skeleton,
         "pelvis",
-        0.12,
-        body_material_id,
+        lowered_robot_joint_spec(0.12, body_material_id),
     )?);
     for joint in [
         "shoulder_l",
@@ -2991,30 +3192,25 @@ fn lower_robot_body_asset(
         } else {
             0.07
         };
-        parts.push(instantiate_joint_sphere(
+        parts.push(instantiate_joint_spec(
             ctx,
             skeleton,
             joint,
-            radius,
-            accent_material_id,
+            lowered_robot_joint_spec(radius, accent_material_id),
         )?);
     }
 
-    parts.push(instantiate_foot_box(
+    parts.push(instantiate_joint_spec(
         ctx,
         skeleton,
         "foot_l",
-        Vec3::new(0.08, 0.04, 0.15),
-        0.02,
-        body_material_id,
+        lowered_robot_foot_spec(Vec3::new(0.08, 0.04, 0.15), 0.02, body_material_id),
     )?);
-    parts.push(instantiate_foot_box(
+    parts.push(instantiate_joint_spec(
         ctx,
         skeleton,
         "foot_r",
-        Vec3::new(0.08, 0.04, 0.15),
-        0.02,
-        body_material_id,
+        lowered_robot_foot_spec(Vec3::new(0.08, 0.04, 0.15), 0.02, body_material_id),
     )?);
 
     let mut parts = parts.into_iter();
@@ -3028,6 +3224,92 @@ fn lower_robot_body_asset(
         };
     }
     Ok(root)
+}
+
+#[allow(dead_code)]
+fn instantiate_bone_spec(
+    ctx: &mut CompileContext,
+    skeleton: &ObjectValue,
+    bone: &str,
+    canonical_length: f32,
+    spec: LoweredNodeSpec,
+) -> Result<SdfNode, RenderError> {
+    let Some((start, end)) = skeleton_bone_world(skeleton, bone) else {
+        return Err(RenderError::ExpectedObject);
+    };
+    let (transform, length) = segment_transform(start, end);
+    let scale_z = if canonical_length > 1.0e-6 {
+        length / canonical_length
+    } else {
+        1.0
+    };
+    instantiate_semantic_asset(ctx, transform, scale_spec_z(spec, scale_z))
+}
+
+#[allow(dead_code)]
+fn instantiate_joint_spec(
+    ctx: &mut CompileContext,
+    skeleton: &ObjectValue,
+    joint: &str,
+    spec: LoweredNodeSpec,
+) -> Result<SdfNode, RenderError> {
+    let Some(center) = skeleton_joint_world(skeleton, joint) else {
+        return Err(RenderError::ExpectedObject);
+    };
+    let transform = PrimitiveTransform {
+        center,
+        rot_deg: Vec3::new(0.0, 0.0, 0.0),
+    };
+    instantiate_semantic_asset(ctx, transform, spec)
+}
+
+#[allow(dead_code)]
+fn scale_spec_z(spec: LoweredNodeSpec, factor: f32) -> LoweredNodeSpec {
+    match spec {
+        LoweredNodeSpec::Box {
+            offset,
+            half_size,
+            round,
+            material_id,
+        } => LoweredNodeSpec::Box {
+            offset: Vec3::new(offset.x, offset.y, offset.z * factor),
+            half_size: Vec3::new(half_size.x, half_size.y, half_size.z * factor),
+            round,
+            material_id,
+        },
+        LoweredNodeSpec::Cylinder {
+            offset,
+            radius,
+            half_height,
+            round,
+            material_id,
+        } => LoweredNodeSpec::Cylinder {
+            offset: Vec3::new(offset.x, offset.y, offset.z * factor),
+            radius,
+            half_height: half_height * factor,
+            round,
+            material_id,
+        },
+        LoweredNodeSpec::Sphere {
+            offset,
+            radius,
+            material_id,
+        } => LoweredNodeSpec::Sphere {
+            offset: Vec3::new(offset.x, offset.y, offset.z * factor),
+            radius,
+            material_id,
+        },
+        LoweredNodeSpec::Union(parts) => LoweredNodeSpec::Union(
+            parts
+                .into_iter()
+                .map(|part| scale_spec_z(part, factor))
+                .collect(),
+        ),
+        LoweredNodeSpec::Subtract { lhs, rhs } => LoweredNodeSpec::Subtract {
+            lhs: Box::new(scale_spec_z(*lhs, factor)),
+            rhs: Box::new(scale_spec_z(*rhs, factor)),
+        },
+    }
 }
 
 fn skeleton_joint_world(skeleton: &ObjectValue, name: &str) -> Option<Vec3> {
@@ -3072,83 +3354,6 @@ fn segment_transform(start: Vec3, end: Vec3) -> (PrimitiveTransform, f32) {
         },
         length,
     )
-}
-
-fn instantiate_bone_box(
-    ctx: &mut CompileContext,
-    skeleton: &ObjectValue,
-    bone: &str,
-    canonical_half: Vec3,
-    round: f32,
-    material_id: u32,
-) -> Result<SdfNode, RenderError> {
-    let Some((start, end)) = skeleton_bone_world(skeleton, bone) else {
-        return Err(RenderError::ExpectedObject);
-    };
-    let (transform, length) = segment_transform(start, end);
-    let half_size = Vec3::new(canonical_half.x, canonical_half.y, (length * 1.03) * 0.5);
-    let object_id = ctx.alloc_object_id();
-    ctx.register_object_transform(object_id, transform);
-    Ok(SdfNode::Box {
-        transform,
-        half_size,
-        round,
-        shell: 0.0,
-        object_id,
-        material_id,
-    })
-}
-
-fn instantiate_joint_sphere(
-    ctx: &mut CompileContext,
-    skeleton: &ObjectValue,
-    joint: &str,
-    radius: f32,
-    material_id: u32,
-) -> Result<SdfNode, RenderError> {
-    let Some(center) = skeleton_joint_world(skeleton, joint) else {
-        return Err(RenderError::ExpectedObject);
-    };
-    let transform = PrimitiveTransform {
-        center,
-        rot_deg: Vec3::new(0.0, 0.0, 0.0),
-    };
-    let object_id = ctx.alloc_object_id();
-    ctx.register_object_transform(object_id, transform);
-    Ok(SdfNode::Sphere {
-        transform,
-        radius,
-        shell: 0.0,
-        object_id,
-        material_id,
-    })
-}
-
-fn instantiate_foot_box(
-    ctx: &mut CompileContext,
-    skeleton: &ObjectValue,
-    joint: &str,
-    canonical_half: Vec3,
-    round: f32,
-    material_id: u32,
-) -> Result<SdfNode, RenderError> {
-    let Some(center) = skeleton_joint_world(skeleton, joint) else {
-        return Err(RenderError::ExpectedObject);
-    };
-    let transform = PrimitiveTransform {
-        center: center.add(Vec3::new(0.0, 0.0, canonical_half.z * 0.53333336)),
-        rot_deg: Vec3::new(0.0, 0.0, 0.0),
-    };
-    let object_id = ctx.alloc_object_id();
-    ctx.register_object_transform(object_id, transform);
-    Ok(SdfNode::Box {
-        transform,
-        half_size: canonical_half,
-        round,
-        shell: 0.0,
-        object_id,
-        material_id,
-    })
 }
 
 fn compile_room(

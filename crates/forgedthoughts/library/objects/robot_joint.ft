@@ -27,7 +27,7 @@ sdf RobotJoint {
   }
 
   fn distance(p) {
-    return length(p) - radius;
+    return Sphere.distance(p, radius);
   }
 };
 

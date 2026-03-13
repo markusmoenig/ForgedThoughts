@@ -1817,6 +1817,13 @@ fn eval_call(
             Err(EvalError::UnsupportedCall)
         }
         Expr::Member { target, field } => {
+            if let Expr::Ident(type_name) = target.as_ref() {
+                let arg_values =
+                    eval_arg_values(args, state, locals, material_runtime, top_level_depth)?;
+                if let Some(value) = eval_primitive_static_call(type_name, field, &arg_values)? {
+                    return Ok(value);
+                }
+            }
             if is_sdf_member_operator(field) {
                 let base = eval_expr_in_material_scope(
                     target,
@@ -1859,6 +1866,86 @@ fn eval_call(
         }
         _ => Err(EvalError::UnsupportedCall),
     }
+}
+
+fn eval_primitive_static_call(
+    type_name: &str,
+    field: &str,
+    args: &[Value],
+) -> Result<Option<Value>, EvalError> {
+    if field != "distance" {
+        return Ok(None);
+    }
+
+    let value = match type_name {
+        "Box" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("Box.distance"))?;
+            let half = as_vec3(&args[1]).ok_or(EvalError::BuiltinVec3Args("Box.distance"))?;
+            let q = [
+                p[0].abs() - half[0],
+                p[1].abs() - half[1],
+                p[2].abs() - half[2],
+            ];
+            let outside = vec3_len([q[0].max(0.0), q[1].max(0.0), q[2].max(0.0)]);
+            let inside = q[0].max(q[1].max(q[2])).min(0.0);
+            Value::Number(outside + inside)
+        }
+        "Sphere" => {
+            if args.len() != 2 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("Sphere.distance"))?;
+            let Value::Number(radius) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs("Sphere.distance"));
+            };
+            Value::Number(vec3_len(p) - radius)
+        }
+        "Cylinder" => {
+            if args.len() != 3 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("Cylinder.distance"))?;
+            let Value::Number(radius) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs("Cylinder.distance"));
+            };
+            let Value::Number(half_height) = args[2] else {
+                return Err(EvalError::BuiltinNumericArgs("Cylinder.distance"));
+            };
+            let radial = (p[0] * p[0] + p[2] * p[2]).sqrt() - radius;
+            let axial = p[1].abs() - half_height;
+            let outside = vec2_len([radial.max(0.0), axial.max(0.0)]);
+            let inside = radial.max(axial).min(0.0);
+            Value::Number(outside + inside)
+        }
+        "Torus" => {
+            if args.len() != 3 {
+                return Err(EvalError::UnsupportedCall);
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("Torus.distance"))?;
+            let Value::Number(major) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs("Torus.distance"));
+            };
+            let Value::Number(minor) = args[2] else {
+                return Err(EvalError::BuiltinNumericArgs("Torus.distance"));
+            };
+            let qx = (p[0] * p[0] + p[2] * p[2]).sqrt() - major;
+            Value::Number((qx * qx + p[1] * p[1]).sqrt() - minor)
+        }
+        _ => return Ok(None),
+    };
+
+    Ok(Some(value))
+}
+
+fn vec2_len(v: [f64; 2]) -> f64 {
+    (v[0] * v[0] + v[1] * v[1]).sqrt()
+}
+
+fn vec3_len(v: [f64; 3]) -> f64 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }
 
 pub fn eval_function_value(
@@ -3581,6 +3668,11 @@ fn eval_named_vm_call(
     arg_values: &[Value],
     depth: usize,
 ) -> Result<Value, EvalError> {
+    if let Some((type_name, field)) = name.split_once('.')
+        && let Some(value) = eval_primitive_static_call(type_name, field, arg_values)?
+    {
+        return Ok(value);
+    }
     if let Some(value) = eval_ident_call(name, arg_values)? {
         return Ok(value);
     }
