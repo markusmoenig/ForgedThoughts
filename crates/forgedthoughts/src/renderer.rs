@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::mpsc;
@@ -483,6 +485,7 @@ struct CompiledScene {
     center: Vec3,
     materials: Vec<MaterialKindRt>,
     object_transforms: Vec<PrimitiveTransform>,
+    object_names: Vec<String>,
     dynamic_material_overrides: Vec<ObjectValue>,
     semantic_lights: Vec<SemanticLight>,
 }
@@ -495,6 +498,7 @@ struct RenderSetup {
     path_lights: Vec<PathLight>,
     materials: Vec<MaterialKindRt>,
     object_transforms: Vec<PrimitiveTransform>,
+    object_names: Vec<String>,
     material_def_names: Vec<String>,
     dynamic_material_overrides: Vec<ObjectValue>,
     environment_name: Option<String>,
@@ -517,11 +521,103 @@ struct DistanceInfo {
     material_id: u32,
 }
 
+#[derive(Default)]
+struct TileTraceStats {
+    exact_evals: u64,
+    lower_bound_evals: u64,
+    object_exact: HashMap<u32, u64>,
+    object_lower: HashMap<u32, u64>,
+}
+
+thread_local! {
+    static TILE_TRACE_STATS: RefCell<Option<TileTraceStats>> = const { RefCell::new(None) };
+}
+
+fn trace_tile_target() -> Option<(usize, usize)> {
+    let raw = std::env::var("FORGEDTHOUGHTS_TRACE_TILE").ok()?;
+    let mut parts = raw.split(',');
+    let x = parts.next()?.trim().parse::<usize>().ok()?;
+    let y = parts.next()?.trim().parse::<usize>().ok()?;
+    Some((x, y))
+}
+
+fn trace_tile_begin() {
+    TILE_TRACE_STATS.with(|stats| {
+        *stats.borrow_mut() = Some(TileTraceStats::default());
+    });
+}
+
+fn trace_tile_end() -> Option<TileTraceStats> {
+    TILE_TRACE_STATS.with(|stats| stats.borrow_mut().take())
+}
+
+fn trace_exact_eval(object_id: u32) {
+    TILE_TRACE_STATS.with(|stats| {
+        if let Some(stats) = stats.borrow_mut().as_mut() {
+            stats.exact_evals = stats.exact_evals.saturating_add(1);
+            *stats.object_exact.entry(object_id).or_insert(0) += 1;
+        }
+    });
+}
+
+fn trace_lower_eval(object_id: u32) {
+    TILE_TRACE_STATS.with(|stats| {
+        if let Some(stats) = stats.borrow_mut().as_mut() {
+            stats.lower_bound_evals = stats.lower_bound_evals.saturating_add(1);
+            *stats.object_lower.entry(object_id).or_insert(0) += 1;
+        }
+    });
+}
+
+fn print_tile_trace(job: &TileJob, setup: &RenderSetup, stats: TileTraceStats) {
+    let mut exact = stats.object_exact.into_iter().collect::<Vec<_>>();
+    exact.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    exact.truncate(8);
+
+    let mut lower = stats.object_lower.into_iter().collect::<Vec<_>>();
+    lower.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    lower.truncate(8);
+
+    eprintln!(
+        "[forge-trace] tile origin=({}, {}) size={}x{} exact_evals={} lower_evals={}",
+        job.tx, job.ty, job.tile_w, job.tile_h, stats.exact_evals, stats.lower_bound_evals
+    );
+    if !exact.is_empty() {
+        let named = exact
+            .into_iter()
+            .map(|(id, count)| {
+                let name = setup
+                    .object_names
+                    .get(id as usize)
+                    .cloned()
+                    .unwrap_or_else(|| "<unnamed>".to_string());
+                (id, name, count)
+            })
+            .collect::<Vec<_>>();
+        eprintln!("[forge-trace] top exact objects: {:?}", named);
+    }
+    if !lower.is_empty() {
+        let named = lower
+            .into_iter()
+            .map(|(id, count)| {
+                let name = setup
+                    .object_names
+                    .get(id as usize)
+                    .cloned()
+                    .unwrap_or_else(|| "<unnamed>".to_string());
+                (id, name, count)
+            })
+            .collect::<Vec<_>>();
+        eprintln!("[forge-trace] top lower-bound objects: {:?}", named);
+    }
+}
+
 struct CompileContext {
     next_object_id: u32,
     default_material: MaterialKindRt,
     materials: Vec<MaterialKindRt>,
     object_transforms: Vec<PrimitiveTransform>,
+    object_names: Vec<String>,
     dynamic_material_overrides: Vec<ObjectValue>,
     semantic_lights: Vec<SemanticLight>,
 }
@@ -535,6 +631,7 @@ impl CompileContext {
             default_material,
             materials: vec![default_material],
             object_transforms: vec![PrimitiveTransform::identity()],
+            object_names: vec!["<none>".to_string()],
             dynamic_material_overrides: Vec::new(),
             semantic_lights: Vec::new(),
         }
@@ -553,6 +650,14 @@ impl CompileContext {
                 .resize(needed, PrimitiveTransform::identity());
         }
         self.object_transforms[object_id as usize] = transform;
+    }
+
+    fn register_object_name(&mut self, object_id: u32, name: &str) {
+        let needed = object_id as usize + 1;
+        if self.object_names.len() < needed {
+            self.object_names.resize(needed, "<unnamed>".to_string());
+        }
+        self.object_names[object_id as usize] = name.to_string();
     }
 
     fn intern_material(&mut self, mat: MaterialKindRt) -> u32 {
@@ -625,7 +730,9 @@ trait Accelerator {
 #[derive(Clone)]
 struct AccelLeaf {
     bounds: Aabb,
-    node: SdfNode,
+    exact_node: SdfNode,
+    lower_node: SdfNode,
+    lower_pad: f32,
 }
 
 const CUSTOM_LEAF_FAR_LOWER_BOUND_MIN: f32 = 0.05;
@@ -637,7 +744,7 @@ fn accel_leaf_distance_info(leaf: &AccelLeaf, p: Vec3) -> DistanceInfo {
         object_id,
         material_id,
         ..
-    } = &leaf.node
+    } = &leaf.exact_node
     {
         let lb = point_aabb_lower_bound(p, leaf.bounds);
         let far_threshold = (leaf.bounds.extent().length() * CUSTOM_LEAF_FAR_LOWER_BOUND_SCALE)
@@ -653,18 +760,34 @@ fn accel_leaf_distance_info(leaf: &AccelLeaf, p: Vec3) -> DistanceInfo {
             };
         }
     }
-    sdf_distance_info(&leaf.node, p)
+    sdf_distance_info(&leaf.exact_node, p)
 }
 
 fn collect_accel_leaves(node: &SdfNode, out: &mut Vec<AccelLeaf>) {
+    collect_accel_leaves_impl(node, None, 0.0, out);
+}
+
+fn collect_accel_leaves_impl(
+    node: &SdfNode,
+    exact_override: Option<&SdfNode>,
+    lower_pad: f32,
+    out: &mut Vec<AccelLeaf>,
+) {
     match node {
         SdfNode::Union { lhs, rhs } => {
-            collect_accel_leaves(lhs, out);
-            collect_accel_leaves(rhs, out);
+            collect_accel_leaves_impl(lhs, exact_override, lower_pad, out);
+            collect_accel_leaves_impl(rhs, exact_override, lower_pad, out);
+        }
+        SdfNode::UnionSoft { lhs, rhs, r } => {
+            let support = lower_pad + r.abs() * SOFT_UNION_SUPPORT;
+            collect_accel_leaves_impl(lhs, Some(node), support, out);
+            collect_accel_leaves_impl(rhs, Some(node), support, out);
         }
         _ => out.push(AccelLeaf {
-            bounds: sdf_bounds(node),
-            node: node.clone(),
+            bounds: sdf_bounds(node).expand(lower_pad),
+            exact_node: exact_override.unwrap_or(node).clone(),
+            lower_node: node.clone(),
+            lower_pad,
         }),
     }
 }
@@ -785,14 +908,19 @@ fn bvh_distance_info(
     }
 }
 
-fn bvh_lower_bound(node: &BvhNode, p: Vec3, best: &mut f32) -> Option<f32> {
+fn bvh_lower_bound(node: &BvhNode, leaves: &[AccelLeaf], p: Vec3, best: &mut f32) -> Option<f32> {
     let node_lb = point_aabb_lower_bound(p, node.bounds());
     if node_lb > *best {
         return None;
     }
     match node {
-        BvhNode::Leaf { bounds, .. } => {
-            let lb = point_aabb_lower_bound(p, *bounds);
+        BvhNode::Leaf { bounds, leaf_index } => {
+            let aabb_lb = point_aabb_lower_bound(p, *bounds);
+            if aabb_lb > *best {
+                return None;
+            }
+            let leaf = &leaves[*leaf_index];
+            let lb = sdf_lower_bound(&leaf.lower_node, p) - leaf.lower_pad;
             if lb < *best {
                 *best = lb;
             }
@@ -807,12 +935,12 @@ fn bvh_lower_bound(node: &BvhNode, p: Vec3, best: &mut f32) -> Option<f32> {
                 (rhs.as_ref(), lhs.as_ref())
             };
             let mut best_lb = if point_aabb_lower_bound(p, first.bounds()) <= *best {
-                bvh_lower_bound(first, p, best)
+                bvh_lower_bound(first, leaves, p, best)
             } else {
                 None
             };
             if point_aabb_lower_bound(p, second.bounds()) <= *best
-                && let Some(lb) = bvh_lower_bound(second, p, best)
+                && let Some(lb) = bvh_lower_bound(second, leaves, p, best)
             {
                 best_lb = Some(best_lb.map_or(lb, |current| current.min(lb)));
             }
@@ -906,7 +1034,7 @@ impl BrickGrid {
                 }
             }
         }
-        best_info.unwrap_or_else(|| sdf_distance_info(&leaves[0].node, p))
+        best_info.unwrap_or_else(|| sdf_distance_info(&leaves[0].exact_node, p))
     }
 
     fn lower_bound(&self, leaves: &[AccelLeaf], p: Vec3) -> f32 {
@@ -940,7 +1068,8 @@ impl BrickGrid {
                             if !visited.insert(leaf_index) {
                                 continue;
                             }
-                            let lb = point_aabb_lower_bound(p, leaves[leaf_index].bounds);
+                            let leaf = &leaves[leaf_index];
+                            let lb = sdf_lower_bound(&leaf.lower_node, p) - leaf.lower_pad;
                             if lb < best {
                                 best = lb;
                             }
@@ -1079,7 +1208,7 @@ impl Accelerator for BvhAccel {
         let mut best = f32::INFINITY;
         self.root
             .as_ref()
-            .and_then(|root| bvh_lower_bound(root, p, &mut best))
+            .and_then(|root| bvh_lower_bound(root, &self.leaves, p, &mut best))
             .unwrap_or_else(|| sdf_lower_bound(&self.scene.root, p))
     }
 
@@ -1395,6 +1524,7 @@ fn compile_scene(
         center,
         materials: ctx.materials,
         object_transforms: ctx.object_transforms,
+        object_names: ctx.object_names,
         dynamic_material_overrides: ctx.dynamic_material_overrides,
         semantic_lights: ctx.semantic_lights,
     })
@@ -1420,6 +1550,7 @@ fn compile_sdf(
                 .min(radius);
             let object_id = ctx.alloc_object_id();
             ctx.register_object_transform(object_id, transform);
+            ctx.register_object_name(object_id, type_name);
             let material_id = primitive_material_id(state, object, ctx);
             Ok(SdfNode::Sphere {
                 transform,
@@ -1443,6 +1574,7 @@ fn compile_sdf(
                 .min(half_size.x.min(half_size.y).min(half_size.z));
             let object_id = ctx.alloc_object_id();
             ctx.register_object_transform(object_id, transform);
+            ctx.register_object_name(object_id, type_name);
             let material_id = primitive_material_id(state, object, ctx);
             Ok(SdfNode::Box {
                 transform,
@@ -1468,6 +1600,7 @@ fn compile_sdf(
                 .min(radius.min(half_height));
             let object_id = ctx.alloc_object_id();
             ctx.register_object_transform(object_id, transform);
+            ctx.register_object_name(object_id, type_name);
             let material_id = primitive_material_id(state, object, ctx);
             Ok(SdfNode::Cylinder {
                 transform,
@@ -1485,6 +1618,7 @@ fn compile_sdf(
             let minor_radius = read_number_field(object, &["minor_radius", "r"]).unwrap_or(0.25);
             let object_id = ctx.alloc_object_id();
             ctx.register_object_transform(object_id, transform);
+            ctx.register_object_name(object_id, type_name);
             let material_id = primitive_material_id(state, object, ctx);
             Ok(SdfNode::Torus {
                 transform,
@@ -1513,6 +1647,7 @@ fn compile_sdf(
                 .min(radius.min(half_height));
             let object_id = ctx.alloc_object_id();
             ctx.register_object_transform(object_id, transform);
+            ctx.register_object_name(object_id, type_name);
             let material_id = primitive_material_id(state, object, ctx);
             Ok(SdfNode::ExtrudePolygon {
                 transform,
@@ -1533,6 +1668,7 @@ fn compile_sdf(
                 let transform = read_transform(object);
                 let object_id = ctx.alloc_object_id();
                 ctx.register_object_transform(object_id, transform);
+                ctx.register_object_name(object_id, type_name);
                 let material_id = primitive_material_id(state, object, ctx);
                 Ok(SdfNode::Custom {
                     transform,
@@ -3883,48 +4019,64 @@ fn render_ray_tile(
     job: &TileJob,
 ) -> Vec<u8> {
     let mut tile = vec![0_u8; job.tile_w * job.tile_h * 3];
-    tile.par_chunks_mut(job.tile_w * 3)
-        .enumerate()
-        .for_each(|(ly, row)| {
-            let y = job.ty + ly;
-            let y_u32 = y as u32;
-            for lx in 0..job.tile_w {
-                let x = job.tx + lx;
-                let x_u32 = x as u32;
-                let mut sum = Spectrum::black();
-                for &(sx, sy) in sample_offsets {
-                    let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
-                    let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
-                    let ray = setup.camera.generate_ray(px * aspect, py);
-                    let origin = from_api_vec3(ray.origin);
-                    let dir = from_api_vec3(ray.direction).normalize();
-                    let c = if let Some(aov) = debug_aov {
-                        ray::trace_ray_debug_aov(accel, setup, ray_ctx, origin, dir, aov)
-                    } else {
-                        ray::trace_ray_recursive(
-                            accel,
-                            setup,
-                            ray_ctx,
-                            origin,
-                            dir,
-                            MediumState::air(),
-                            0,
-                        )
-                    };
-                    sum = sum + c;
-                }
-                let avg = sum.scale(1.0 / aa_samples as f32);
-                let rgb = if debug_aov.is_some() {
-                    spectrum_to_rgb8(avg)
+    let trace_this_tile = trace_tile_target()
+        .map(|(x, y)| x == job.tx && y == job.ty)
+        .unwrap_or(false);
+
+    let render_row = |ly: usize, row: &mut [u8]| {
+        let y = job.ty + ly;
+        let y_u32 = y as u32;
+        for lx in 0..job.tile_w {
+            let x = job.tx + lx;
+            let x_u32 = x as u32;
+            let mut sum = Spectrum::black();
+            for &(sx, sy) in sample_offsets {
+                let px = ((x_u32 as f32 + sx) / options.width as f32) * 2.0 - 1.0;
+                let py = 1.0 - ((y_u32 as f32 + sy) / options.height as f32) * 2.0;
+                let ray = setup.camera.generate_ray(px * aspect, py);
+                let origin = from_api_vec3(ray.origin);
+                let dir = from_api_vec3(ray.direction).normalize();
+                let c = if let Some(aov) = debug_aov {
+                    ray::trace_ray_debug_aov(accel, setup, ray_ctx, origin, dir, aov)
                 } else {
-                    spectrum_to_rgb8_reinhard(avg)
+                    ray::trace_ray_recursive(
+                        accel,
+                        setup,
+                        ray_ctx,
+                        origin,
+                        dir,
+                        MediumState::air(),
+                        0,
+                    )
                 };
-                let i = lx * 3;
-                row[i] = rgb[0];
-                row[i + 1] = rgb[1];
-                row[i + 2] = rgb[2];
+                sum = sum + c;
             }
-        });
+            let avg = sum.scale(1.0 / aa_samples as f32);
+            let rgb = if debug_aov.is_some() {
+                spectrum_to_rgb8(avg)
+            } else {
+                spectrum_to_rgb8_reinhard(avg)
+            };
+            let i = lx * 3;
+            row[i] = rgb[0];
+            row[i + 1] = rgb[1];
+            row[i + 2] = rgb[2];
+        }
+    };
+
+    if trace_this_tile {
+        trace_tile_begin();
+        for (ly, row) in tile.chunks_mut(job.tile_w * 3).enumerate() {
+            render_row(ly, row);
+        }
+        if let Some(stats) = trace_tile_end() {
+            print_tile_trace(job, setup, stats);
+        }
+    } else {
+        tile.par_chunks_mut(job.tile_w * 3)
+            .enumerate()
+            .for_each(|(ly, row)| render_row(ly, row));
+    }
     tile
 }
 
@@ -4100,13 +4252,18 @@ fn raymarch_hit(
     let max_t = max_t.min(exit_t);
     let mut traveled = min_t.max(entry_t.max(0.0));
     let mut previous_traveled = traveled;
+    let near_threshold = (options.epsilon * 8.0).max(1.0e-4);
     for _ in 0..options.max_steps {
         if traveled > max_t {
             return None;
         }
         let p = origin.add(dir.mul(traveled));
-        let info = accel.distance_info(p);
-        let d = info.distance;
+        let lb = accel.lower_bound(p);
+        let d = if lb > near_threshold {
+            lb
+        } else {
+            accel.distance_info(p).distance
+        };
         if d.abs() < options.epsilon {
             let refined = refine_hit_distance(
                 accel,
@@ -5333,7 +5490,6 @@ fn sdf_bounds(node: &SdfNode) -> Aabb {
         | SdfNode::UnionChamfer { lhs, rhs, .. }
         | SdfNode::UnionColumns { lhs, rhs, .. }
         | SdfNode::UnionStairs { lhs, rhs, .. }
-        | SdfNode::UnionSoft { lhs, rhs, .. }
         | SdfNode::IntersectRound { lhs, rhs, .. }
         | SdfNode::IntersectChamfer { lhs, rhs, .. }
         | SdfNode::IntersectColumns { lhs, rhs, .. }
@@ -5346,6 +5502,9 @@ fn sdf_bounds(node: &SdfNode) -> Aabb {
         | SdfNode::Engrave { lhs, rhs, .. }
         | SdfNode::Groove { lhs, rhs, .. }
         | SdfNode::Tongue { lhs, rhs, .. } => sdf_bounds(lhs).union(sdf_bounds(rhs)),
+        SdfNode::UnionSoft { lhs, rhs, r } => sdf_bounds(lhs)
+            .union(sdf_bounds(rhs))
+            .expand(r.abs() * SOFT_UNION_SUPPORT),
         SdfNode::Slice {
             base,
             axis,
@@ -5410,14 +5569,18 @@ fn point_aabb_lower_bound(p: Vec3, aabb: Aabb) -> f32 {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
+const SOFT_UNION_SUPPORT: f32 = std::f32::consts::SQRT_2 - 1.0;
+
 fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
     match node {
         SdfNode::Sphere {
             transform,
             radius,
             shell,
+            object_id,
             ..
         } => {
+            trace_lower_eval(*object_id);
             let d = to_local(p, *transform).length() - *radius;
             if *shell > 0.0 {
                 d.max(-(d + *shell))
@@ -5430,8 +5593,10 @@ fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
             half_size,
             round,
             shell,
+            object_id,
             ..
         } => {
+            trace_lower_eval(*object_id);
             let inner_half = Vec3::new(
                 (half_size.x - *round).max(0.0),
                 (half_size.y - *round).max(0.0),
@@ -5453,8 +5618,10 @@ fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
             half_height,
             round,
             shell,
+            object_id,
             ..
         } => {
+            trace_lower_eval(*object_id);
             let q = to_local(p, *transform);
             let radial = (q.x * q.x + q.z * q.z).sqrt();
             let dx = radial - (*radius - *round).max(0.0);
@@ -5472,8 +5639,10 @@ fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
             transform,
             major_radius,
             minor_radius,
+            object_id,
             ..
         } => {
+            trace_lower_eval(*object_id);
             let q = to_local(p, *transform);
             let qx = (q.x * q.x + q.z * q.z).sqrt() - *major_radius;
             (qx * qx + q.y * q.y).sqrt() - *minor_radius
@@ -5485,8 +5654,10 @@ fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
             half_height,
             round,
             shell,
+            object_id,
             ..
         } => {
+            trace_lower_eval(*object_id);
             let q = to_local(p, *transform);
             let radial = sd_regular_ngon(
                 Vec3::new(q.x, 0.0, q.z),
@@ -5506,9 +5677,13 @@ fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
         SdfNode::Custom {
             transform,
             bounds_half_extents,
+            object_id,
             ..
         } => point_aabb_lower_bound(
-            to_local(p, *transform),
+            {
+                trace_lower_eval(*object_id);
+                to_local(p, *transform)
+            },
             Aabb {
                 min: bounds_half_extents.mul(-1.0),
                 max: *bounds_half_extents,
@@ -5521,7 +5696,6 @@ fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
         | SdfNode::UnionChamfer { .. }
         | SdfNode::UnionColumns { .. }
         | SdfNode::UnionStairs { .. }
-        | SdfNode::UnionSoft { .. }
         | SdfNode::IntersectRound { .. }
         | SdfNode::IntersectChamfer { .. }
         | SdfNode::IntersectColumns { .. }
@@ -5538,6 +5712,7 @@ fn sdf_lower_bound(node: &SdfNode, p: Vec3) -> f32 {
         | SdfNode::DomainModifier { .. }
         | SdfNode::DistancePostModifier { .. }
         | SdfNode::Noise { .. } => point_aabb_lower_bound(p, sdf_bounds(node)),
+        SdfNode::UnionSoft { .. } => point_aabb_lower_bound(p, sdf_bounds(node)),
         SdfNode::Smooth { base, k } => sdf_lower_bound(base, p) - *k * 0.1,
     }
 }
@@ -5551,6 +5726,7 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             object_id,
             material_id,
         } => {
+            trace_exact_eval(*object_id);
             let q = to_local(p, *transform);
             let d = q.length() - *radius;
             DistanceInfo {
@@ -5571,6 +5747,7 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             object_id,
             material_id,
         } => {
+            trace_exact_eval(*object_id);
             let inner_half = Vec3::new(
                 (half_size.x - *round).max(0.0),
                 (half_size.y - *round).max(0.0),
@@ -5599,6 +5776,7 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             object_id,
             material_id,
         } => {
+            trace_exact_eval(*object_id);
             let q = to_local(p, *transform);
             let radial = (q.x * q.x + q.z * q.z).sqrt();
             let dx = radial - (*radius - *round).max(0.0);
@@ -5623,6 +5801,7 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             object_id,
             material_id,
         } => {
+            trace_exact_eval(*object_id);
             let q = to_local(p, *transform);
             let qx = (q.x * q.x + q.z * q.z).sqrt() - *major_radius;
             DistanceInfo {
@@ -5641,6 +5820,7 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             object_id,
             material_id,
         } => {
+            trace_exact_eval(*object_id);
             let q = to_local(p, *transform);
             let radial = sd_regular_ngon(
                 Vec3::new(q.x, 0.0, q.z),
@@ -5668,6 +5848,7 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             material_id,
             ..
         } => {
+            trace_exact_eval(*object_id);
             let q = to_local(p, *transform);
             DistanceInfo {
                 distance: eval_custom_sdf_distance(runtime, q),
@@ -5789,13 +5970,35 @@ fn sdf_distance_info(node: &SdfNode, p: Vec3) -> DistanceInfo {
             }
         }
         SdfNode::UnionSoft { lhs, rhs, r } => {
-            let l = sdf_distance_info(lhs, p);
-            let r_info = sdf_distance_info(rhs, p);
-            let distance = op_union_soft(l.distance, r_info.distance, *r);
-            if l.distance <= r_info.distance {
-                DistanceInfo { distance, ..l }
+            let lhs_lb = sdf_lower_bound(lhs, p);
+            let rhs_lb = sdf_lower_bound(rhs, p);
+            let support = (*r).max(0.0);
+            if lhs_lb <= rhs_lb {
+                let l = sdf_distance_info(lhs, p);
+                if l.distance <= rhs_lb - support {
+                    l
+                } else {
+                    let r_info = sdf_distance_info(rhs, p);
+                    let distance = op_union_soft(l.distance, r_info.distance, *r);
+                    if l.distance <= r_info.distance {
+                        DistanceInfo { distance, ..l }
+                    } else {
+                        DistanceInfo { distance, ..r_info }
+                    }
+                }
             } else {
-                DistanceInfo { distance, ..r_info }
+                let r_info = sdf_distance_info(rhs, p);
+                if r_info.distance <= lhs_lb - support {
+                    r_info
+                } else {
+                    let l = sdf_distance_info(lhs, p);
+                    let distance = op_union_soft(l.distance, r_info.distance, *r);
+                    if l.distance <= r_info.distance {
+                        DistanceInfo { distance, ..l }
+                    } else {
+                        DistanceInfo { distance, ..r_info }
+                    }
+                }
             }
         }
         SdfNode::IntersectRound { lhs, rhs, r } => {
@@ -6254,6 +6457,7 @@ fn build_render_setup(
         path_lights,
         materials: scene.materials.clone(),
         object_transforms: scene.object_transforms.clone(),
+        object_names: scene.object_names.clone(),
         material_def_names: sorted_material_def_names(state),
         dynamic_material_overrides: scene.dynamic_material_overrides.clone(),
         environment_name: find_environment_name(state),

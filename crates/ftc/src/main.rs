@@ -86,6 +86,10 @@ enum Command {
         #[arg(long, value_enum)]
         debug_aov: Option<CliRayDebugAov>,
 
+        /// Trace one tile by tile indices x,y and print evaluation stats
+        #[arg(long)]
+        trace_tile: Option<String>,
+
         /// Re-render when the scene file changes
         #[arg(long)]
         watch: bool,
@@ -218,6 +222,10 @@ struct DefaultRayArgs {
     #[arg(long, value_enum)]
     debug_aov: Option<CliRayDebugAov>,
 
+    /// Trace one tile by tile indices x,y and print evaluation stats
+    #[arg(long)]
+    trace_tile: Option<String>,
+
     /// Re-render when the scene file changes
     #[arg(long)]
     watch: bool,
@@ -307,6 +315,7 @@ fn main() -> ExitCode {
             tile_size,
             aa,
             debug_aov,
+            trace_tile,
             watch,
         }) => run_ray(
             RayParams {
@@ -319,6 +328,7 @@ fn main() -> ExitCode {
                 tile_size,
                 aa,
                 debug_aov: debug_aov.map(Into::into),
+                trace_tile,
                 watch,
             },
             &cfg,
@@ -346,6 +356,7 @@ impl DefaultRayArgs {
             tile_size: self.tile_size,
             aa: self.aa,
             debug_aov: self.debug_aov.map(Into::into),
+            trace_tile: self.trace_tile,
             watch: self.watch,
         }
     }
@@ -643,6 +654,8 @@ fn run_ray_once(scene_path: &Path, params: &RayParams) -> ExitCode {
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| default_output_path(scene_path));
             let tile_size = params.tile_size.max(8);
+            let trace_tile_env = trace_tile_env_value(params.trace_tile.as_deref(), tile_size);
+            let _trace_tile_guard = TraceTileGuard::set(trace_tile_env.as_deref());
             let tiles_x = options.width.div_ceil(tile_size);
             let tiles_y = options.height.div_ceil(tile_size);
             let tiles_total = u64::from(tiles_x) * u64::from(tiles_y);
@@ -737,7 +750,53 @@ struct RayParams {
     tile_size: u32,
     aa: u32,
     debug_aov: Option<RayDebugAov>,
+    trace_tile: Option<String>,
     watch: bool,
+}
+
+struct TraceTileGuard {
+    previous: Option<OsString>,
+}
+
+impl TraceTileGuard {
+    fn set(raw: Option<&str>) -> Self {
+        let previous = std::env::var_os("FORGEDTHOUGHTS_TRACE_TILE");
+        match raw {
+            Some(value) if !value.trim().is_empty() => unsafe {
+                std::env::set_var("FORGEDTHOUGHTS_TRACE_TILE", value)
+            },
+            _ => unsafe { std::env::remove_var("FORGEDTHOUGHTS_TRACE_TILE") },
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for TraceTileGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            unsafe { std::env::set_var("FORGEDTHOUGHTS_TRACE_TILE", previous) };
+        } else {
+            unsafe { std::env::remove_var("FORGEDTHOUGHTS_TRACE_TILE") };
+        }
+    }
+}
+
+fn trace_tile_env_value(raw: Option<&str>, tile_size: u32) -> Option<String> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let mut parts = raw.split(',');
+    let tx = parts.next()?.trim().parse::<u32>().ok()?;
+    let ty = parts.next()?.trim().parse::<u32>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(format!(
+        "{},{}",
+        tx.saturating_mul(tile_size),
+        ty.saturating_mul(tile_size)
+    ))
 }
 
 fn run_with_watch(

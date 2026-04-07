@@ -1,0 +1,202 @@
+import "Robot";
+
+sdf DebugLimb {
+  let length = 0.40;
+  let width = 0.13;
+  let depth = 0.13;
+  let material = Material {};
+
+  let anchors = {
+    Start: vec3(0.0, 0.0, -length * 0.5),
+    End: vec3(0.0, 0.0, length * 0.5),
+    Center: vec3(0.0, 0.0, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(width * 0.6, depth * 0.6, length * 0.6);
+  }
+
+  fn distance(p) {
+    let rx = width * 0.5;
+    let ry = depth * 0.5;
+    let rz = length * 0.5;
+    let q = vec3(p.x / rx, p.y / ry, p.z / rz);
+    return (length(q) - 1.0) * min(rx, min(ry, rz));
+  }
+};
+
+sdf DebugTorso {
+  let length = 0.72;
+  let width = 0.38;
+  let depth = 0.24;
+  let material = Material {};
+
+  let anchors = {
+    Start: vec3(0.0, 0.0, -length * 0.5),
+    End: vec3(0.0, 0.0, length * 0.5),
+    Center: vec3(0.0, 0.0, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(width * 0.8, depth * 0.8, length * 0.6);
+  }
+
+  fn distance(p) {
+    let chest = Sphere.distance(
+      vec3(p.x / (width * 0.62), p.y / (depth * 0.70), (p.z - length * 0.10) / (length * 0.34)),
+      1.0
+    ) * min(width * 0.62, min(depth * 0.70, length * 0.34));
+    let belly = Sphere.distance(
+      vec3(p.x / (width * 0.46), p.y / (depth * 0.58), (p.z + length * 0.18) / (length * 0.28)),
+      1.0
+    ) * min(width * 0.46, min(depth * 0.58, length * 0.28));
+    return min(chest, belly);
+  }
+};
+
+sdf DebugConnector {
+  let length = 0.30;
+  let width = 0.12;
+  let depth = 0.10;
+  let round = 0.04;
+  let material = Material {};
+
+  let anchors = {
+    Start: vec3(0.0, 0.0, -length * 0.5),
+    End: vec3(0.0, 0.0, length * 0.5),
+    Center: vec3(0.0, 0.0, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(width * 0.7, depth * 0.7, length * 0.7);
+  }
+
+  fn distance(p) {
+    return Box.distance(
+      p,
+      max(vec3(width * 0.5 - round, depth * 0.5 - round, length * 0.5 - round), vec3(0.001))
+    ) - round;
+  }
+};
+
+sdf DebugJoint {
+  let width = 0.11;
+  let depth = 0.11;
+  let height = 0.11;
+  let round = 0.04;
+  let material = Material {};
+
+  let anchors = {
+    Center: vec3(0.0, 0.0, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(width * 0.7, depth * 0.7, height * 0.7);
+  }
+
+  fn distance(p) {
+    return Box.distance(
+      p,
+      max(vec3(width * 0.5 - round, depth * 0.5 - round, height * 0.5 - round), vec3(0.001))
+    ) - round;
+  }
+};
+
+let camera = Camera {
+  origin: vec3(0.0, 1.85, 4.6),
+  target: vec3(0.0, 1.25, 0.0),
+  fov_y: 28.0
+};
+
+let key = SphereLight {
+  position: vec3(2.8, 4.0, 3.5),
+  radius: 0.55,
+  color: #fff2d6,
+  intensity: 120.0,
+  samples: 4
+};
+
+environment Sky {
+  let zenith = #4d86ff;
+  let horizon = #d9ebff;
+
+  fn color(dir) {
+    let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    return mix(horizon, zenith, pow(t, 0.7));
+  }
+};
+
+let render = RenderSettings {
+  width: 400,
+  height: 400,
+  max_steps: 320,
+  max_dist: 30.0,
+  epsilon: 0.0002,
+  step_scale: 0.7,
+  accel: Bvh{}
+};
+
+let floor = Box {
+  size: vec3(6.0, 0.4, 6.0),
+  material: Material {
+    color: #7a7f89,
+    roughness: 0.72
+  }
+};
+
+let skin = Material {
+  color: #d7ab8b,
+  roughness: 0.82,
+  metallic: 0.0,
+  specular: 0.18,
+  specular_weight: 0.55
+};
+
+let rig = Robot {
+  height: 1.9
+}
+  .attach(floor, Top);
+
+let torso = DebugTorso {
+  length: 0.78,
+  width: 0.40,
+  depth: 0.26,
+  material: skin
+}.bind(rig.torso);
+
+let shoulder = DebugConnector {
+  length: 0.62,
+  width: 0.12,
+  depth: 0.10,
+  round: 0.04,
+  material: skin
+}.bind(rig.shoulder_span);
+
+let upper_arm = DebugLimb {
+  length: 0.38,
+  width: 0.14,
+  depth: 0.14,
+  material: skin
+}.bind(rig.upper_arm_l);
+
+let elbow = DebugJoint {
+  width: 0.11,
+  depth: 0.11,
+  height: 0.11,
+  round: 0.04,
+  material: skin
+}.attach(rig.elbow_l, Center);
+
+let forearm = DebugLimb {
+  length: 0.36,
+  width: 0.11,
+  depth: 0.11,
+  material: skin
+}.bind(rig.forearm_l);
+
+let scene = torso
+  .union_soft(shoulder, 0.10)
+  .union_soft(upper_arm, 0.10)
+  .union_soft(elbow, 0.08)
+  .union_soft(forearm, 0.08)
+  + floor;

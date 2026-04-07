@@ -1,0 +1,389 @@
+import "Robot";
+
+sdf HumanLimb {
+  let length = 0.44;
+  let width = 0.14;
+  let depth = 0.14;
+  let material = Material {};
+
+  let anchors = {
+    Start: vec3(0.0, 0.0, -length * 0.5),
+    End: vec3(0.0, 0.0, length * 0.5),
+    Center: vec3(0.0, 0.0, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(width * 0.55, depth * 0.55, length * 0.55);
+  }
+
+  fn distance(p) {
+    let rz = length * 0.5;
+    let rx = width * 0.5;
+    let ry = depth * 0.5;
+    let q = vec3(p.x / rx, p.y / ry, p.z / rz);
+    return (length(q) - 1.0) * min(rx, min(ry, rz));
+  }
+};
+
+sdf HumanConnector {
+  let length = 0.36;
+  let width = 0.14;
+  let depth = 0.12;
+  let round = 0.04;
+  let material = Material {};
+
+  let anchors = {
+    Start: vec3(0.0, 0.0, -length * 0.5),
+    End: vec3(0.0, 0.0, length * 0.5),
+    Center: vec3(0.0, 0.0, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(width * 0.7, depth * 0.7, length * 0.7);
+  }
+
+  fn distance(p) {
+    let half = max(vec3(width * 0.5 - round, depth * 0.5 - round, length * 0.5 - round), vec3(0.001));
+    return Box.distance(p, half) - round;
+  }
+};
+
+sdf HumanTorso {
+  let length = 0.72;
+  let width = 0.34;
+  let depth = 0.24;
+  let material = Material {};
+
+  let anchors = {
+    Start: vec3(0.0, 0.0, -length * 0.5),
+    End: vec3(0.0, 0.0, length * 0.5),
+    Center: vec3(0.0, 0.0, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(width * 0.75, depth * 0.75, length * 0.55);
+  }
+
+  fn distance(p) {
+    let chest = Sphere.distance(
+      vec3(p.x / (width * 0.62), p.y / (depth * 0.72), (p.z - length * 0.12) / (length * 0.34)),
+      1.0
+    ) * min(width * 0.62, min(depth * 0.72, length * 0.34));
+
+    let belly = Sphere.distance(
+      vec3(p.x / (width * 0.46), p.y / (depth * 0.60), (p.z + length * 0.18) / (length * 0.28)),
+      1.0
+    ) * min(width * 0.46, min(depth * 0.60, length * 0.28));
+
+    return min(chest, belly);
+  }
+};
+
+sdf HumanHead {
+  let radius = 0.15;
+  let material = Material {};
+
+  let anchors = {
+    Center: vec3(0.0, 0.0, 0.0),
+    Bottom: vec3(0.0, -radius, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(radius * 0.95, radius * 1.12, radius * 0.92);
+  }
+
+  fn distance(p) {
+    let q = vec3(p.x / (radius * 0.92), p.y / (radius * 1.10), p.z / (radius * 0.88));
+    return (length(q) - 1.0) * radius * 0.9;
+  }
+};
+
+sdf HumanHand {
+  let width = 0.12;
+  let height = 0.06;
+  let length = 0.18;
+  let material = Material {};
+
+  let anchors = {
+    Center: vec3(0.0, 0.0, 0.0),
+    Wrist: vec3(0.0, 0.0, -length * 0.45)
+  };
+
+  fn bounds() {
+    return vec3(width * 0.6, height * 0.6, length * 0.6);
+  }
+
+  fn distance(p) {
+    let q = vec3(p.x / (width * 0.50), p.y / (height * 0.60), p.z / (length * 0.52));
+    return (length(q) - 1.0) * min(width * 0.50, min(height * 0.60, length * 0.52));
+  }
+};
+
+sdf HumanFoot {
+  let width = 0.12;
+  let height = 0.06;
+  let length = 0.24;
+  let material = Material {};
+
+  let anchors = {
+    Center: vec3(0.0, 0.0, 0.0),
+    Toe: vec3(0.0, 0.0, length * 0.45)
+  };
+
+  fn bounds() {
+    return vec3(width * 0.65, height * 0.65, length * 0.65);
+  }
+
+  fn distance(p) {
+    let q = vec3(p.x / (width * 0.52), p.y / (height * 0.44), (p.z - length * 0.08) / (length * 0.58));
+    return (length(q) - 1.0) * min(width * 0.52, min(height * 0.44, length * 0.58));
+  }
+};
+
+sdf HumanJoint {
+  let width = 0.12;
+  let depth = 0.12;
+  let height = 0.12;
+  let round = 0.04;
+  let material = Material {};
+
+  let anchors = {
+    Center: vec3(0.0, 0.0, 0.0)
+  };
+
+  fn bounds() {
+    return vec3(width * 0.7, depth * 0.7, height * 0.7);
+  }
+
+  fn distance(p) {
+    let half = max(vec3(width * 0.5 - round, depth * 0.5 - round, height * 0.5 - round), vec3(0.001));
+    return Box.distance(p, half) - round;
+  }
+};
+
+let camera = Camera {
+  origin: vec3(0.0, 1.72, 5.6),
+  target: vec3(0.0, 1.18, 0.0),
+  fov_y: 28.0
+};
+
+let key = SphereLight {
+  position: vec3(3.2, 4.8, 4.2),
+  radius: 0.65,
+  color: #fff2d6,
+  intensity: 135.0,
+  samples: 6
+};
+
+environment Sky {
+  let zenith = #4d86ff;
+  let horizon = #d9ebff;
+
+  fn color(dir) {
+    let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    return mix(horizon, zenith, pow(t, 0.7));
+  }
+};
+
+let render = RenderSettings {
+  width: 600,
+  height: 600,
+  max_steps: 420,
+  max_dist: 40.0,
+  epsilon: 0.0002,
+  step_scale: 0.7,
+  accel: Bvh{}
+};
+
+let floor_mat = Material {
+  color: #7a7f89,
+  roughness: 0.72
+};
+
+let skin_mat = Material {
+  color: #d7ab8b,
+  roughness: 0.82,
+  metallic: 0.0,
+  specular: 0.18,
+  specular_weight: 0.55
+};
+
+let floor = Box {
+  size: vec3(8.0, 0.4, 8.0),
+  material: floor_mat
+};
+
+let rig = Robot {
+  height: 1.9
+}
+  .attach(floor, Top);
+
+let torso = HumanTorso {
+  length: 0.78,
+  width: 0.40,
+  depth: 0.26,
+  material: skin_mat
+}.bind(rig.torso);
+
+let shoulder_bridge = HumanConnector {
+  length: 0.68,
+  width: 0.14,
+  depth: 0.12,
+  round: 0.045,
+  material: skin_mat
+}.bind(rig.shoulder_span);
+
+let hip_bridge = HumanConnector {
+  length: 0.34,
+  width: 0.16,
+  depth: 0.12,
+  round: 0.045,
+  material: skin_mat
+}.bind(rig.hip_span);
+
+let neck = HumanLimb {
+  length: 0.12,
+  width: 0.09,
+  depth: 0.09,
+  material: skin_mat
+}.bind(rig.neck_link);
+
+let upper_arm_l = HumanLimb {
+  length: 0.38,
+  width: 0.14,
+  depth: 0.14,
+  material: skin_mat
+}.bind(rig.upper_arm_l);
+let upper_arm_r = HumanLimb {
+  length: 0.38,
+  width: 0.14,
+  depth: 0.14,
+  material: skin_mat
+}.bind(rig.upper_arm_r);
+let forearm_l = HumanLimb {
+  length: 0.36,
+  width: 0.11,
+  depth: 0.11,
+  material: skin_mat
+}.bind(rig.forearm_l);
+let forearm_r = HumanLimb {
+  length: 0.36,
+  width: 0.11,
+  depth: 0.11,
+  material: skin_mat
+}.bind(rig.forearm_r);
+let thigh_l = HumanLimb {
+  length: 0.48,
+  width: 0.18,
+  depth: 0.18,
+  material: skin_mat
+}.bind(rig.thigh_l);
+let thigh_r = HumanLimb {
+  length: 0.48,
+  width: 0.18,
+  depth: 0.18,
+  material: skin_mat
+}.bind(rig.thigh_r);
+let shin_l = HumanLimb {
+  length: 0.46,
+  width: 0.13,
+  depth: 0.13,
+  material: skin_mat
+}.bind(rig.shin_l);
+let shin_r = HumanLimb {
+  length: 0.46,
+  width: 0.13,
+  depth: 0.13,
+  material: skin_mat
+}.bind(rig.shin_r);
+
+let head = HumanHead {
+  radius: 0.16,
+  material: skin_mat
+}.attach(rig.head, Center);
+
+let elbow_l = HumanJoint {
+  width: 0.11,
+  depth: 0.11,
+  height: 0.11,
+  round: 0.04,
+  material: skin_mat
+}.attach(rig.elbow_l, Center);
+let elbow_r = HumanJoint {
+  width: 0.11,
+  depth: 0.11,
+  height: 0.11,
+  round: 0.04,
+  material: skin_mat
+}.attach(rig.elbow_r, Center);
+
+let knee_l = HumanJoint {
+  width: 0.13,
+  depth: 0.13,
+  height: 0.13,
+  round: 0.045,
+  material: skin_mat
+}.attach(rig.knee_l, Center);
+let knee_r = HumanJoint {
+  width: 0.13,
+  depth: 0.13,
+  height: 0.13,
+  round: 0.045,
+  material: skin_mat
+}.attach(rig.knee_r, Center);
+
+let hand_l = HumanHand {
+  width: 0.11,
+  height: 0.05,
+  length: 0.18,
+  material: skin_mat
+}.attach(rig.hand_l, Center);
+let hand_r = HumanHand {
+  width: 0.11,
+  height: 0.05,
+  length: 0.18,
+  material: skin_mat
+}.attach(rig.hand_r, Center);
+
+let foot_l = HumanFoot {
+  width: 0.13,
+  height: 0.06,
+  length: 0.26,
+  material: skin_mat
+}.attach(rig.foot_l, Center);
+let foot_r = HumanFoot {
+  width: 0.13,
+  height: 0.06,
+  length: 0.26,
+  material: skin_mat
+}.attach(rig.foot_r, Center);
+
+let upper_core = torso.union_soft(shoulder_bridge, 0.12);
+let lower_core = upper_core.union_soft(hip_bridge, 0.10);
+let core = lower_core.union_soft(neck, 0.08).union_soft(head, 0.10);
+
+let left_arm = upper_arm_l
+  .union_soft(elbow_l, 0.08)
+  .union_soft(forearm_l, 0.08)
+  .union_soft(hand_l, 0.05);
+let right_arm = upper_arm_r
+  .union_soft(elbow_r, 0.08)
+  .union_soft(forearm_r, 0.08)
+  .union_soft(hand_r, 0.05);
+
+let left_leg = thigh_l
+  .union_soft(knee_l, 0.09)
+  .union_soft(shin_l, 0.09)
+  .union_soft(foot_l, 0.05);
+let right_leg = thigh_r
+  .union_soft(knee_r, 0.09)
+  .union_soft(shin_r, 0.09)
+  .union_soft(foot_r, 0.05);
+
+let human = core
+  .union_soft(left_arm, 0.10)
+  .union_soft(right_arm, 0.10)
+  .union_soft(left_leg, 0.09)
+  .union_soft(right_leg, 0.09);
+
+let scene = floor + human;
