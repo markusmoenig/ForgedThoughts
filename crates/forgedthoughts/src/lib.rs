@@ -1,5 +1,6 @@
 mod ast;
 mod eval;
+mod graph;
 mod jit;
 mod lexer;
 mod materials;
@@ -14,15 +15,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use ast::{BinaryOp, Expr, Program, Statement, UnaryOp};
+pub use ast::{BinaryOp, Expr, NodeDef, Program, Statement, UnaryOp};
 pub use eval::{
-    Binding, EvalError, EvalState, FunctionValue, ObjectValue, Value, eval_environment_function,
+    Binding, EvalError, EvalState, FunctionValue, ObjectValue, Value,
+    compile_specialized_height_node_eval_function,
+    eval_environment_function,
     eval_function_value, eval_material_function, eval_material_function_with_overrides,
-    eval_material_properties, eval_material_properties_with_overrides, eval_program,
-    eval_sdf_function, eval_sdf_function_args_with_overrides, eval_sdf_function_with_overrides,
-    eval_sdf_vec3_function_with_overrides, eval_sdf_zero_arg_function,
-    eval_sdf_zero_arg_function_with_overrides, eval_top_level_function,
+    eval_material_properties, eval_material_properties_with_overrides, eval_node_function,
+    eval_program, eval_sdf_function, eval_sdf_function_args_with_overrides,
+    eval_sdf_function_with_overrides, eval_sdf_vec3_function_with_overrides,
+    eval_sdf_zero_arg_function, eval_sdf_zero_arg_function_with_overrides, eval_top_level_function,
 };
+pub use graph::{GraphFile, GraphNodeInstance, GraphRenderConfig, GraphValue, load_graph_file};
 pub use materials::{
     BlendedMaterial, BsdfSample as MaterialBsdfSample, ColorPattern, DielectricMaterial,
     LambertMaterial, Material, MaterialBsdf, MaterialKindTag, MaterialParams, MediumParams,
@@ -36,18 +40,18 @@ pub use render_api::{
 };
 pub use renderer::{
     AccelMode, PreviewProgress, RayDebugAov, RayProgress, RaySettings, RenderError, RenderOptions,
-    SceneRenderSettings, extract_scene_render_settings, render_depth_png,
+    RenderProgress, SceneRenderSettings, extract_scene_render_settings, render_depth_png,
     render_depth_png_with_accel, render_preview_progressive_with_accel, render_ray_png_with_accel,
     render_ray_progressive_with_accel,
 };
+pub use renderer::node::{NodeRenderSettings, render_node_png};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinLibraryCategory {
-    Materials,
-    Objects,
-    Skeletons,
-    Scenes,
+    Noise,
+    Material,
+    Operator,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -62,154 +66,36 @@ pub struct BuiltinLibraryItem {
 
 const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
     BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Materials,
-        name: "Gold",
-        path: "materials/gold.ft",
-        description: "Polished gold metal with moderate roughness for reflective showcase materials.",
-        tags: &["material", "metal", "gold", "reflective", "warm"],
-        source: include_str!("../library/materials/gold.ft"),
+        category: BuiltinLibraryCategory::Noise,
+        name: "ValueNoise",
+        path: "noise/value_noise.ft",
+        description: "Fractal Brownian Motion over 2D value noise. Outputs a float in [0, 1].",
+        tags: &["noise", "fbm", "heightmap", "procedural"],
+        source: include_str!("../library/noise/value_noise.ft"),
     },
     BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Materials,
-        name: "Glass",
-        path: "materials/glass.ft",
-        description: "Clear dielectric glass material for transmissive and refractive surfaces.",
-        tags: &[
-            "material",
-            "glass",
-            "dielectric",
-            "transmission",
-            "refractive",
-        ],
-        source: include_str!("../library/materials/glass.ft"),
+        category: BuiltinLibraryCategory::Operator,
+        name: "Constant",
+        path: "operator/constant.ft",
+        description: "Outputs a constant scalar value.",
+        tags: &["operator", "constant", "scalar"],
+        source: include_str!("../library/operator/constant.ft"),
     },
     BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Materials,
-        name: "CheckerFloor",
-        path: "materials/checker_floor.ft",
-        description: "Diffuse procedural checker material for floors, stages, and reference scenes.",
-        tags: &["material", "checker", "floor", "diffuse", "procedural"],
-        source: include_str!("../library/materials/checker_floor.ft"),
+        category: BuiltinLibraryCategory::Operator,
+        name: "Add",
+        path: "operator/add.ft",
+        description: "Adds the outputs of two scalar input nodes.",
+        tags: &["operator", "add", "math", "scalar"],
+        source: include_str!("../library/operator/add.ft"),
     },
     BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Materials,
-        name: "StoneMoss",
-        path: "materials/stone_moss.ft",
-        description: "Layered wet stone material with darker moss patches and local-space breakup.",
-        tags: &["material", "stone", "moss", "wet", "layered", "procedural"],
-        source: include_str!("../library/materials/stone_moss.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "SoftBlob",
-        path: "objects/soft_blob.ft",
-        description: "Custom Forge SDF blob with warped silhouette and conservative bounds helper.",
-        tags: &["object", "sdf", "blob", "organic", "procedural"],
-        source: include_str!("../library/objects/soft_blob.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "Cupboard",
-        path: "objects/cupboard.ft",
-        description: "Simple parameterized cupboard shell with a front panel openness control.",
-        tags: &["object", "furniture", "cupboard", "storage", "parametric"],
-        source: include_str!("../library/objects/cupboard.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "Table",
-        path: "objects/table.ft",
-        description: "Parameterized table with a rectangular top and four round legs.",
-        tags: &["object", "furniture", "table", "surface", "parametric"],
-        source: include_str!("../library/objects/table.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "Lamp",
-        path: "objects/lamp.ft",
-        description: "Parameterized table lamp with separate body, shade, and bulb material slots.",
-        tags: &["object", "furniture", "lamp", "lighting", "parametric"],
-        source: include_str!("../library/objects/lamp.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "TwistedStatue",
-        path: "objects/twisted_statue.ft",
-        description: "Procedural twisted shell statue with fine horizontal banding for sculptural accents.",
-        tags: &["object", "statue", "sculpture", "procedural", "decor"],
-        source: include_str!("../library/objects/twisted_statue.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "RobotSegment",
-        path: "objects/robot_segment.ft",
-        description: "Reusable rigid robot limb segment modeled in a canonical bind pose.",
-        tags: &["object", "robot", "part", "limb", "bindable"],
-        source: include_str!("../library/objects/robot_segment.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "RobotTorso",
-        path: "objects/robot_torso.ft",
-        description: "Reusable robot torso segment modeled in a canonical bind pose.",
-        tags: &["object", "robot", "torso", "part", "bindable"],
-        source: include_str!("../library/objects/robot_torso.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "RobotHead",
-        path: "objects/robot_head.ft",
-        description: "Simple rounded robot head for skeleton scenes.",
-        tags: &["object", "robot", "head", "part"],
-        source: include_str!("../library/objects/robot_head.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "RobotJoint",
-        path: "objects/robot_joint.ft",
-        description: "Spherical robot joint marker for articulated assemblies.",
-        tags: &["object", "robot", "joint", "part"],
-        source: include_str!("../library/objects/robot_joint.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "RobotFoot",
-        path: "objects/robot_foot.ft",
-        description: "Simple forward-offset robot foot block.",
-        tags: &["object", "robot", "foot", "part"],
-        source: include_str!("../library/objects/robot_foot.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "RobotHand",
-        path: "objects/robot_hand.ft",
-        description: "Simple clamp-like robot hand with a palm block and short fingers.",
-        tags: &["object", "robot", "hand", "part"],
-        source: include_str!("../library/objects/robot_hand.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Objects,
-        name: "RobotBody",
-        path: "objects/robot_body.ft",
-        description: "Semantic assembled robot body driven by a skeleton.",
-        tags: &["object", "robot", "body", "skeleton", "semantic"],
-        source: include_str!("../library/objects/robot_body.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Skeletons,
-        name: "Robot",
-        path: "skeletons/robot.ft",
-        description: "Simplified rigid biped robot skeleton with named joints and segment bones.",
-        tags: &["skeleton", "robot", "biped", "rig", "semantic"],
-        source: include_str!("../library/skeletons/robot.ft"),
-    },
-    BuiltinLibraryItem {
-        category: BuiltinLibraryCategory::Scenes,
-        name: "Studio",
-        path: "scenes/studio.ft",
-        description: "Reusable studio-style scene setup with camera and lighting defaults.",
-        tags: &["scene", "studio", "camera", "lights", "starter"],
-        source: include_str!("../library/scenes/studio.ft"),
+        category: BuiltinLibraryCategory::Operator,
+        name: "Multiply",
+        path: "operator/multiply.ft",
+        description: "Multiplies a scalar input node by a factor.",
+        tags: &["operator", "multiply", "math", "scalar"],
+        source: include_str!("../library/operator/multiply.ft"),
     },
 ];
 
@@ -219,6 +105,8 @@ pub struct BuiltinLibraryMetadata {
     pub description: String,
     pub tags: Vec<String>,
     pub params: Vec<BuiltinLibraryParam>,
+    pub inputs: Vec<BuiltinLibraryPort>,
+    pub outputs: Vec<BuiltinLibraryPort>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +117,13 @@ pub struct BuiltinLibraryParam {
     pub default: Option<String>,
     pub min: Option<String>,
     pub max: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltinLibraryPort {
+    pub name: String,
+    pub port_type: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -262,6 +157,10 @@ pub enum CoreError {
     ImportCycle(String),
     #[error("parse error: {0}")]
     Parse(#[from] ParseError),
+    #[error("graph error: {0}")]
+    Graph(String),
+    #[error("graph parse error: {0}")]
+    GraphToml(#[from] toml::de::Error),
     #[error("eval error: {0}")]
     Eval(#[from] EvalError),
     #[error("render error: {0}")]
@@ -278,15 +177,39 @@ pub fn resolve_scene_path(
 }
 
 pub fn load_and_eval_scene(scene_path: &Path) -> Result<EvalState, CoreError> {
+    if is_graph_path(scene_path) {
+        return load_and_eval_graph(scene_path);
+    }
     let program = load_program_with_imports(scene_path)?;
     let state = eval_program(&program)?;
     Ok(state)
+}
+
+pub fn load_and_eval_graph(graph_path: &Path) -> Result<EvalState, CoreError> {
+    let graph = graph::load_graph_file(graph_path)?;
+    let lowered = graph::lower_graph_to_ft(&graph)?;
+    let program = load_program_from_source_with_imports(
+        &lowered,
+        graph_path.parent().unwrap_or(Path::new(".")),
+    )?;
+    Ok(eval_program(&program)?)
 }
 
 pub fn load_program_with_imports(scene_path: &Path) -> Result<Program, CoreError> {
     let mut loaded = HashSet::new();
     let mut stack = Vec::new();
     let statements = load_program_statements(scene_path, &mut loaded, &mut stack)?;
+    Ok(Program { statements })
+}
+
+fn load_program_from_source_with_imports(
+    source: &str,
+    parent_dir: &Path,
+) -> Result<Program, CoreError> {
+    let mut loaded = HashSet::new();
+    let mut stack = Vec::new();
+    let statements =
+        load_program_source_statements(source, Some(parent_dir), &mut loaded, &mut stack)?;
     Ok(Program { statements })
 }
 
@@ -312,6 +235,31 @@ fn load_program_statements(
         loaded,
         stack,
     )
+}
+
+fn load_program_source_statements(
+    source: &str,
+    parent_dir: Option<&Path>,
+    loaded: &mut HashSet<(ImportKey, Option<String>)>,
+    stack: &mut Vec<ImportKey>,
+) -> Result<Vec<Statement>, CoreError> {
+    let program = parse_program(source)?;
+    let export_names = collect_export_names(&program.statements);
+    let mut statements = Vec::new();
+    for stmt in program.statements {
+        match stmt {
+            Statement::Import { path, alias } => {
+                let resolved = resolve_import(&path, parent_dir)?;
+                statements.extend(load_import_source(resolved, alias, parent_dir, loaded, stack)?);
+            }
+            Statement::Export(_) => {}
+            other => statements.push(other),
+        }
+    }
+    if let Some(export_names) = export_names {
+        statements = filter_exported_statements(statements, &export_names);
+    }
+    Ok(statements)
 }
 
 fn load_import_source(
@@ -450,6 +398,12 @@ fn resolve_builtin_library_name(
     }
 }
 
+fn is_graph_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".graph.toml") || name.ends_with(".toml"))
+}
+
 pub fn builtin_library_items(category: Option<BuiltinLibraryCategory>) -> Vec<BuiltinLibraryItem> {
     BUILTIN_LIBRARY
         .iter()
@@ -464,6 +418,8 @@ pub fn builtin_library_item_metadata(item: &BuiltinLibraryItem) -> BuiltinLibrar
         description: item.description.to_string(),
         tags: item.tags.iter().map(|tag| (*tag).to_string()).collect(),
         params: Vec::new(),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
     })
 }
 
@@ -503,6 +459,14 @@ fn extract_builtin_metadata(item: &BuiltinLibraryItem) -> Option<BuiltinLibraryM
                     &def.metadata,
                 ));
             }
+            Statement::NodeDef(def) if def.name == item.name => {
+                return Some(metadata_from_pairs(
+                    item.name,
+                    item.description,
+                    item.tags,
+                    &def.metadata,
+                ));
+            }
             _ => {}
         }
     }
@@ -522,6 +486,8 @@ fn metadata_from_pairs(
         .map(|tag| (*tag).to_string())
         .collect::<Vec<_>>();
     let mut params = Vec::new();
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
 
     for (key, expr) in metadata {
         match key.as_str() {
@@ -545,6 +511,16 @@ fn metadata_from_pairs(
                     params = values;
                 }
             }
+            "inputs" => {
+                if let Some(values) = metadata_ports(expr) {
+                    inputs = values;
+                }
+            }
+            "outputs" => {
+                if let Some(values) = metadata_ports(expr) {
+                    outputs = values;
+                }
+            }
             _ => {}
         }
     }
@@ -554,6 +530,8 @@ fn metadata_from_pairs(
         description,
         tags,
         params,
+        inputs,
+        outputs,
     }
 }
 
@@ -620,6 +598,37 @@ fn metadata_scalar_string(expr: &Expr) -> Option<String> {
     }
 }
 
+fn metadata_ports(expr: &Expr) -> Option<Vec<BuiltinLibraryPort>> {
+    let Expr::Array(items) = expr else {
+        return None;
+    };
+    items.iter().map(metadata_port).collect()
+}
+
+fn metadata_port(expr: &Expr) -> Option<BuiltinLibraryPort> {
+    let Expr::ObjectLiteral { fields, .. } = expr else {
+        return None;
+    };
+    let mut name = None;
+    let mut port_type = None;
+    let mut description = None;
+
+    for (key, value) in fields {
+        match key.as_str() {
+            "name" => name = metadata_string(value),
+            "type" => port_type = metadata_string(value),
+            "description" => description = metadata_string(value),
+            _ => {}
+        }
+    }
+
+    Some(BuiltinLibraryPort {
+        name: name?,
+        port_type: port_type?,
+        description,
+    })
+}
+
 fn namespace_statements(statements: Vec<Statement>, alias: &str) -> Vec<Statement> {
     let mut top_level_names = HashSet::new();
     for stmt in &statements {
@@ -640,6 +649,9 @@ fn namespace_statements(statements: Vec<Statement>, alias: &str) -> Vec<Statemen
                 top_level_names.insert(def.name.clone());
             }
             Statement::EnvironmentDef(def) => {
+                top_level_names.insert(def.name.clone());
+            }
+            Statement::NodeDef(def) => {
                 top_level_names.insert(def.name.clone());
             }
             Statement::Assign { .. } | Statement::Import { .. } | Statement::Export(_) => {}
@@ -672,23 +684,8 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
             for param in &def.params {
                 fn_scope.insert(param.clone());
             }
-            let mut rewritten_body = Vec::with_capacity(def.body.len());
-            for stmt in def.body {
-                match stmt {
-                    ast::MaterialFunctionStatement::Binding { name, expr } => {
-                        let expr = namespace_expr(expr, alias, names, &fn_scope);
-                        fn_scope.insert(name.clone());
-                        rewritten_body.push(ast::MaterialFunctionStatement::Binding { name, expr });
-                    }
-                    ast::MaterialFunctionStatement::Return { expr } => {
-                        rewritten_body.push(ast::MaterialFunctionStatement::Return {
-                            expr: namespace_expr(expr, alias, names, &fn_scope),
-                        });
-                    }
-                }
-            }
+            def.body = namespace_fn_body(def.body, alias, names, &mut fn_scope);
             def.name = qualify_name(alias, &def.name);
-            def.body = rewritten_body;
             Statement::FunctionDef(def)
         }
         Statement::MaterialDef(mut def) => {
@@ -725,25 +722,7 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                         for param in &params {
                             fn_scope.insert(param.clone());
                         }
-                        let mut rewritten_body = Vec::with_capacity(body.len());
-                        for stmt in body {
-                            match stmt {
-                                ast::MaterialFunctionStatement::Binding { name, expr } => {
-                                    let expr = namespace_expr(expr, alias, names, &fn_scope);
-                                    fn_scope.insert(name.clone());
-                                    rewritten_body.push(ast::MaterialFunctionStatement::Binding {
-                                        name,
-                                        expr,
-                                    });
-                                }
-                                ast::MaterialFunctionStatement::Return { expr } => {
-                                    rewritten_body.push(ast::MaterialFunctionStatement::Return {
-                                        expr: namespace_expr(expr, alias, names, &fn_scope),
-                                    });
-                                }
-                            }
-                        }
-                        let body = rewritten_body;
+                        let body = namespace_fn_body(body, alias, names, &mut fn_scope);
                         ast::MaterialStatement::Function { name, params, body }
                     }
                 })
@@ -776,25 +755,7 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                         for param in &params {
                             fn_scope.insert(param.clone());
                         }
-                        let mut rewritten_body = Vec::with_capacity(body.len());
-                        for stmt in body {
-                            match stmt {
-                                ast::MaterialFunctionStatement::Binding { name, expr } => {
-                                    let expr = namespace_expr(expr, alias, names, &fn_scope);
-                                    fn_scope.insert(name.clone());
-                                    rewritten_body.push(ast::MaterialFunctionStatement::Binding {
-                                        name,
-                                        expr,
-                                    });
-                                }
-                                ast::MaterialFunctionStatement::Return { expr } => {
-                                    rewritten_body.push(ast::MaterialFunctionStatement::Return {
-                                        expr: namespace_expr(expr, alias, names, &fn_scope),
-                                    });
-                                }
-                            }
-                        }
-                        let body = rewritten_body;
+                        let body = namespace_fn_body(body, alias, names, &mut fn_scope);
                         ast::SdfStatement::Function { name, params, body }
                     }
                 })
@@ -835,25 +796,7 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                         for param in &params {
                             fn_scope.insert(param.clone());
                         }
-                        let mut rewritten_body = Vec::with_capacity(body.len());
-                        for stmt in body {
-                            match stmt {
-                                ast::MaterialFunctionStatement::Binding { name, expr } => {
-                                    let expr = namespace_expr(expr, alias, names, &fn_scope);
-                                    fn_scope.insert(name.clone());
-                                    rewritten_body.push(ast::MaterialFunctionStatement::Binding {
-                                        name,
-                                        expr,
-                                    });
-                                }
-                                ast::MaterialFunctionStatement::Return { expr } => {
-                                    rewritten_body.push(ast::MaterialFunctionStatement::Return {
-                                        expr: namespace_expr(expr, alias, names, &fn_scope),
-                                    });
-                                }
-                            }
-                        }
-                        let body = rewritten_body;
+                        let body = namespace_fn_body(body, alias, names, &mut fn_scope);
                         ast::MaterialStatement::Function { name, params, body }
                     }
                 })
@@ -908,6 +851,47 @@ fn namespace_statement(stmt: Statement, alias: &str, names: &HashSet<String>) ->
                 .collect();
             Statement::SkeletonDef(def)
         }
+        Statement::NodeDef(mut def) => {
+            let mut scope = HashSet::new();
+            for stmt in &def.statements {
+                if let ast::MaterialStatement::Binding { name, .. } = stmt {
+                    scope.insert(name.clone());
+                }
+            }
+            def.name = qualify_name(alias, &def.name);
+            def.metadata = def
+                .metadata
+                .into_iter()
+                .map(|(name, expr)| (name, namespace_expr(expr, alias, names, &scope)))
+                .collect();
+            def.statements = def
+                .statements
+                .into_iter()
+                .map(|stmt| match stmt {
+                    ast::MaterialStatement::Binding { name, expr } => {
+                        ast::MaterialStatement::Binding {
+                            name,
+                            expr: namespace_expr(expr, alias, names, &scope),
+                        }
+                    }
+                    ast::MaterialStatement::Property { name, expr } => {
+                        ast::MaterialStatement::Property {
+                            name,
+                            expr: namespace_expr(expr, alias, names, &scope),
+                        }
+                    }
+                    ast::MaterialStatement::Function { name, params, body } => {
+                        let mut fn_scope = scope.clone();
+                        for param in &params {
+                            fn_scope.insert(param.clone());
+                        }
+                        let body = namespace_fn_body(body, alias, names, &mut fn_scope);
+                        ast::MaterialStatement::Function { name, params, body }
+                    }
+                })
+                .collect();
+            Statement::NodeDef(def)
+        }
         Statement::Import { path, alias } => Statement::Import { path, alias },
         Statement::Export(names) => Statement::Export(names),
     }
@@ -950,6 +934,9 @@ fn filter_exported_statements(
             Statement::EnvironmentDef(def) => {
                 by_name.insert(def.name.clone(), stmt.clone());
             }
+            Statement::NodeDef(def) => {
+                by_name.insert(def.name.clone(), stmt.clone());
+            }
             Statement::Assign { .. } | Statement::Import { .. } | Statement::Export(_) => {}
         }
     }
@@ -979,6 +966,7 @@ fn filter_exported_statements(
             Statement::SdfDef(def) => keep.contains(&def.name),
             Statement::SkeletonDef(def) => keep.contains(&def.name),
             Statement::EnvironmentDef(def) => keep.contains(&def.name),
+            Statement::NodeDef(def) => keep.contains(&def.name),
             Statement::Assign { path, .. } => path.first().is_some_and(|name| keep.contains(name)),
             Statement::Import { .. } | Statement::Export(_) => false,
         })
@@ -995,17 +983,7 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
             for param in &def.params {
                 scope.insert(param.clone());
             }
-            for stmt in &def.body {
-                match stmt {
-                    ast::MaterialFunctionStatement::Binding { name, expr } => {
-                        deps.extend(expr_dependencies(expr, &scope));
-                        scope.insert(name.clone());
-                    }
-                    ast::MaterialFunctionStatement::Return { expr } => {
-                        deps.extend(expr_dependencies(expr, &scope));
-                    }
-                }
-            }
+            fn_body_deps(&def.body, &mut deps, &mut scope);
             deps
         }
         Statement::MaterialDef(def) => {
@@ -1030,17 +1008,7 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
                         for param in params {
                             fn_scope.insert(param.clone());
                         }
-                        for stmt in body {
-                            match stmt {
-                                ast::MaterialFunctionStatement::Binding { name, expr } => {
-                                    deps.extend(expr_dependencies(expr, &fn_scope));
-                                    fn_scope.insert(name.clone());
-                                }
-                                ast::MaterialFunctionStatement::Return { expr } => {
-                                    deps.extend(expr_dependencies(expr, &fn_scope));
-                                }
-                            }
-                        }
+                        fn_body_deps(body, &mut deps, &mut fn_scope);
                     }
                 }
             }
@@ -1067,17 +1035,7 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
                         for param in params {
                             fn_scope.insert(param.clone());
                         }
-                        for stmt in body {
-                            match stmt {
-                                ast::MaterialFunctionStatement::Binding { name, expr } => {
-                                    deps.extend(expr_dependencies(expr, &fn_scope));
-                                    fn_scope.insert(name.clone());
-                                }
-                                ast::MaterialFunctionStatement::Return { expr } => {
-                                    deps.extend(expr_dependencies(expr, &fn_scope));
-                                }
-                            }
-                        }
+                        fn_body_deps(body, &mut deps, &mut fn_scope);
                     }
                 }
             }
@@ -1151,17 +1109,35 @@ fn statement_dependencies(stmt: &Statement) -> HashSet<String> {
                         for param in params {
                             fn_scope.insert(param.clone());
                         }
-                        for stmt in body {
-                            match stmt {
-                                ast::MaterialFunctionStatement::Binding { name, expr } => {
-                                    deps.extend(expr_dependencies(expr, &fn_scope));
-                                    fn_scope.insert(name.clone());
-                                }
-                                ast::MaterialFunctionStatement::Return { expr } => {
-                                    deps.extend(expr_dependencies(expr, &fn_scope));
-                                }
-                            }
+                        fn_body_deps(body, &mut deps, &mut fn_scope);
+                    }
+                }
+            }
+            deps
+        }
+        Statement::NodeDef(def) => {
+            let mut deps = HashSet::new();
+            let mut scope = HashSet::new();
+            for stmt in &def.statements {
+                if let ast::MaterialStatement::Binding { name, .. } = stmt {
+                    scope.insert(name.clone());
+                }
+            }
+            for (_, expr) in &def.metadata {
+                deps.extend(expr_dependencies(expr, &scope));
+            }
+            for stmt in &def.statements {
+                match stmt {
+                    ast::MaterialStatement::Binding { expr, .. }
+                    | ast::MaterialStatement::Property { expr, .. } => {
+                        deps.extend(expr_dependencies(expr, &scope));
+                    }
+                    ast::MaterialStatement::Function { params, body, .. } => {
+                        let mut fn_scope = scope.clone();
+                        for param in params {
+                            fn_scope.insert(param.clone());
                         }
+                        fn_body_deps(body, &mut deps, &mut fn_scope);
                     }
                 }
             }
@@ -1222,6 +1198,72 @@ fn flatten_expr_name(expr: &Expr) -> Option<String> {
         Expr::Ident(name) => Some(name.clone()),
         Expr::Member { target, field } => Some(format!("{}.{}", flatten_expr_name(target)?, field)),
         _ => None,
+    }
+}
+
+/// Rewrite a function body with namespace qualification, tracking bound names in `scope`.
+fn namespace_fn_body(
+    body: Vec<ast::MaterialFunctionStatement>,
+    alias: &str,
+    names: &HashSet<String>,
+    scope: &mut HashSet<String>,
+) -> Vec<ast::MaterialFunctionStatement> {
+    body.into_iter()
+        .map(|stmt| namespace_fn_stmt(stmt, alias, names, scope))
+        .collect()
+}
+
+fn namespace_fn_stmt(
+    stmt: ast::MaterialFunctionStatement,
+    alias: &str,
+    names: &HashSet<String>,
+    scope: &mut HashSet<String>,
+) -> ast::MaterialFunctionStatement {
+    match stmt {
+        ast::MaterialFunctionStatement::Binding { name, expr } => {
+            let expr = namespace_expr(expr, alias, names, scope);
+            scope.insert(name.clone());
+            ast::MaterialFunctionStatement::Binding { name, expr }
+        }
+        ast::MaterialFunctionStatement::Return { expr } => {
+            ast::MaterialFunctionStatement::Return {
+                expr: namespace_expr(expr, alias, names, scope),
+            }
+        }
+        ast::MaterialFunctionStatement::ForLoop { var, from, to, body } => {
+            let from = namespace_expr(from, alias, names, scope);
+            let to = namespace_expr(to, alias, names, scope);
+            let mut loop_scope = scope.clone();
+            loop_scope.insert(var.clone());
+            let body = namespace_fn_body(body, alias, names, &mut loop_scope);
+            ast::MaterialFunctionStatement::ForLoop { var, from, to, body }
+        }
+    }
+}
+
+/// Collect expression dependencies from a function body, tracking bound names in `scope`.
+fn fn_body_deps(
+    body: &[ast::MaterialFunctionStatement],
+    deps: &mut HashSet<String>,
+    scope: &mut HashSet<String>,
+) {
+    for stmt in body {
+        match stmt {
+            ast::MaterialFunctionStatement::Binding { name, expr } => {
+                deps.extend(expr_dependencies(expr, scope));
+                scope.insert(name.clone());
+            }
+            ast::MaterialFunctionStatement::Return { expr } => {
+                deps.extend(expr_dependencies(expr, scope));
+            }
+            ast::MaterialFunctionStatement::ForLoop { var, from, to, body } => {
+                deps.extend(expr_dependencies(from, scope));
+                deps.extend(expr_dependencies(to, scope));
+                let mut loop_scope = scope.clone();
+                loop_scope.insert(var.clone());
+                fn_body_deps(body, deps, &mut loop_scope);
+            }
+        }
     }
 }
 
@@ -1308,7 +1350,8 @@ fn qualify_name(alias: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoreError, ObjectValue, Value, eval_environment_function,
+        CoreError, ObjectValue, Value, compile_specialized_height_node_eval_function,
+        eval_environment_function, eval_node_function,
         eval_material_function_with_overrides, eval_material_properties_with_overrides,
         eval_program, eval_sdf_function, eval_sdf_function_args_with_overrides,
         eval_sdf_function_with_overrides, eval_sdf_vec3_function_with_overrides,
@@ -1994,21 +2037,21 @@ mod tests {
 
     #[test]
     fn parses_import_statement() {
-        let program = parse_program("import \"materials/gold.ft\";").expect("parse should work");
+        let program = parse_program("import \"noise/value_noise.ft\";").expect("parse should work");
         assert!(matches!(
             program.statements.first(),
-            Some(super::Statement::Import { path, alias: None }) if path == "materials/gold.ft"
+            Some(super::Statement::Import { path, alias: None }) if path == "noise/value_noise.ft"
         ));
     }
 
     #[test]
     fn parses_import_alias_statement() {
         let program =
-            parse_program("import \"materials/gold.ft\" as gold;").expect("parse should work");
+            parse_program("import \"noise/value_noise.ft\" as noise;").expect("parse should work");
         assert!(matches!(
             program.statements.first(),
             Some(super::Statement::Import { path, alias: Some(alias) })
-                if path == "materials/gold.ft" && alias == "gold"
+                if path == "noise/value_noise.ft" && alias == "noise"
         ));
     }
 
@@ -2075,6 +2118,150 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_node_for_loops_with_instance_overrides() {
+        let source = r#"
+            node Counter {
+              let octaves = 4.0;
+
+              fn eval(ctx) {
+                let sum = 0.0;
+                for i in 0 .. octaves {
+                  let sum = sum + ctx.pos2d.x;
+                }
+                return sum + ctx.pos2d.z;
+              }
+            };
+
+            let graph = Counter { octaves: 3.0 };
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let Value::Object(graph) = state
+            .bindings
+            .get("graph")
+            .expect("graph binding should exist")
+            .value
+            .clone()
+        else {
+            panic!("graph should be an object");
+        };
+
+        let value = eval_node_function(
+            &state,
+            "Counter",
+            Some(&graph),
+            "eval",
+            &[Value::Object(ObjectValue {
+                type_name: Some("NodeContext".to_string()),
+                fields: HashMap::from([(
+                    "pos2d".to_string(),
+                    Value::Object(ObjectValue {
+                        type_name: Some("vec3".to_string()),
+                        fields: HashMap::from([
+                            ("x".to_string(), Value::Number(2.0)),
+                            ("y".to_string(), Value::Number(0.0)),
+                            ("z".to_string(), Value::Number(1.0)),
+                        ]),
+                    }),
+                )]),
+            })],
+        )
+        .expect("node function should evaluate");
+
+        assert_eq!(value, Value::Number(7.0));
+    }
+
+    #[test]
+    fn compiles_specialized_height_node_eval_for_constant_loop_node() {
+        let source = r#"
+            node Counter {
+              let octaves = 4.0;
+
+              fn eval(ctx) {
+                let sum = 0.0;
+                for i in 0 .. octaves {
+                  let sum = sum + ctx.pos2d.x;
+                }
+                return sum + ctx.pos2d.z;
+              }
+            };
+
+            let graph = Counter { octaves: 3.0 };
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let Value::Object(graph) = state
+            .bindings
+            .get("graph")
+            .expect("graph binding should exist")
+            .value
+            .clone()
+        else {
+            panic!("graph should be an object");
+        };
+
+        let jit =
+            compile_specialized_height_node_eval_function(&state, "Counter", Some(&graph))
+                .expect("specialized node eval should compile");
+
+        let value = jit.invoke(&[2.0, 1.0]).expect("jit should return value");
+        assert!((value - 7.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn evaluates_node_eval_with_context_object() {
+        let source = r#"
+            node Counter {
+              fn eval(ctx) {
+                return ctx.pos2d.x + ctx.pos2d.z;
+              }
+            };
+
+            let graph = Counter {};
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let Value::Object(graph) = state
+            .bindings
+            .get("graph")
+            .expect("graph binding should exist")
+            .value
+            .clone()
+        else {
+            panic!("graph should be an object");
+        };
+
+        let ctx = ObjectValue {
+            type_name: Some("NodeContext".to_string()),
+            fields: HashMap::from([(
+                "pos2d".to_string(),
+                Value::Object(ObjectValue {
+                    type_name: Some("vec3".to_string()),
+                    fields: HashMap::from([
+                        ("x".to_string(), Value::Number(2.0)),
+                        ("y".to_string(), Value::Number(0.0)),
+                        ("z".to_string(), Value::Number(1.0)),
+                    ]),
+                }),
+            )]),
+        };
+
+        let value = eval_node_function(
+            &state,
+            "Counter",
+            Some(&graph),
+            "eval",
+            &[Value::Object(ctx)],
+        )
+        .expect("node eval should evaluate");
+
+        assert_eq!(value, Value::Number(3.0));
+    }
+
+    #[test]
     fn loads_relative_imports_once() {
         let dir = temp_test_dir("imports_once");
         fs::create_dir_all(&dir).expect("temp dir should exist");
@@ -2117,12 +2304,13 @@ mod tests {
         fs::create_dir_all(&dir).expect("temp dir should exist");
         fs::write(
             dir.join("main.ft"),
-            "import \"materials/gold.ft\"; let scene = Sphere { material: Gold {} };",
+            "import \"noise/value_noise.ft\"; let graph = ValueNoise { scale: 2.0 };",
         )
         .expect("main.ft should write");
 
         let state = load_and_eval_scene(&dir.join("main.ft")).expect("builtin import should eval");
-        assert!(state.material_defs.contains_key("Gold"));
+        assert!(state.node_defs.contains_key("ValueNoise"));
+        assert!(state.bindings.contains_key("graph"));
     }
 
     #[test]
@@ -2131,14 +2319,255 @@ mod tests {
         fs::create_dir_all(&dir).expect("temp dir should exist");
         fs::write(
             dir.join("main.ft"),
-            "import \"Glass\"; let scene = Sphere { material: Glass {} };",
+            "import \"ValueNoise\"; let graph = ValueNoise { scale: 2.0 };",
         )
         .expect("main.ft should write");
 
         let state =
             load_and_eval_scene(&dir.join("main.ft")).expect("named builtin import should eval");
-        assert!(state.material_defs.contains_key("Glass"));
-        assert!(state.bindings.contains_key("scene"));
+        assert!(state.node_defs.contains_key("ValueNoise"));
+        assert!(state.bindings.contains_key("graph"));
+    }
+
+    #[test]
+    fn loads_graph_toml_and_evaluates_graph_binding() {
+        let dir = temp_test_dir("graph_toml");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r#"
+            version = 1
+
+            [render]
+            stage = "height"
+            target = "grayscale"
+            source = "ValueNoise.main:field"
+
+            [ValueNoise.main]
+            scale = 2.0
+            octaves = 4.0
+            lacunarity = 2.0
+            persistence = 0.5
+            "#,
+        )
+        .expect("graph should write");
+
+        let state = load_and_eval_scene(&dir.join("simple.toml"))
+            .expect("graph toml should evaluate");
+        assert!(state.node_defs.contains_key("ValueNoise"));
+        assert!(state.bindings.contains_key("graph"));
+    }
+
+    #[test]
+    fn loads_connected_graph_toml_and_evaluates_linked_nodes() {
+        let dir = temp_test_dir("graph_toml_connected");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r#"
+            version = 1
+
+            [render]
+            stage = "height"
+            target = "grayscale"
+            source = "Add.main:field"
+
+            [Constant.base]
+            value = 0.25
+
+            [Multiply.double]
+            input = "Constant.base:field"
+            factor = 2.0
+
+            [Add.main]
+            a = "Multiply.double:field"
+            b = "Constant.base:field"
+            "#,
+        )
+        .expect("graph should write");
+
+        let state = load_and_eval_scene(&dir.join("simple.toml"))
+            .expect("connected graph toml should evaluate");
+        let graph = match &state.bindings.get("graph").expect("graph binding should exist").value {
+            Value::Object(obj) => obj.clone(),
+            _ => panic!("graph binding should be an object"),
+        };
+        let ctx = ObjectValue {
+            type_name: Some("NodeContext".to_string()),
+            fields: HashMap::from([
+                ("stage".to_string(), Value::String("height".to_string())),
+                (
+                    "pos2d".to_string(),
+                    Value::Object(ObjectValue {
+                        type_name: Some("vec3".to_string()),
+                        fields: HashMap::from([
+                            ("x".to_string(), Value::Number(0.0)),
+                            ("y".to_string(), Value::Number(0.0)),
+                            ("z".to_string(), Value::Number(0.0)),
+                        ]),
+                    }),
+                ),
+                ("height".to_string(), Value::Number(0.0)),
+                ("mask".to_string(), Value::Number(0.0)),
+                ("value".to_string(), Value::Number(0.0)),
+            ]),
+        };
+
+        let value = eval_node_function(&state, "Add", Some(&graph), "eval", &[Value::Object(ctx)])
+            .expect("linked node graph should evaluate");
+        match value {
+            Value::Number(n) => assert!((n - 0.75).abs() < 1.0e-6),
+            _ => panic!("graph eval should return a number"),
+        }
+
+        let compiled = compile_specialized_height_node_eval_function(&state, "Add", Some(&graph))
+            .expect("linked node graph should specialize");
+        let sample = compiled
+            .invoke(&[0.0, 0.0])
+            .expect("specialized graph should run");
+        assert!((sample - 0.75).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn rejects_cycles_in_graph_toml() {
+        let dir = temp_test_dir("graph_toml_cycle");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r#"
+            version = 1
+
+            [render]
+            stage = "height"
+            target = "grayscale"
+            source = "Add.a:field"
+
+            [Add.a]
+            a = "Add.b:field"
+            b = "Constant.base:field"
+
+            [Add.b]
+            a = "Add.a:field"
+            b = "Constant.base:field"
+
+            [Constant.base]
+            value = 1.0
+            "#,
+        )
+        .expect("graph should write");
+
+        let err = load_and_eval_scene(&dir.join("simple.toml"))
+            .expect_err("cyclic graph should be rejected");
+        match err {
+            CoreError::Graph(message) => assert!(message.contains("cycle")),
+            _ => panic!("expected graph cycle error"),
+        }
+    }
+
+    #[test]
+    fn supports_aliasing_multiple_instances_of_the_same_node_type() {
+        let dir = temp_test_dir("graph_toml_aliases");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r#"
+            version = 1
+
+            [render]
+            stage = "height"
+            target = "grayscale"
+            source = "Add.main:field"
+
+            [Constant.base]
+            value = 0.5
+
+            [Multiply.low]
+            input = "Constant.base:field"
+            factor = 0.5
+
+            [Multiply.high]
+            input = "Constant.base:field"
+            factor = 2.0
+
+            [Add.main]
+            a = "Multiply.low:field"
+            b = "Multiply.high:field"
+            "#,
+        )
+        .expect("graph should write");
+
+        let state = load_and_eval_scene(&dir.join("simple.toml"))
+            .expect("aliased graph should evaluate");
+        let graph = match &state.bindings.get("graph").expect("graph binding should exist").value {
+            Value::Object(obj) => obj.clone(),
+            _ => panic!("graph binding should be an object"),
+        };
+        let compiled = compile_specialized_height_node_eval_function(&state, "Add", Some(&graph))
+            .expect("aliased graph should specialize");
+        let sample = compiled
+            .invoke(&[0.0, 0.0])
+            .expect("specialized graph should run");
+        assert!((sample - 1.25).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn rejects_unknown_input_ports_in_graph_toml() {
+        let dir = temp_test_dir("graph_toml_bad_input_port");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r#"
+            version = 1
+
+            [render]
+            stage = "height"
+            target = "grayscale"
+            source = "Multiply.main:field"
+
+            [Constant.base]
+            value = 0.5
+
+            [Multiply.main]
+            a = "Constant.base:field"
+            factor = 2.0
+            "#,
+        )
+        .expect("graph should write");
+
+        let err = load_and_eval_scene(&dir.join("simple.toml"))
+            .expect_err("graph with bad input port should be rejected");
+        match err {
+            CoreError::Graph(message) => assert!(message.contains("declared input port")),
+            _ => panic!("expected graph input-port error"),
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_output_ports_in_graph_toml() {
+        let dir = temp_test_dir("graph_toml_bad_output_port");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r#"
+            version = 1
+
+            [render]
+            stage = "height"
+            target = "grayscale"
+            source = "Constant.base:value"
+
+            [Constant.base]
+            value = 0.5
+            "#,
+        )
+        .expect("graph should write");
+
+        let err = load_and_eval_scene(&dir.join("simple.toml"))
+            .expect_err("graph with bad output port should be rejected");
+        match err {
+            CoreError::Graph(message) => assert!(message.contains("unknown output port")),
+            _ => panic!("expected graph output-port error"),
+        }
     }
 
     #[test]
@@ -2148,10 +2577,10 @@ mod tests {
         fs::write(
             dir.join("main.ft"),
             r#"
-            import "materials/gold.ft" as gold;
-            import "objects/soft_blob.ft" as blob;
-            let scene = blob.SoftBlob {
-              material: gold.Gold {}
+            import "noise/value_noise.ft" as noise;
+            let graph = noise.ValueNoise {
+              scale: 2.0,
+              octaves: 5.0
             };
             "#,
         )
@@ -2159,16 +2588,12 @@ mod tests {
 
         let program = load_program_with_imports(&dir.join("main.ft")).expect("imports should load");
         assert!(program.statements.iter().any(
-            |stmt| matches!(stmt, super::Statement::MaterialDef(def) if def.name == "gold.Gold")
-        ));
-        assert!(program.statements.iter().any(
-            |stmt| matches!(stmt, super::Statement::SdfDef(def) if def.name == "blob.SoftBlob")
+            |stmt| matches!(stmt, super::Statement::NodeDef(def) if def.name == "noise.ValueNoise")
         ));
 
         let state = load_and_eval_scene(&dir.join("main.ft")).expect("scene should eval");
-        assert!(state.material_defs.contains_key("gold.Gold"));
-        assert!(state.sdf_defs.contains_key("blob.SoftBlob"));
-        assert!(state.bindings.contains_key("scene"));
+        assert!(state.node_defs.contains_key("noise.ValueNoise"));
+        assert!(state.bindings.contains_key("graph"));
     }
 
     #[test]

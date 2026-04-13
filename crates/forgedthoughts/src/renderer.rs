@@ -29,6 +29,8 @@ use crate::{
 mod path;
 #[path = "renderer/ray.rs"]
 mod ray;
+#[path = "renderer/node.rs"]
+pub mod node;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RenderOptions {
@@ -165,8 +167,18 @@ pub enum RenderError {
     UnsupportedObjectType(String),
     #[error("expected object value for rendering")]
     ExpectedObject,
+    #[error("no graph node found (expected a binding named 'graph')")]
+    MissingGraph,
     #[error("failed to write png: {0}")]
     Image(#[from] ImageError),
+}
+
+/// Generic tile-based render progress shared by 2-D node renders.
+#[derive(Debug, Clone, Copy)]
+pub struct RenderProgress {
+    pub tiles_done: u32,
+    pub tiles_total: u32,
+    pub elapsed_ms: u128,
 }
 
 #[derive(Clone)]
@@ -8187,6 +8199,7 @@ mod tests {
             sdf_defs: HashMap::new(),
             skeleton_defs: HashMap::new(),
             environment_defs: HashMap::new(),
+            node_defs: HashMap::new(),
         }
     }
 

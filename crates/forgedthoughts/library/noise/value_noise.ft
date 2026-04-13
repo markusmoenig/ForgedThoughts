@@ -1,0 +1,59 @@
+node ValueNoise {
+    name: "ValueNoise";
+    description: "Fractal Brownian Motion over 2D value noise. Outputs a float in [0, 1].";
+    tags: ["noise", "fbm", "heightmap", "procedural"];
+    params: [
+        { name: "scale", type: "scalar", default: 1.0 },
+        { name: "octaves", type: "scalar", default: 4.0 },
+        { name: "lacunarity", type: "scalar", default: 2.0 },
+        { name: "persistence", type: "scalar", default: 0.5 }
+    ];
+    outputs: [
+        { name: "field", type: "scalar" }
+    ];
+
+    let scale = 1.0;
+    let octaves = 4.0;
+    let lacunarity = 2.0;
+    let persistence = 0.5;
+
+    // Hash two coordinates to a pseudo-random float in [0, 1].
+    fn hash(x, z) {
+        let n = sin(x * 127.1 + z * 311.7) * 43758.5453;
+        return n - floor(n);
+    }
+
+    // Bilinear value noise — smooth interpolation over a lattice of hash values.
+    fn vnoise(x, z) {
+        let ix = floor(x);
+        let iz = floor(z);
+        let fx = x - ix;
+        let fz = z - iz;
+        let ux = fx * fx * (3.0 - 2.0 * fx);
+        let uz = fz * fz * (3.0 - 2.0 * fz);
+        let n00 = hash(ix, iz);
+        let n10 = hash(ix + 1.0, iz);
+        let n01 = hash(ix, iz + 1.0);
+        let n11 = hash(ix + 1.0, iz + 1.0);
+        let a = n00 + ux * (n10 - n00);
+        let b = n01 + ux * (n11 - n01);
+        return a + uz * (b - a);
+    }
+
+    // Public node API: evaluate against a fixed context object.
+    fn eval(ctx) {
+        let qx = ctx.pos2d.x * scale;
+        let qz = ctx.pos2d.z * scale;
+        let sum = 0.0;
+        let amp = 0.5;
+        let max_amp = 0.0;
+        for i in 0 .. octaves {
+            let sum = sum + amp * vnoise(qx, qz);
+            let max_amp = max_amp + amp;
+            let amp = amp * persistence;
+            let qx = qx * lacunarity;
+            let qz = qz * lacunarity;
+        }
+        return sum / max_amp;
+    }
+};

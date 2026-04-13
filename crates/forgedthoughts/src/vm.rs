@@ -55,6 +55,8 @@ fn compile_stmt(stmt: &MaterialFunctionStatement, code: &mut Vec<VmInstruction>)
             compile_expr(expr, code)?;
             code.push(VmInstruction::Return);
         }
+        // ForLoop cannot be VM-compiled; bail out so the interpreter handles it.
+        MaterialFunctionStatement::ForLoop { .. } => return None,
     }
     Some(())
 }

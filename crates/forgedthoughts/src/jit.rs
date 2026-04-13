@@ -589,6 +589,7 @@ pub fn compile_sdf_distance_function(def: &SdfDef) -> Option<JitSdfDistanceFunct
                 };
                 jit_ctx.fb.ins().return_(&[value]);
             }
+            SdfFunctionStatement::ForLoop { .. } => return None,
         }
     }
 
@@ -733,6 +734,7 @@ pub fn compile_modifier_distance_function(
                 };
                 jit_ctx.fb.ins().return_(&[value]);
             }
+            SdfFunctionStatement::ForLoop { .. } => return None,
         }
     }
 
@@ -884,6 +886,7 @@ fn material_function_returns_vec3(
                 let value = compile_material_expr(expr, &mut jit_ctx)?;
                 return Some(matches!(value, MaterialJitValue::Vec3(_)));
             }
+            MaterialFunctionStatement::ForLoop { .. } => return None,
         }
     }
     let _ = func_id;
@@ -974,6 +977,7 @@ fn compile_material_vec3_component(
                 };
                 jit_ctx.fb.ins().return_(&[component_value]);
             }
+            MaterialFunctionStatement::ForLoop { .. } => return None,
         }
     }
     fb.finalize();
@@ -1111,6 +1115,52 @@ fn collect_sdf_distance_captures(
                                     seen_functions,
                                 );
                             }
+                            SdfFunctionStatement::ForLoop { var, from, to, body } => {
+                                collect_expr(
+                                    from,
+                                    &fn_locals,
+                                    captures,
+                                    top_level_bindings,
+                                    functions,
+                                    seen_functions,
+                                );
+                                collect_expr(
+                                    to,
+                                    &fn_locals,
+                                    captures,
+                                    top_level_bindings,
+                                    functions,
+                                    seen_functions,
+                                );
+                                let mut loop_locals = fn_locals.clone();
+                                loop_locals.push(var.clone());
+                                for stmt in body {
+                                    match stmt {
+                                        SdfFunctionStatement::Binding { name, expr } => {
+                                            collect_expr(
+                                                expr,
+                                                &loop_locals,
+                                                captures,
+                                                top_level_bindings,
+                                                functions,
+                                                seen_functions,
+                                            );
+                                            loop_locals.push(name.clone());
+                                        }
+                                        SdfFunctionStatement::Return { expr } => {
+                                            collect_expr(
+                                                expr,
+                                                &loop_locals,
+                                                captures,
+                                                top_level_bindings,
+                                                functions,
+                                                seen_functions,
+                                            );
+                                        }
+                                        SdfFunctionStatement::ForLoop { .. } => {}
+                                    }
+                                }
+                            }
                         }
                     }
                     seen_functions.pop();
@@ -1155,6 +1205,52 @@ fn collect_sdf_distance_captures(
                     functions,
                     &mut seen_functions,
                 );
+            }
+            SdfFunctionStatement::ForLoop { var, from, to, body } => {
+                collect_expr(
+                    from,
+                    &locals,
+                    &mut captures,
+                    top_level_bindings,
+                    functions,
+                    &mut seen_functions,
+                );
+                collect_expr(
+                    to,
+                    &locals,
+                    &mut captures,
+                    top_level_bindings,
+                    functions,
+                    &mut seen_functions,
+                );
+                let mut loop_locals = locals.clone();
+                loop_locals.push(var.clone());
+                for stmt in body {
+                    match stmt {
+                        SdfFunctionStatement::Binding { name, expr } => {
+                            collect_expr(
+                                expr,
+                                &loop_locals,
+                                &mut captures,
+                                top_level_bindings,
+                                functions,
+                                &mut seen_functions,
+                            );
+                            loop_locals.push(name.clone());
+                        }
+                        SdfFunctionStatement::Return { expr } => {
+                            collect_expr(
+                                expr,
+                                &loop_locals,
+                                &mut captures,
+                                top_level_bindings,
+                                functions,
+                                &mut seen_functions,
+                            );
+                        }
+                        SdfFunctionStatement::ForLoop { .. } => {}
+                    }
+                }
             }
         }
     }
@@ -1458,6 +1554,10 @@ fn compile_inline_sdf_function(
                 result = Some(compile_sdf_expr(expr, ctx)?);
                 break;
             }
+            SdfFunctionStatement::ForLoop { .. } => {
+                ctx.locals = old_locals;
+                return None;
+            }
         }
     }
     ctx.locals = old_locals;
@@ -1570,6 +1670,7 @@ fn compile_sdf_vec3_component(
                 };
                 jit_ctx.fb.ins().return_(&[component_value]);
             }
+            SdfFunctionStatement::ForLoop { .. } => return None,
         }
     }
 
@@ -2140,6 +2241,52 @@ fn collect_material_vec3_captures(
                                     seen_functions,
                                 );
                             }
+                            MaterialFunctionStatement::ForLoop { var, from, to, body } => {
+                                collect_expr(
+                                    from,
+                                    &fn_locals,
+                                    captures,
+                                    top_level_bindings,
+                                    functions,
+                                    seen_functions,
+                                );
+                                collect_expr(
+                                    to,
+                                    &fn_locals,
+                                    captures,
+                                    top_level_bindings,
+                                    functions,
+                                    seen_functions,
+                                );
+                                let mut loop_locals = fn_locals.clone();
+                                loop_locals.push(var.clone());
+                                for stmt in body {
+                                    match stmt {
+                                        MaterialFunctionStatement::Binding { name, expr } => {
+                                            collect_expr(
+                                                expr,
+                                                &loop_locals,
+                                                captures,
+                                                top_level_bindings,
+                                                functions,
+                                                seen_functions,
+                                            );
+                                            loop_locals.push(name.clone());
+                                        }
+                                        MaterialFunctionStatement::Return { expr } => {
+                                            collect_expr(
+                                                expr,
+                                                &loop_locals,
+                                                captures,
+                                                top_level_bindings,
+                                                functions,
+                                                seen_functions,
+                                            );
+                                        }
+                                        MaterialFunctionStatement::ForLoop { .. } => {}
+                                    }
+                                }
+                            }
                         }
                     }
                     seen_functions.pop();
@@ -2184,6 +2331,52 @@ fn collect_material_vec3_captures(
                     functions,
                     &mut seen_functions,
                 );
+            }
+            MaterialFunctionStatement::ForLoop { var, from, to, body } => {
+                collect_expr(
+                    from,
+                    &locals,
+                    &mut captures,
+                    top_level_bindings,
+                    functions,
+                    &mut seen_functions,
+                );
+                collect_expr(
+                    to,
+                    &locals,
+                    &mut captures,
+                    top_level_bindings,
+                    functions,
+                    &mut seen_functions,
+                );
+                let mut loop_locals = locals.clone();
+                loop_locals.push(var.clone());
+                for stmt in body {
+                    match stmt {
+                        MaterialFunctionStatement::Binding { name, expr } => {
+                            collect_expr(
+                                expr,
+                                &loop_locals,
+                                &mut captures,
+                                top_level_bindings,
+                                functions,
+                                &mut seen_functions,
+                            );
+                            loop_locals.push(name.clone());
+                        }
+                        MaterialFunctionStatement::Return { expr } => {
+                            collect_expr(
+                                expr,
+                                &loop_locals,
+                                &mut captures,
+                                top_level_bindings,
+                                functions,
+                                &mut seen_functions,
+                            );
+                        }
+                        MaterialFunctionStatement::ForLoop { .. } => {}
+                    }
+                }
             }
         }
     }
@@ -2410,6 +2603,10 @@ fn compile_inline_material_function(
             MaterialFunctionStatement::Return { expr } => {
                 result = Some(compile_material_expr(expr, ctx)?);
                 break;
+            }
+            MaterialFunctionStatement::ForLoop { .. } => {
+                ctx.locals = old_locals;
+                return None;
             }
         }
     }

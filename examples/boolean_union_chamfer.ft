@@ -1,4 +1,0 @@
-import "./boolean_base.ft";
-
-let shape = a.union_chamfer(b, 0.18);
-let scene = floor + shape;

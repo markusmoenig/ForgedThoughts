@@ -2,8 +2,8 @@ use thiserror::Error;
 
 use crate::ast::{
     BinaryOp, EnvironmentDef, Expr, FunctionDef, MaterialDef, MaterialFunctionStatement,
-    MaterialStatement, Program, SdfDef, SdfStatement, SkeletonDef, SkeletonStatement, Statement,
-    UnaryOp,
+    MaterialStatement, NodeDef, Program, SdfDef, SdfStatement, SkeletonDef, SkeletonStatement,
+    Statement, UnaryOp,
 };
 use crate::lexer::{LexError, Token, TokenKind, tokenize};
 
@@ -64,6 +64,10 @@ impl Parser {
 
         if self.matches_ident_literal("environment") {
             return self.parse_environment_def();
+        }
+
+        if self.matches_ident_literal("node") {
+            return self.parse_node_def();
         }
 
         if self.matches_kind(TokenKind::Fn) {
@@ -173,7 +177,10 @@ impl Parser {
                 self.expect_kind(TokenKind::Semicolon, ";")?;
                 continue;
             }
-            if matches!(field.as_str(), "name" | "description" | "tags" | "params") {
+            if matches!(
+                field.as_str(),
+                "name" | "description" | "tags" | "params" | "inputs" | "outputs"
+            ) {
                 self.expect_kind(TokenKind::Colon, ":")?;
                 let expr = self.parse_expr()?;
                 self.expect_kind(TokenKind::Semicolon, ";")?;
@@ -233,7 +240,10 @@ impl Parser {
             }
 
             let field = self.expect_ident()?;
-            if matches!(field.as_str(), "name" | "description" | "tags" | "params") {
+            if matches!(
+                field.as_str(),
+                "name" | "description" | "tags" | "params" | "inputs" | "outputs"
+            ) {
                 self.expect_kind(TokenKind::Colon, ":")?;
                 let expr = self.parse_expr()?;
                 self.expect_kind(TokenKind::Semicolon, ";")?;
@@ -293,7 +303,10 @@ impl Parser {
             }
 
             let field = self.expect_ident()?;
-            if matches!(field.as_str(), "name" | "description" | "tags" | "params") {
+            if matches!(
+                field.as_str(),
+                "name" | "description" | "tags" | "params" | "inputs" | "outputs"
+            ) {
                 self.expect_kind(TokenKind::Colon, ":")?;
                 let expr = self.parse_expr()?;
                 self.expect_kind(TokenKind::Semicolon, ";")?;
@@ -309,6 +322,69 @@ impl Parser {
 
         self.expect_kind(TokenKind::Semicolon, ";")?;
         Ok(Statement::EnvironmentDef(EnvironmentDef {
+            name,
+            metadata,
+            statements,
+        }))
+    }
+
+    fn parse_node_def(&mut self) -> Result<Statement, ParseError> {
+        let name = self.expect_ident()?;
+        self.expect_kind(TokenKind::LBrace, "{")?;
+        let mut metadata = Vec::new();
+        let mut statements = Vec::new();
+
+        while !self.matches_kind(TokenKind::RBrace) {
+            if self.matches_kind(TokenKind::Let) {
+                let binding_name = self.expect_ident()?;
+                self.expect_kind(TokenKind::Equal, "=")?;
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                statements.push(MaterialStatement::Binding {
+                    name: binding_name,
+                    expr,
+                });
+                continue;
+            }
+
+            if self.matches_kind(TokenKind::Fn) {
+                let fn_name = self.expect_ident()?;
+                let params = self.parse_function_params()?;
+                let body = if self.matches_kind(TokenKind::Equal) {
+                    let expr = self.parse_expr()?;
+                    self.expect_kind(TokenKind::Semicolon, ";")?;
+                    vec![MaterialFunctionStatement::Return { expr }]
+                } else {
+                    self.parse_material_function_body()?
+                };
+                statements.push(MaterialStatement::Function {
+                    name: fn_name,
+                    params,
+                    body,
+                });
+                continue;
+            }
+
+            let field = self.expect_ident()?;
+            if matches!(
+                field.as_str(),
+                "name" | "description" | "tags" | "params" | "inputs" | "outputs"
+            ) {
+                self.expect_kind(TokenKind::Colon, ":")?;
+                let expr = self.parse_expr()?;
+                self.expect_kind(TokenKind::Semicolon, ";")?;
+                metadata.push((field, expr));
+                continue;
+            }
+
+            return Err(ParseError::Expected {
+                expected: "let, fn, or metadata field",
+                offset: self.current_offset(),
+            });
+        }
+
+        self.expect_kind(TokenKind::Semicolon, ";")?;
+        Ok(Statement::NodeDef(NodeDef {
             name,
             metadata,
             statements,
@@ -380,7 +456,10 @@ impl Parser {
             }
 
             let field = self.expect_ident()?;
-            if matches!(field.as_str(), "name" | "description" | "tags" | "params") {
+            if matches!(
+                field.as_str(),
+                "name" | "description" | "tags" | "params" | "inputs" | "outputs"
+            ) {
                 self.expect_kind(TokenKind::Colon, ":")?;
                 let expr = self.parse_expr()?;
                 self.expect_kind(TokenKind::Semicolon, ";")?;
@@ -422,8 +501,18 @@ impl Parser {
                 body.push(MaterialFunctionStatement::Return { expr });
                 continue;
             }
+            if self.matches_kind(TokenKind::For) {
+                let var = self.expect_ident()?;
+                self.expect_kind(TokenKind::In, "in")?;
+                let from = self.parse_for_bound_expr()?;
+                self.expect_kind(TokenKind::DotDot, "..")?;
+                let to = self.parse_for_bound_expr()?;
+                let loop_body = self.parse_material_function_body()?;
+                body.push(MaterialFunctionStatement::ForLoop { var, from, to, body: loop_body });
+                continue;
+            }
             return Err(ParseError::Expected {
-                expected: "let or return",
+                expected: "let, return, or for",
                 offset: self.current_offset(),
             });
         }
@@ -473,6 +562,10 @@ impl Parser {
         self.parse_add_sub()
     }
 
+    fn parse_for_bound_expr(&mut self) -> Result<Expr, ParseError> {
+        self.parse_for_bound_add_sub()
+    }
+
     fn parse_add_sub(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.parse_mul_div()?;
         loop {
@@ -488,6 +581,33 @@ impl Parser {
 
             if let Some(op) = op {
                 let rhs = self.parse_mul_div()?;
+                expr = Expr::Binary {
+                    lhs: Box::new(expr),
+                    op,
+                    rhs: Box::new(rhs),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(expr)
+    }
+
+    fn parse_for_bound_add_sub(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_for_bound_mul_div()?;
+        loop {
+            let op = if self.matches_kind(TokenKind::Plus) {
+                Some(BinaryOp::Add)
+            } else if self.matches_kind(TokenKind::Minus) {
+                Some(BinaryOp::Sub)
+            } else if self.matches_kind(TokenKind::Amp) {
+                Some(BinaryOp::Intersect)
+            } else {
+                None
+            };
+
+            if let Some(op) = op {
+                let rhs = self.parse_for_bound_mul_div()?;
                 expr = Expr::Binary {
                     lhs: Box::new(expr),
                     op,
@@ -525,6 +645,31 @@ impl Parser {
         Ok(expr)
     }
 
+    fn parse_for_bound_mul_div(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_for_bound_unary()?;
+        loop {
+            let op = if self.matches_kind(TokenKind::Star) {
+                Some(BinaryOp::Mul)
+            } else if self.matches_kind(TokenKind::Slash) {
+                Some(BinaryOp::Div)
+            } else {
+                None
+            };
+
+            if let Some(op) = op {
+                let rhs = self.parse_for_bound_unary()?;
+                expr = Expr::Binary {
+                    lhs: Box::new(expr),
+                    op,
+                    rhs: Box::new(rhs),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(expr)
+    }
+
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
         if self.matches_kind(TokenKind::Minus) {
             let expr = self.parse_unary()?;
@@ -534,6 +679,17 @@ impl Parser {
             });
         }
         self.parse_postfix()
+    }
+
+    fn parse_for_bound_unary(&mut self) -> Result<Expr, ParseError> {
+        if self.matches_kind(TokenKind::Minus) {
+            let expr = self.parse_for_bound_unary()?;
+            return Ok(Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(expr),
+            });
+        }
+        self.parse_for_bound_postfix()
     }
 
     fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
@@ -553,6 +709,42 @@ impl Parser {
                 if !self.matches_kind(TokenKind::RParen) {
                     loop {
                         args.push(self.parse_expr()?);
+                        if self.matches_kind(TokenKind::Comma) {
+                            continue;
+                        }
+                        self.expect_kind(TokenKind::RParen, ")")?;
+                        break;
+                    }
+                }
+                expr = Expr::Call {
+                    callee: Box::new(expr),
+                    args,
+                };
+                continue;
+            }
+
+            break;
+        }
+        Ok(expr)
+    }
+
+    fn parse_for_bound_postfix(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_for_bound_primary()?;
+        loop {
+            if self.matches_kind(TokenKind::Dot) {
+                let field = self.expect_ident()?;
+                expr = Expr::Member {
+                    target: Box::new(expr),
+                    field,
+                };
+                continue;
+            }
+
+            if self.matches_kind(TokenKind::LParen) {
+                let mut args = Vec::new();
+                if !self.matches_kind(TokenKind::RParen) {
+                    loop {
+                        args.push(self.parse_for_bound_expr()?);
                         if self.matches_kind(TokenKind::Comma) {
                             continue;
                         }
@@ -645,6 +837,37 @@ impl Parser {
                     }
                     Ok(expr)
                 }
+            }
+            Some(_) => Err(ParseError::UnexpectedToken {
+                offset: self.current_offset(),
+            }),
+            None => Err(ParseError::UnexpectedEof),
+        }
+    }
+
+    fn parse_for_bound_primary(&mut self) -> Result<Expr, ParseError> {
+        if self.matches_kind(TokenKind::LParen) {
+            let expr = self.parse_for_bound_expr()?;
+            self.expect_kind(TokenKind::RParen, ")")?;
+            return Ok(expr);
+        }
+
+        match self.peek_kind() {
+            Some(TokenKind::Number(value)) => {
+                let value = *value;
+                self.pos += 1;
+                Ok(Expr::Number(value))
+            }
+            Some(TokenKind::Ident(_)) => {
+                let segments = self.parse_ident_chain()?;
+                let mut expr = Expr::Ident(segments[0].clone());
+                for field in segments.iter().skip(1) {
+                    expr = Expr::Member {
+                        target: Box::new(expr),
+                        field: field.clone(),
+                    };
+                }
+                Ok(expr)
             }
             Some(_) => Err(ParseError::UnexpectedToken {
                 offset: self.current_offset(),

@@ -12,4 +12,5 @@ cranelift-module = "0.117"
 cranelift-native = "0.117"
 image = { version = "0.25", default-features = false, features = ["png"] }
 rayon = "1.10"
+toml = "0.8"
 thiserror = "1.0"

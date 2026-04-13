@@ -1,4 +1,0 @@
-import "./boolean_base.ft";
-
-let shape = a.union_soft(b, 0.22);
-let scene = floor + shape;

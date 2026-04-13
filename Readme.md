@@ -1,20 +1,14 @@
 # ForgedThoughts
 
-ForgedThoughts is a Rust workspace for a small scene language (`.ft`) and a CPU renderer focused on signed distance field scenes.
+ForgedThoughts is a Rust workspace for FT-defined nodes, TOML graph files, and a CPU graph renderer.
 
 Current state:
 
-- Forge parser, evaluator, and scene loading
-- Fast depth preview rendering from `.ft` files
-- Classical Whitted-style CPU rendering for lookdev
-- Acceleration backends: `naive`, `bvh`, `bricks`
-- Built-in lights: `PointLight`, `SphereLight`, `EnvLight`
-- Built-in material backends: `Lambert`, `Metal`, `Dielectric`
-- Forge-defined material hooks for:
-  - `color`, `roughness`, `ior`, `thin_walled`
-  - `emission_color`, `emission_strength`
-  - `medium`, `subsurface`
-  - `eval`, `pdf`, `sample`
+- FT parser, evaluator, and node loading
+- TOML graph loading with explicit `[render]` output selection
+- `eval(ctx)` node API with a fixed `HeightContext` subset
+- JIT-specialized point-node evaluation for fast height previews
+- Graph rendering from TOML to grayscale PNG
 
 ## Workspace
 
@@ -30,66 +24,38 @@ Build:
 cargo build
 ```
 
-Validate a scene:
+Render a graph:
 
 ```bash
-ftc check --scene examples/mvp.ft
+ftc examples/simple_noise.toml
 ```
 
-Trace renderer:
+Render to a custom output:
 
 ```bash
-ftc --scene examples/glass.ft
+ftc examples/simple_noise.toml --output out/simple_noise.png
 ```
 
-Trace renderer with supersampling:
+Render at a larger resolution:
 
 ```bash
-ftc --scene examples/glass.ft --aa 4
+ftc examples/simple_noise.toml --width 1024 --height 1024
 ```
 
-Depth preview:
+Watch and rerender on save:
 
 ```bash
-ftc depth --scene examples/mvp.ft
+ftc examples/simple_noise.toml --watch
 ```
 
-Depth preview with smoother edges:
+Outputs default to the graph path with `.png` extension, so `examples/simple_noise.toml` renders to `examples/simple_noise.png`.
 
-```bash
-ftc depth --scene examples/mvp.ft --aa 4
-```
+## Renderer
 
-Watch and re-render on save:
-
-```bash
-ftc depth --scene examples/mvp.ft --watch
-```
-
-Acceleration benchmark:
-
-```bash
-ftc bench --scene examples/mvp.ft --iterations 5 --warmup 1
-```
-
-Outputs default to the scene path with `.png` extension, so `examples/glass.ft` renders to `examples/glass.png`.
-
-## Renderers
-
-Main renderer
-
-- Classical Whitted-style CPU renderer for quick iteration
+- CPU graph renderer for point-evaluated nodes
 - Progressive tiled updates
-- Supports `--aa` for camera supersampling
-- Supports debug AOVs with `--debug-aov`
-- Uses the shared material system, but still has some hardcoded reflection/refraction logic internally
-
-`depth`
-
-- Fast depth preview renderer
-- Intended for quick shape iteration
-- Supports `--aa` for smoother depth edges
-- Supports `--watch` for iterative modeling loops
+- Fixed `eval(ctx)` node entrypoint
+- Current fast path targets height-stage grayscale preview rendering
 
 ## Language Snapshot
 
@@ -324,16 +290,6 @@ material Gold {
 
 export { Gold };
 ```
-
-List the built-in library from the CLI:
-
-```bash
-ftc list materials
-ftc list objects
-ftc list scenes
-```
-
-Each entry includes its path, a short description, and semantic tags.
 
 ## Material Model
 

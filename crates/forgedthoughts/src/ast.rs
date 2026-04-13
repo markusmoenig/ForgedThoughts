@@ -43,6 +43,12 @@ pub struct FunctionDef {
 pub enum MaterialFunctionStatement {
     Binding { name: String, expr: Expr },
     Return { expr: Expr },
+    ForLoop {
+        var: String,
+        from: Expr,
+        to: Expr,
+        body: Vec<MaterialFunctionStatement>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +107,13 @@ pub enum SkeletonStatement {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct NodeDef {
+    pub name: String,
+    pub metadata: Vec<(String, Expr)>,
+    pub statements: Vec<MaterialStatement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Import {
         path: String,
@@ -121,6 +134,7 @@ pub enum Statement {
     SdfDef(SdfDef),
     SkeletonDef(SkeletonDef),
     EnvironmentDef(EnvironmentDef),
+    NodeDef(NodeDef),
 }
 
 #[derive(Debug, Clone, PartialEq)]

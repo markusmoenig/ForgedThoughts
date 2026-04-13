@@ -1,0 +1,21 @@
+import "Constant";
+
+node Add {
+    name: "Add";
+    description: "Adds the outputs of two scalar input nodes.";
+    tags: ["operator", "add", "math", "scalar"];
+    inputs: [
+        { name: "a", type: "scalar" },
+        { name: "b", type: "scalar" }
+    ];
+    outputs: [
+        { name: "field", type: "scalar" }
+    ];
+
+    let a = Constant {};
+    let b = Constant {};
+
+    fn eval(ctx) {
+        return a.eval(ctx) + b.eval(ctx);
+    }
+};

@@ -1,4 +1,0 @@
-import "./boolean_base.ft";
-
-let shape = a.diff_round(b, 0.18);
-let scene = floor + shape;

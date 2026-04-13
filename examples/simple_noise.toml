@@ -1,0 +1,18 @@
+version = 1
+
+[render]
+stage = "height"
+target = "grayscale"
+source = "Multiply.preview:field"
+
+[ValueNoise.main]
+scale = 3.0
+octaves = 6.0
+lacunarity = 2.0
+persistence = 0.5
+pos = [30, 213]
+
+[Multiply.preview]
+input = "ValueNoise.main:field"
+factor = 0.85
+pos = [251, 213]

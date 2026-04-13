@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::ast::{
     BinaryOp, EnvironmentDef, Expr, FunctionDef, MaterialDef, MaterialFunctionStatement,
-    MaterialStatement, Program, SdfDef, SdfFunctionStatement, SdfStatement, SkeletonDef,
+    MaterialStatement, NodeDef, Program, SdfDef, SdfFunctionStatement, SdfStatement, SkeletonDef,
     SkeletonStatement, Statement, UnaryOp,
 };
 use crate::jit::{
@@ -85,6 +85,7 @@ pub struct EvalState {
     pub sdf_defs: HashMap<String, SdfDef>,
     pub skeleton_defs: HashMap<String, SkeletonDef>,
     pub environment_defs: HashMap<String, EnvironmentDef>,
+    pub node_defs: HashMap<String, NodeDef>,
 }
 
 #[derive(Debug, Error)]
@@ -152,6 +153,7 @@ pub fn eval_program(program: &Program) -> Result<EvalState, EvalError> {
         sdf_defs: HashMap::new(),
         skeleton_defs: HashMap::new(),
         environment_defs: HashMap::new(),
+        node_defs: HashMap::new(),
     };
 
     for stmt in &program.statements {
@@ -326,6 +328,10 @@ fn eval_statement(stmt: &Statement, state: &mut EvalState) -> Result<(), EvalErr
         }
         Statement::EnvironmentDef(def) => {
             state.environment_defs.insert(def.name.clone(), def.clone());
+            Ok(())
+        }
+        Statement::NodeDef(def) => {
+            state.node_defs.insert(def.name.clone(), def.clone());
             Ok(())
         }
     }
@@ -2139,6 +2145,9 @@ pub fn eval_function_value(
             MaterialFunctionStatement::Return { expr } => {
                 return eval_expr_in_material_scope(expr, state, &locals, None, 0);
             }
+            MaterialFunctionStatement::ForLoop { .. } => {
+                return Err(EvalError::UnsupportedCall);
+            }
         }
     }
 
@@ -2156,15 +2165,16 @@ fn compile_function_literal_vec3(
     let sdf_body = body
         .iter()
         .map(|stmt| match stmt {
-            MaterialFunctionStatement::Binding { name, expr } => SdfFunctionStatement::Binding {
+            MaterialFunctionStatement::Binding { name, expr } => Some(SdfFunctionStatement::Binding {
                 name: name.clone(),
                 expr: expr.clone(),
-            },
+            }),
             MaterialFunctionStatement::Return { expr } => {
-                SdfFunctionStatement::Return { expr: expr.clone() }
+                Some(SdfFunctionStatement::Return { expr: expr.clone() })
             }
+            MaterialFunctionStatement::ForLoop { .. } => None,
         })
-        .collect::<Vec<_>>();
+        .collect::<Option<Vec<_>>>()?;
     let def = SdfDef {
         name: "__anon_modifier__".to_string(),
         metadata: vec![],
@@ -2188,15 +2198,16 @@ fn compile_function_literal_distance_post(
     let sdf_body = body
         .iter()
         .map(|stmt| match stmt {
-            MaterialFunctionStatement::Binding { name, expr } => SdfFunctionStatement::Binding {
+            MaterialFunctionStatement::Binding { name, expr } => Some(SdfFunctionStatement::Binding {
                 name: name.clone(),
                 expr: expr.clone(),
-            },
+            }),
             MaterialFunctionStatement::Return { expr } => {
-                SdfFunctionStatement::Return { expr: expr.clone() }
+                Some(SdfFunctionStatement::Return { expr: expr.clone() })
             }
+            MaterialFunctionStatement::ForLoop { .. } => None,
         })
-        .collect::<Vec<_>>();
+        .collect::<Option<Vec<_>>>()?;
     compile_modifier_distance_function("__anon__", params, &sdf_body)
 }
 
@@ -2881,6 +2892,624 @@ pub fn eval_environment_function(
     eval_environment_function_body(state, def, &params, &body, arg_values, 0)
 }
 
+pub fn eval_node_function(
+    state: &EvalState,
+    node_name: &str,
+    overrides: Option<&ObjectValue>,
+    function_name: &str,
+    arg_values: &[Value],
+) -> Result<Value, EvalError> {
+    let def = state
+        .node_defs
+        .get(node_name)
+        .ok_or_else(|| EvalError::UndefinedIdentifier(node_name.to_string()))?;
+    let (params, body) = def
+        .statements
+        .iter()
+        .find_map(|stmt| match stmt {
+            MaterialStatement::Function { name, params, body } if name == function_name => {
+                Some((params.clone(), body.clone()))
+            }
+            _ => None,
+        })
+        .ok_or_else(|| EvalError::UndefinedIdentifier(function_name.to_string()))?;
+    eval_node_function_body(state, def, &params, &body, arg_values, overrides, 0)
+}
+
+pub fn compile_specialized_height_node_eval_function(
+    state: &EvalState,
+    node_name: &str,
+    overrides: Option<&ObjectValue>,
+) -> Option<JitFunction> {
+    if !jit_enabled() {
+        return None;
+    }
+    let def = state.node_defs.get(node_name)?;
+    let (_params, body) = def.statements.iter().find_map(|stmt| match stmt {
+        MaterialStatement::Function {
+            name,
+            params,
+            body,
+        } if name == "eval" && params.len() == 1 => Some((params.clone(), body.clone())),
+        _ => None,
+    })?;
+
+    let mut const_values = HashMap::new();
+    let mut const_exprs = HashMap::new();
+    for stmt in &def.statements {
+        if let MaterialStatement::Binding { name, expr } = stmt {
+            let value = if let Some(v) = overrides.and_then(|o| o.fields.get(name)) {
+                v.clone()
+            } else {
+                eval_expr_in_node_scope(expr, state, &const_values, def, overrides, 0).ok()?
+            };
+            const_exprs.insert(name.clone(), value_to_const_expr(&value)?);
+            const_values.insert(name.clone(), value);
+        }
+    }
+
+    let mut helpers = HashMap::new();
+    for stmt in &def.statements {
+        if let MaterialStatement::Function {
+            name,
+            params,
+            body,
+        } = stmt
+        {
+            helpers.insert(name.clone(), (params.clone(), body.clone()));
+        }
+    }
+
+    let mut env = HashMap::new();
+    env.insert("x".to_string(), Expr::Ident("x".to_string()));
+    env.insert("z".to_string(), Expr::Ident("z".to_string()));
+    env.insert("ctx".to_string(), height_context_expr());
+    env.extend(const_exprs);
+
+    let specialized_body = specialize_node_stmts(state, &body, &mut env, &helpers, 0)?;
+    let params = vec!["x".to_string(), "z".to_string()];
+    let vm = crate::vm::compile_function_parts(&params, &specialized_body)?;
+    compile_jit_function(&format!("node_height_{node_name}_eval"), &vm)
+}
+
+fn height_context_expr() -> Expr {
+    Expr::ObjectLiteral {
+        type_name: "NodeContext".to_string(),
+        fields: vec![
+            ("stage".to_string(), Expr::String("height".to_string())),
+            (
+                "pos2d".to_string(),
+                Expr::ObjectLiteral {
+                    type_name: "vec3".to_string(),
+                    fields: vec![
+                        ("x".to_string(), Expr::Ident("x".to_string())),
+                        ("y".to_string(), Expr::Number(0.0)),
+                        ("z".to_string(), Expr::Ident("z".to_string())),
+                    ],
+                },
+            ),
+            ("height".to_string(), Expr::Number(0.0)),
+            ("mask".to_string(), Expr::Number(0.0)),
+            ("value".to_string(), Expr::Number(0.0)),
+        ],
+    }
+}
+
+fn value_to_const_expr(value: &Value) -> Option<Expr> {
+    match value {
+        Value::Number(v) => Some(Expr::Number(f64::from(*v))),
+        Value::String(v) => Some(Expr::String(v.clone())),
+        Value::Array(items) => Some(Expr::Array(
+            items
+                .iter()
+                .map(value_to_const_expr)
+                .collect::<Option<Vec<_>>>()?,
+        )),
+        Value::Object(obj) => Some(Expr::ObjectLiteral {
+            type_name: obj.type_name.clone().unwrap_or_else(|| "anonymous".to_string()),
+            fields: obj
+                .fields
+                .iter()
+                .map(|(name, value)| Some((name.clone(), value_to_const_expr(value)?)))
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        Value::Function(_) => None,
+    }
+}
+
+fn specialize_node_stmts(
+    state: &EvalState,
+    stmts: &[MaterialFunctionStatement],
+    env: &mut HashMap<String, Expr>,
+    helpers: &HashMap<String, (Vec<String>, Vec<MaterialFunctionStatement>)>,
+    depth: usize,
+) -> Option<Vec<MaterialFunctionStatement>> {
+    if depth >= 32 {
+        return None;
+    }
+    let mut out = Vec::new();
+    for stmt in stmts {
+        match stmt {
+            MaterialFunctionStatement::Binding { name, expr } => {
+                let rewritten = specialize_node_expr(state, expr, env, helpers, depth + 1)?;
+                out.push(MaterialFunctionStatement::Binding {
+                    name: name.clone(),
+                    expr: rewritten,
+                });
+                env.insert(name.clone(), Expr::Ident(name.clone()));
+            }
+            MaterialFunctionStatement::Return { expr } => {
+                let rewritten = specialize_node_expr(state, expr, env, helpers, depth + 1)?;
+                out.push(MaterialFunctionStatement::Return { expr: rewritten });
+            }
+            MaterialFunctionStatement::ForLoop {
+                var,
+                from,
+                to,
+                body,
+            } => {
+                let from_expr = specialize_node_expr(state, from, env, helpers, depth + 1)?;
+                let to_expr = specialize_node_expr(state, to, env, helpers, depth + 1)?;
+                let from_i = eval_const_number(&from_expr)? as i64;
+                let to_i = eval_const_number(&to_expr)? as i64;
+                for i in from_i..to_i {
+                    let mut loop_env = env.clone();
+                    loop_env.insert(var.clone(), Expr::Number(i as f64));
+                    let loop_out =
+                        specialize_node_stmts(state, body, &mut loop_env, helpers, depth + 1)?;
+                    out.extend(loop_out);
+                    *env = loop_env;
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
+fn specialize_node_expr(
+    state: &EvalState,
+    expr: &Expr,
+    env: &HashMap<String, Expr>,
+    helpers: &HashMap<String, (Vec<String>, Vec<MaterialFunctionStatement>)>,
+    depth: usize,
+) -> Option<Expr> {
+    if depth >= 32 {
+        return None;
+    }
+    match expr {
+        Expr::Number(_) | Expr::String(_) => Some(expr.clone()),
+        Expr::Array(items) => Some(Expr::Array(
+            items
+                .iter()
+                .map(|item| specialize_node_expr(state, item, env, helpers, depth + 1))
+                .collect::<Option<Vec<_>>>()?,
+        )),
+        Expr::FunctionLiteral { .. } => None,
+        Expr::Ident(name) => Some(env.get(name).cloned().unwrap_or_else(|| Expr::Ident(name.clone()))),
+        Expr::ObjectLiteral { type_name, fields } => Some(Expr::ObjectLiteral {
+            type_name: type_name.clone(),
+            fields: fields
+                .iter()
+                .map(|(name, expr)| {
+                    Some((
+                        name.clone(),
+                        specialize_node_expr(state, expr, env, helpers, depth + 1)?,
+                    ))
+                })
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        Expr::Binary { lhs, op, rhs } => Some(Expr::Binary {
+            lhs: Box::new(specialize_node_expr(state, lhs, env, helpers, depth + 1)?),
+            op: *op,
+            rhs: Box::new(specialize_node_expr(state, rhs, env, helpers, depth + 1)?),
+        }),
+        Expr::Member { target, field } => {
+            let target = specialize_node_expr(state, target, env, helpers, depth + 1)?;
+            if let Expr::ObjectLiteral { fields, .. } = &target
+                && let Some((_, value)) = fields.iter().find(|(name, _)| name == field)
+            {
+                return Some(value.clone());
+            }
+            Some(Expr::Member {
+                target: Box::new(target),
+                field: field.clone(),
+            })
+        }
+        Expr::Call { callee, args } => {
+            let args = args
+                .iter()
+                .map(|arg| specialize_node_expr(state, arg, env, helpers, depth + 1))
+                .collect::<Option<Vec<_>>>()?;
+            if let Expr::Ident(name) = callee.as_ref()
+                && let Some((params, body)) = helpers.get(name)
+            {
+                return inline_node_helper_expr(state, params, body, &args, helpers, depth + 1);
+            }
+            if let Expr::Member { target, field } = callee.as_ref() {
+                let target = specialize_node_expr(state, target, env, helpers, depth + 1)?;
+                if let Expr::ObjectLiteral { type_name, fields } = target {
+                    return inline_node_member_expr(
+                        state,
+                        &type_name,
+                        &fields,
+                        field,
+                        &args,
+                        depth + 1,
+                    );
+                }
+            }
+            Some(Expr::Call {
+                callee: Box::new(specialize_node_expr(state, callee, env, helpers, depth + 1)?),
+                args,
+            })
+        }
+        Expr::Unary { op, expr } => Some(Expr::Unary {
+            op: *op,
+            expr: Box::new(specialize_node_expr(state, expr, env, helpers, depth + 1)?),
+        }),
+    }
+}
+
+fn inline_node_helper_expr(
+    state: &EvalState,
+    params: &[String],
+    body: &[MaterialFunctionStatement],
+    args: &[Expr],
+    helpers: &HashMap<String, (Vec<String>, Vec<MaterialFunctionStatement>)>,
+    depth: usize,
+) -> Option<Expr> {
+    if depth >= 32 || params.len() != args.len() {
+        return None;
+    }
+    let mut env = HashMap::new();
+    for (param, arg) in params.iter().zip(args.iter()) {
+        env.insert(param.clone(), arg.clone());
+    }
+    specialize_node_inline_body(state, body, &mut env, helpers, depth + 1)
+}
+
+fn inline_node_member_expr(
+    state: &EvalState,
+    node_name: &str,
+    fields: &[(String, Expr)],
+    function_name: &str,
+    args: &[Expr],
+    depth: usize,
+) -> Option<Expr> {
+    if depth >= 32 {
+        return None;
+    }
+    let def = state.node_defs.get(node_name)?;
+    let mut helpers = HashMap::new();
+    for stmt in &def.statements {
+        if let MaterialStatement::Function { name, params, body } = stmt {
+            helpers.insert(name.clone(), (params.clone(), body.clone()));
+        }
+    }
+
+    let override_fields: HashMap<String, Expr> = fields.iter().cloned().collect();
+    let mut env = HashMap::new();
+    for stmt in &def.statements {
+        if let MaterialStatement::Binding { name, expr } = stmt {
+            let value = if let Some(value) = override_fields.get(name) {
+                value.clone()
+            } else {
+                specialize_node_expr(state, expr, &env, &helpers, depth + 1)?
+            };
+            env.insert(name.clone(), value);
+        }
+    }
+
+    let (params, body) = def.statements.iter().find_map(|stmt| match stmt {
+        MaterialStatement::Function {
+            name,
+            params,
+            body,
+        } if name == function_name => Some((params.clone(), body.clone())),
+        _ => None,
+    })?;
+    if params.len() != args.len() {
+        return None;
+    }
+    for (param, arg) in params.iter().zip(args.iter()) {
+        env.insert(param.clone(), arg.clone());
+    }
+    specialize_node_inline_body(state, &body, &mut env, &helpers, depth + 1)
+}
+
+fn specialize_node_inline_body(
+    state: &EvalState,
+    body: &[MaterialFunctionStatement],
+    env: &mut HashMap<String, Expr>,
+    helpers: &HashMap<String, (Vec<String>, Vec<MaterialFunctionStatement>)>,
+    depth: usize,
+) -> Option<Expr> {
+    if depth >= 32 {
+        return None;
+    }
+    for stmt in body {
+        match stmt {
+            MaterialFunctionStatement::Binding { name, expr } => {
+                let rewritten = specialize_node_expr(state, expr, env, helpers, depth + 1)?;
+                env.insert(name.clone(), rewritten);
+            }
+            MaterialFunctionStatement::Return { expr } => {
+                return specialize_node_expr(state, expr, env, helpers, depth + 1);
+            }
+            MaterialFunctionStatement::ForLoop {
+                var,
+                from,
+                to,
+                body,
+            } => {
+                let from_expr = specialize_node_expr(state, from, env, helpers, depth + 1)?;
+                let to_expr = specialize_node_expr(state, to, env, helpers, depth + 1)?;
+                let from_i = eval_const_number(&from_expr)? as i64;
+                let to_i = eval_const_number(&to_expr)? as i64;
+                for i in from_i..to_i {
+                    let mut loop_env = env.clone();
+                    loop_env.insert(var.clone(), Expr::Number(i as f64));
+                    if let Some(value) = specialize_node_inline_body(
+                        state,
+                        body,
+                        &mut loop_env,
+                        helpers,
+                        depth + 1,
+                    ) {
+                        return Some(value);
+                    }
+                    *env = loop_env;
+                }
+            }
+        }
+    }
+    None
+}
+
+fn eval_const_number(expr: &Expr) -> Option<f32> {
+    match expr {
+        Expr::Number(v) => Some(*v as f32),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr,
+        } => Some(-eval_const_number(expr)?),
+        Expr::Binary { lhs, op, rhs } => {
+            let lhs = eval_const_number(lhs)?;
+            let rhs = eval_const_number(rhs)?;
+            Some(match op {
+                BinaryOp::Add => lhs + rhs,
+                BinaryOp::Sub => lhs - rhs,
+                BinaryOp::Mul => lhs * rhs,
+                BinaryOp::Div => lhs / rhs,
+                BinaryOp::Intersect => return None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn eval_node_function_body(
+    state: &EvalState,
+    def: &NodeDef,
+    params: &[String],
+    body: &[MaterialFunctionStatement],
+    arg_values: &[Value],
+    overrides: Option<&ObjectValue>,
+    depth: usize,
+) -> Result<Value, EvalError> {
+    if arg_values.len() != params.len() {
+        return Err(EvalError::UnsupportedCall);
+    }
+    let mut locals = HashMap::new();
+    for (param, value) in params.iter().zip(arg_values.iter()) {
+        locals.insert(param.clone(), value.clone());
+    }
+    // Populate default bindings, applying instance overrides.
+    for stmt in &def.statements {
+        if let MaterialStatement::Binding { name, expr } = stmt {
+            let value = if let Some(v) = overrides.and_then(|o| o.fields.get(name)) {
+                v.clone()
+            } else {
+                eval_expr_in_node_scope(expr, state, &locals, def, overrides, depth)?
+            };
+            locals.insert(name.clone(), value);
+        }
+    }
+    if let Some(ret) = exec_node_fn_stmts(body, state, &mut locals, def, overrides, depth)? {
+        return Ok(ret);
+    }
+    Err(EvalError::UndefinedIdentifier(
+        "node function missing return".to_string(),
+    ))
+}
+
+/// Execute a slice of node-function statements, updating `locals` in place.
+/// Returns `Some(value)` if a `return` was hit, `None` if all statements ran without returning.
+fn exec_node_fn_stmts(
+    stmts: &[MaterialFunctionStatement],
+    state: &EvalState,
+    locals: &mut HashMap<String, Value>,
+    def: &NodeDef,
+    overrides: Option<&ObjectValue>,
+    depth: usize,
+) -> Result<Option<Value>, EvalError> {
+    for stmt in stmts {
+        match stmt {
+            MaterialFunctionStatement::Binding { name, expr } => {
+                let value = eval_expr_in_node_scope(expr, state, locals, def, overrides, depth)?;
+                locals.insert(name.clone(), value);
+            }
+            MaterialFunctionStatement::Return { expr } => {
+                return Ok(Some(eval_expr_in_node_scope(expr, state, locals, def, overrides, depth)?));
+            }
+            MaterialFunctionStatement::ForLoop { var, from, to, body: loop_body } => {
+                let from_i = match eval_expr_in_node_scope(from, state, locals, def, overrides, depth)? {
+                    Value::Number(n) => n as i64,
+                    _ => return Err(EvalError::UnsupportedCall),
+                };
+                let to_i = match eval_expr_in_node_scope(to, state, locals, def, overrides, depth)? {
+                    Value::Number(n) => n as i64,
+                    _ => return Err(EvalError::UnsupportedCall),
+                };
+                for i in from_i..to_i {
+                    locals.insert(var.clone(), Value::Number(i as f32));
+                    if let Some(ret) = exec_node_fn_stmts(loop_body, state, locals, def, overrides, depth)? {
+                        return Ok(Some(ret));
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn eval_expr_in_node_scope(
+    expr: &Expr,
+    state: &EvalState,
+    locals: &HashMap<String, Value>,
+    def: &NodeDef,
+    overrides: Option<&ObjectValue>,
+    depth: usize,
+) -> Result<Value, EvalError> {
+    match expr {
+        Expr::Number(n) => Ok(Value::Number(*n as f32)),
+        Expr::String(value) => Ok(Value::String(value.clone())),
+        Expr::Array(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            for item in items {
+                values.push(eval_expr_in_node_scope(
+                    item, state, locals, def, overrides, depth,
+                )?);
+            }
+            Ok(Value::Array(values))
+        }
+        Expr::FunctionLiteral { params, body } => Ok(Value::Function(FunctionValue {
+            params: params.clone(),
+            body: body.clone(),
+            captures: locals.clone(),
+            compiled: crate::vm::compile_function_parts(params, body),
+            jitted_vec3: compile_function_literal_vec3(params, body, locals),
+            jitted_distance_post: compile_function_literal_distance_post(params, body, locals),
+        })),
+        Expr::Ident(name) => {
+            if let Some(value) = locals.get(name) {
+                return Ok(value.clone());
+            }
+            if let Some(value) = builtin_symbol_value(name) {
+                return Ok(value);
+            }
+            let binding = state
+                .bindings
+                .get(name)
+                .ok_or_else(|| EvalError::UndefinedIdentifier(name.clone()))?;
+            Ok(binding.value.clone())
+        }
+        Expr::ObjectLiteral { type_name, fields } => {
+            let mut resolved_fields = HashMap::new();
+            for (name, field_expr) in fields {
+                resolved_fields.insert(
+                    name.clone(),
+                    eval_expr_in_node_scope(field_expr, state, locals, def, overrides, depth)?,
+                );
+            }
+            augment_object_literal_fields(state, type_name, &mut resolved_fields)?;
+            Ok(Value::Object(ObjectValue {
+                type_name: Some(type_name.clone()),
+                fields: resolved_fields,
+            }))
+        }
+        Expr::Binary { lhs, op, rhs } => {
+            let left = eval_expr_in_node_scope(lhs, state, locals, def, overrides, depth)?;
+            let right = eval_expr_in_node_scope(rhs, state, locals, def, overrides, depth)?;
+            eval_binary(left, *op, right)
+        }
+        Expr::Member { target, field } => {
+            if let Some(name) = flatten_member_expr(expr)
+                && let Some(binding) = state.bindings.get(&name)
+            {
+                return Ok(binding.value.clone());
+            }
+            let base = eval_expr_in_node_scope(target, state, locals, def, overrides, depth)?;
+            if let Some(part) = semantic_part_value(&base, field) {
+                return Ok(part);
+            }
+            let obj = as_object(&base)?;
+            obj.fields
+                .get(field)
+                .cloned()
+                .ok_or(EvalError::UndefinedIdentifier(field.clone()))
+        }
+        Expr::Call { callee, args } => {
+            let arg_values = args
+                .iter()
+                .map(|arg| eval_expr_in_node_scope(arg, state, locals, def, overrides, depth))
+                .collect::<Result<Vec<_>, _>>()?;
+            match callee.as_ref() {
+                Expr::Ident(name) => {
+                    if let Some(value) = eval_ident_call(name, &arg_values)? {
+                        return Ok(value);
+                    }
+                    if let Some((params, body)) =
+                        def.statements.iter().find_map(|stmt| match stmt {
+                            MaterialStatement::Function {
+                                name: fn_name,
+                                params,
+                                body,
+                            } if fn_name == name => Some((params.clone(), body.clone())),
+                            _ => None,
+                        })
+                    {
+                        if depth >= 32 {
+                            return Err(EvalError::MaterialCallDepthExceeded);
+                        }
+                        return eval_node_function_body(
+                            state,
+                            def,
+                            &params,
+                            &body,
+                            &arg_values,
+                            overrides,
+                            depth + 1,
+                        );
+                    }
+                    if let Some(top) = state.function_defs.get(name)
+                        && let Some(value) =
+                            eval_top_level_function_call(state, top, &arg_values, depth + 1)?
+                    {
+                        return Ok(value);
+                    }
+                    Err(EvalError::UnsupportedCall)
+                }
+                Expr::Member { target, field } => {
+                    if let Some(name) = flatten_member_expr(callee)
+                        && let Some(top) = state.function_defs.get(&name)
+                        && let Some(value) =
+                            eval_top_level_function_call(state, top, &arg_values, depth + 1)?
+                    {
+                        return Ok(value);
+                    }
+                    if depth >= 32 {
+                        return Err(EvalError::MaterialCallDepthExceeded);
+                    }
+                    let target_value =
+                        eval_expr_in_node_scope(target, state, locals, def, overrides, depth)?;
+                    let target_object = as_object(&target_value)?;
+                    let target_node = target_object
+                        .type_name
+                        .clone()
+                        .ok_or(EvalError::UnsupportedCall)?;
+                    eval_node_function(state, &target_node, Some(&target_object), field, &arg_values)
+                }
+                _ => Err(EvalError::UnsupportedCall),
+            }
+        }
+        Expr::Unary { op, expr } => {
+            let value = eval_expr_in_node_scope(expr, state, locals, def, overrides, depth)?;
+            eval_unary(*op, value)
+        }
+    }
+}
+
 pub fn eval_sdf_function(
     state: &EvalState,
     sdf_name: &str,
@@ -3327,6 +3956,33 @@ fn eval_sdf_function_body(
                     }),
                 );
             }
+            MaterialFunctionStatement::ForLoop { var, from, to, body: loop_body } => {
+                let from_i = match eval_sdf_expr(from, state, &locals, Some(SdfRuntime { def, depth, overrides }))? {
+                    Value::Number(n) => n as i64,
+                    _ => return Err(EvalError::UnsupportedCall),
+                };
+                let to_i = match eval_sdf_expr(to, state, &locals, Some(SdfRuntime { def, depth, overrides }))? {
+                    Value::Number(n) => n as i64,
+                    _ => return Err(EvalError::UnsupportedCall),
+                };
+                for i in from_i..to_i {
+                    locals.insert(var.clone(), Value::Number(i as f32));
+                    for loop_stmt in loop_body {
+                        match loop_stmt {
+                            MaterialFunctionStatement::Binding { name, expr } => {
+                                let value = eval_sdf_expr(expr, state, &locals, Some(SdfRuntime { def, depth, overrides }))?;
+                                locals.insert(name.clone(), value);
+                            }
+                            MaterialFunctionStatement::Return { expr } => {
+                                return eval_sdf_expr(expr, state, &locals, Some(SdfRuntime { def, depth, overrides }));
+                            }
+                            MaterialFunctionStatement::ForLoop { .. } => {
+                                return Err(EvalError::UnsupportedCall);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -3586,6 +4242,34 @@ fn eval_material_function_body(
                     depth,
                 );
             }
+            MaterialFunctionStatement::ForLoop { var, from, to, body: loop_body } => {
+                let runtime = Some(MaterialRuntime { def, depth, overrides });
+                let from_i = match eval_expr_in_material_scope(from, state, &locals, runtime, depth)? {
+                    Value::Number(n) => n as i64,
+                    _ => return Err(EvalError::UnsupportedCall),
+                };
+                let to_i = match eval_expr_in_material_scope(to, state, &locals, runtime, depth)? {
+                    Value::Number(n) => n as i64,
+                    _ => return Err(EvalError::UnsupportedCall),
+                };
+                for i in from_i..to_i {
+                    locals.insert(var.clone(), Value::Number(i as f32));
+                    for loop_stmt in loop_body {
+                        match loop_stmt {
+                            MaterialFunctionStatement::Binding { name, expr } => {
+                                let value = eval_expr_in_material_scope(expr, state, &locals, runtime, depth)?;
+                                locals.insert(name.clone(), value);
+                            }
+                            MaterialFunctionStatement::Return { expr } => {
+                                return eval_expr_in_material_scope(expr, state, &locals, runtime, depth);
+                            }
+                            MaterialFunctionStatement::ForLoop { .. } => {
+                                return Err(EvalError::UnsupportedCall);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -3800,6 +4484,33 @@ fn eval_environment_function_body(
             MaterialFunctionStatement::Return { expr } => {
                 return eval_expr_in_environment_scope(expr, state, &locals, def, depth);
             }
+            MaterialFunctionStatement::ForLoop { var, from, to, body: loop_body } => {
+                let from_i = match eval_expr_in_environment_scope(from, state, &locals, def, depth)? {
+                    Value::Number(n) => n as i64,
+                    _ => return Err(EvalError::UnsupportedCall),
+                };
+                let to_i = match eval_expr_in_environment_scope(to, state, &locals, def, depth)? {
+                    Value::Number(n) => n as i64,
+                    _ => return Err(EvalError::UnsupportedCall),
+                };
+                for i in from_i..to_i {
+                    locals.insert(var.clone(), Value::Number(i as f32));
+                    for loop_stmt in loop_body {
+                        match loop_stmt {
+                            MaterialFunctionStatement::Binding { name, expr } => {
+                                let value = eval_expr_in_environment_scope(expr, state, &locals, def, depth)?;
+                                locals.insert(name.clone(), value);
+                            }
+                            MaterialFunctionStatement::Return { expr } => {
+                                return eval_expr_in_environment_scope(expr, state, &locals, def, depth);
+                            }
+                            MaterialFunctionStatement::ForLoop { .. } => {
+                                return Err(EvalError::UnsupportedCall);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -3992,6 +4703,8 @@ fn rewrite_material_stmt_for_jit(
         MaterialFunctionStatement::Return { expr } => MaterialFunctionStatement::Return {
             expr: rewrite_expr_for_jit(expr)?,
         },
+        // ForLoop cannot be JIT-compiled.
+        MaterialFunctionStatement::ForLoop { .. } => return None,
     })
 }
 
@@ -4218,6 +4931,33 @@ fn eval_top_level_function_call(
                 return Ok(Some(eval_expr_in_material_scope(
                     expr, state, &locals, None, depth,
                 )?));
+            }
+            MaterialFunctionStatement::ForLoop { var, from, to, body: loop_body } => {
+                let from_i = match eval_expr_in_material_scope(from, state, &locals, None, depth)? {
+                    Value::Number(n) => n as i64,
+                    _ => return Err(EvalError::UnsupportedCall),
+                };
+                let to_i = match eval_expr_in_material_scope(to, state, &locals, None, depth)? {
+                    Value::Number(n) => n as i64,
+                    _ => return Err(EvalError::UnsupportedCall),
+                };
+                for i in from_i..to_i {
+                    locals.insert(var.clone(), Value::Number(i as f32));
+                    for loop_stmt in loop_body {
+                        match loop_stmt {
+                            MaterialFunctionStatement::Binding { name, expr } => {
+                                let value = eval_expr_in_material_scope(expr, state, &locals, None, depth)?;
+                                locals.insert(name.clone(), value);
+                            }
+                            MaterialFunctionStatement::Return { expr } => {
+                                return Ok(Some(eval_expr_in_material_scope(expr, state, &locals, None, depth)?));
+                            }
+                            MaterialFunctionStatement::ForLoop { .. } => {
+                                return Err(EvalError::UnsupportedCall);
+                            }
+                        }
+                    }
+                }
             }
         }
     }

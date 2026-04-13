@@ -14,6 +14,8 @@ pub enum TokenKind {
     Return,
     Import,
     Export,
+    For,
+    In,
     Ident(String),
     String(String),
     HexColor(String),
@@ -23,6 +25,7 @@ pub enum TokenKind {
     Colon,
     Comma,
     Dot,
+    DotDot,
     Plus,
     Minus,
     Amp,
@@ -47,34 +50,43 @@ pub enum LexError {
 }
 
 pub fn tokenize(input: &str) -> Result<Vec<Token>, LexError> {
-    let mut chars = input.char_indices().peekable();
+    // Collect into a Vec so we can look two chars ahead.
+    let chars: Vec<(usize, char)> = input.char_indices().collect();
+    let mut i = 0;
     let mut tokens = Vec::new();
 
-    while let Some((offset, ch)) = chars.next() {
+    while i < chars.len() {
+        let (offset, ch) = chars[i];
+        i += 1;
+
         match ch {
             ' ' | '\t' | '\r' | '\n' => {}
+
             '"' => {
                 let mut value = String::new();
                 let mut closed = false;
-                while let Some((_, next)) = chars.next() {
+                while i < chars.len() {
+                    let (_, next) = chars[i];
+                    i += 1;
                     match next {
                         '"' => {
                             closed = true;
                             break;
                         }
                         '\\' => {
-                            let Some((_, escaped)) = chars.next() else {
-                                break;
-                            };
-                            let mapped = match escaped {
-                                '"' => '"',
-                                '\\' => '\\',
-                                'n' => '\n',
-                                'r' => '\r',
-                                't' => '\t',
-                                other => other,
-                            };
-                            value.push(mapped);
+                            if i < chars.len() {
+                                let (_, escaped) = chars[i];
+                                i += 1;
+                                let mapped = match escaped {
+                                    '"' => '"',
+                                    '\\' => '\\',
+                                    'n' => '\n',
+                                    'r' => '\r',
+                                    't' => '\t',
+                                    other => other,
+                                };
+                                value.push(mapped);
+                            }
                         }
                         other => value.push(other),
                     }
@@ -87,15 +99,12 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, LexError> {
                     start: offset,
                 });
             }
+
             '#' => {
                 let mut lexeme = String::from("#");
-                while let Some((_, next)) = chars.peek() {
-                    if next.is_ascii_hexdigit() {
-                        lexeme.push(*next);
-                        chars.next();
-                    } else {
-                        break;
-                    }
+                while i < chars.len() && chars[i].1.is_ascii_hexdigit() {
+                    lexeme.push(chars[i].1);
+                    i += 1;
                 }
                 let digits = &lexeme[1..];
                 if !(digits.len() == 3 || digits.len() == 6) {
@@ -106,22 +115,32 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, LexError> {
                     start: offset,
                 });
             }
+
             '/' => {
-                if let Some((_, '/')) = chars.peek() {
-                    for (_, c) in chars.by_ref() {
-                        if c == '\n' {
-                            break;
-                        }
+                if i < chars.len() && chars[i].1 == '/' {
+                    // Line comment — consume until newline.
+                    while i < chars.len() && chars[i].1 != '\n' {
+                        i += 1;
                     }
                 } else {
                     tokens.push(simple(TokenKind::Slash, offset));
                 }
             }
+
+            '.' => {
+                // Check for '..' (range operator).
+                if i < chars.len() && chars[i].1 == '.' {
+                    i += 1;
+                    tokens.push(simple(TokenKind::DotDot, offset));
+                } else {
+                    tokens.push(simple(TokenKind::Dot, offset));
+                }
+            }
+
             '=' => tokens.push(simple(TokenKind::Equal, offset)),
             ';' => tokens.push(simple(TokenKind::Semicolon, offset)),
             ':' => tokens.push(simple(TokenKind::Colon, offset)),
             ',' => tokens.push(simple(TokenKind::Comma, offset)),
-            '.' => tokens.push(simple(TokenKind::Dot, offset)),
             '+' => tokens.push(simple(TokenKind::Plus, offset)),
             '-' => tokens.push(simple(TokenKind::Minus, offset)),
             '&' => tokens.push(simple(TokenKind::Amp, offset)),
@@ -132,17 +151,13 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, LexError> {
             ']' => tokens.push(simple(TokenKind::RBracket, offset)),
             '{' => tokens.push(simple(TokenKind::LBrace, offset)),
             '}' => tokens.push(simple(TokenKind::RBrace, offset)),
+
             c if is_ident_start(c) => {
                 let mut lexeme = String::from(c);
-                while let Some((_, next)) = chars.peek() {
-                    if is_ident_continue(*next) {
-                        lexeme.push(*next);
-                        chars.next();
-                    } else {
-                        break;
-                    }
+                while i < chars.len() && is_ident_continue(chars[i].1) {
+                    lexeme.push(chars[i].1);
+                    i += 1;
                 }
-
                 let kind = match lexeme.as_str() {
                     "let" => TokenKind::Let,
                     "var" => TokenKind::Var,
@@ -150,35 +165,44 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, LexError> {
                     "return" => TokenKind::Return,
                     "import" => TokenKind::Import,
                     "export" => TokenKind::Export,
+                    "for" => TokenKind::For,
+                    "in" => TokenKind::In,
                     _ => TokenKind::Ident(lexeme),
                 };
-
-                tokens.push(Token {
-                    kind,
-                    start: offset,
-                });
+                tokens.push(Token { kind, start: offset });
             }
+
             c if c.is_ascii_digit() => {
                 let mut lexeme = String::from(c);
-                while let Some((_, next)) = chars.peek() {
-                    if next.is_ascii_digit() || *next == '.' {
-                        lexeme.push(*next);
-                        chars.next();
+                while i < chars.len() {
+                    let next_ch = chars[i].1;
+                    if next_ch.is_ascii_digit() {
+                        lexeme.push(next_ch);
+                        i += 1;
+                    } else if next_ch == '.' {
+                        // Only consume '.' as a decimal point if the character after it
+                        // is a digit (not another '.', which would be the '..' range op).
+                        let after = chars.get(i + 1).map(|&(_, c)| c);
+                        if after.map_or(false, |c| c.is_ascii_digit()) {
+                            lexeme.push(next_ch);
+                            i += 1;
+                        } else {
+                            break;
+                        }
                     } else {
                         break;
                     }
                 }
-
                 let value: f64 = lexeme.parse().map_err(|_| LexError::InvalidNumber {
                     lexeme: lexeme.clone(),
                     offset,
                 })?;
-
                 tokens.push(Token {
                     kind: TokenKind::Number(value),
                     start: offset,
                 });
             }
+
             _ => return Err(LexError::UnexpectedChar { ch, offset }),
         }
     }

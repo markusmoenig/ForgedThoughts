@@ -1,4 +1,0 @@
-import "./boolean_base.ft";
-
-let shape = a.tongue(b, 0.16, 0.12);
-let scene = floor + shape;
