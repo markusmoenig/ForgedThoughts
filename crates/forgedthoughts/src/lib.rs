@@ -1,5 +1,6 @@
 mod ast;
 mod eval;
+mod field_ir;
 mod graph;
 mod jit;
 mod lexer;
@@ -18,6 +19,7 @@ use std::{
 pub use ast::{BinaryOp, Expr, NodeDef, Program, Statement, UnaryOp};
 pub use eval::{
     Binding, EvalError, EvalState, FunctionValue, ObjectValue, Value,
+    compile_specialized_height_node_eval_field_ir_function,
     compile_specialized_height_node_eval_function,
     eval_environment_function,
     eval_function_value, eval_material_function, eval_material_function_with_overrides,
@@ -26,7 +28,11 @@ pub use eval::{
     eval_sdf_function_with_overrides, eval_sdf_vec3_function_with_overrides,
     eval_sdf_zero_arg_function, eval_sdf_zero_arg_function_with_overrides, eval_top_level_function,
 };
-pub use graph::{GraphFile, GraphNodeInstance, GraphRenderConfig, GraphValue, load_graph_file};
+pub use graph::{
+    GraphCamera, GraphFile, GraphNodeInstance, GraphRenderConfig, GraphRenderSourceKind,
+    GraphSceneSettings, GraphSky, GraphSun, GraphValue, graph_render_source_kind,
+    load_graph_file,
+};
 pub use materials::{
     BlendedMaterial, BsdfSample as MaterialBsdfSample, ColorPattern, DielectricMaterial,
     LambertMaterial, Material, MaterialBsdf, MaterialKindTag, MaterialParams, MediumParams,
@@ -45,6 +51,7 @@ pub use renderer::{
     render_ray_progressive_with_accel,
 };
 pub use renderer::node::{NodeRenderSettings, render_node_png};
+pub use renderer::terrain::render_terrain_png;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +103,22 @@ const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
         description: "Multiplies a scalar input node by a factor.",
         tags: &["operator", "multiply", "math", "scalar"],
         source: include_str!("../library/operator/multiply.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Operator,
+        name: "SlopeField",
+        path: "operator/slope_field.ft",
+        description: "Derives a live slope field from a point-sampled height source.",
+        tags: &["operator", "field", "slope", "terrain"],
+        source: include_str!("../library/operator/slope_field.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Operator,
+        name: "ErosionField",
+        path: "operator/erosion_field.ft",
+        description: "Stylized multi-scale live erosion that deepens valleys and preserves broad ridges.",
+        tags: &["operator", "field", "erosion", "ridge", "terrain"],
+        source: include_str!("../library/operator/erosion_field.ft"),
     },
 ];
 
@@ -1350,14 +1373,21 @@ fn qualify_name(alias: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CoreError, ObjectValue, Value, compile_specialized_height_node_eval_function,
+        BinaryOp, CoreError, ObjectValue, Value, compile_specialized_height_node_eval_function,
+        compile_specialized_height_node_eval_field_ir_function,
         eval_environment_function, eval_node_function,
         eval_material_function_with_overrides, eval_material_properties_with_overrides,
         eval_program, eval_sdf_function, eval_sdf_function_args_with_overrides,
         eval_sdf_function_with_overrides, eval_sdf_vec3_function_with_overrides,
         eval_sdf_zero_arg_function, eval_sdf_zero_arg_function_with_overrides,
-        eval_top_level_function, load_and_eval_scene, load_program_with_imports, parse_program,
+        eval_top_level_function, graph_render_source_kind, load_and_eval_scene, load_graph_file,
+        load_program_with_imports, parse_program, render_node_png, GraphRenderSourceKind,
+        NodeRenderSettings,
     };
+    use crate::field_ir::{
+        FieldIrExpr, FieldIrProgram, compile_field_ir_to_vm, simplify_field_ir_program,
+    };
+    use crate::vm::VmInstruction;
     use std::{
         collections::HashMap,
         fs,
@@ -2262,6 +2292,97 @@ mod tests {
     }
 
     #[test]
+    fn compiles_field_ir_for_slope_style_node_eval() {
+        let source = r#"
+            node Source {
+              fn eval(ctx) {
+                return ctx.pos2d.x + ctx.pos2d.z;
+              }
+            };
+
+            node Ridge {
+              let input = Source {};
+              let step = 0.25;
+
+              fn eval(ctx) {
+                let x = ctx.pos2d.x;
+                let z = ctx.pos2d.z;
+                let h0 = sample(input, x, z);
+                let hx = sample(input, x + step, z);
+                let hz = sample(input, x, z + step);
+                let dx = (hx - h0) / step;
+                let dz = (hz - h0) / step;
+                return clamp(sqrt(dx * dx + dz * dz), 0.0, 1.0);
+              }
+            };
+
+            let graph = Ridge {};
+        "#;
+
+        let program = parse_program(source).expect("program should parse");
+        let state = eval_program(&program).expect("program should evaluate");
+        let Value::Object(graph) = state
+            .bindings
+            .get("graph")
+            .expect("graph binding should exist")
+            .value
+            .clone()
+        else {
+            panic!("graph should be an object");
+        };
+
+        let jit = compile_specialized_height_node_eval_field_ir_function(
+            &state,
+            "Ridge",
+            Some(&graph),
+        )
+        .expect("field ir should compile");
+
+        let value = jit.invoke(&[0.5, 0.25]).expect("jit should run");
+        assert!((value - 1.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn simplifies_field_ir_before_vm_codegen() {
+        let program = FieldIrProgram {
+            expr: FieldIrExpr::Binary {
+                lhs: Box::new(FieldIrExpr::Binary {
+                    lhs: Box::new(FieldIrExpr::X),
+                    op: BinaryOp::Add,
+                    rhs: Box::new(FieldIrExpr::Number(0.0)),
+                }),
+                op: BinaryOp::Add,
+                rhs: Box::new(FieldIrExpr::Binary {
+                    lhs: Box::new(FieldIrExpr::Number(2.0)),
+                    op: BinaryOp::Mul,
+                    rhs: Box::new(FieldIrExpr::Number(3.0)),
+                }),
+            },
+        };
+
+        let simplified = simplify_field_ir_program(&program);
+        assert_eq!(
+            simplified.expr,
+            FieldIrExpr::Binary {
+                lhs: Box::new(FieldIrExpr::X),
+                op: BinaryOp::Add,
+                rhs: Box::new(FieldIrExpr::Number(6.0)),
+            }
+        );
+
+        let vm = compile_field_ir_to_vm(&program);
+        assert_eq!(
+            vm.code,
+            vec![
+                VmInstruction::LoadName("x".to_string()),
+                VmInstruction::PushNumber(6.0),
+                VmInstruction::Binary(BinaryOp::Add),
+                VmInstruction::Return,
+            ]
+        );
+    }
+
+    #[test]
     fn loads_relative_imports_once() {
         let dir = temp_test_dir("imports_once");
         fs::create_dir_all(&dir).expect("temp dir should exist");
@@ -2568,6 +2689,210 @@ mod tests {
             CoreError::Graph(message) => assert!(message.contains("unknown output port")),
             _ => panic!("expected graph output-port error"),
         }
+    }
+
+    #[test]
+    fn rejects_scene_grayscale_render_mode_combo() {
+        let dir = temp_test_dir("graph_toml_bad_scene_grayscale");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r#"
+            version = 1
+
+            [render]
+            stage = "scene"
+            target = "grayscale"
+            source = "Constant.base:field"
+
+            [Constant.base]
+            value = 0.5
+            "#,
+        )
+        .expect("graph should write");
+
+        let err = load_and_eval_scene(&dir.join("simple.toml"))
+            .expect_err("invalid scene/grayscale combo should be rejected");
+        match err {
+            CoreError::Graph(message) => assert!(message.contains("supported: raytrace")),
+            _ => panic!("expected graph render-mode error"),
+        }
+    }
+
+    #[test]
+    fn rejects_height_raytrace_render_mode_combo() {
+        let dir = temp_test_dir("graph_toml_bad_height_raytrace");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r#"
+            version = 1
+
+            [render]
+            stage = "height"
+            target = "raytrace"
+            source = "Constant.base:field"
+
+            [Constant.base]
+            value = 0.5
+            "#,
+        )
+        .expect("graph should write");
+
+        let err = load_and_eval_scene(&dir.join("simple.toml"))
+            .expect_err("invalid height/raytrace combo should be rejected");
+        match err {
+            CoreError::Graph(message) => assert!(message.contains("supported: grayscale")),
+            _ => panic!("expected graph render-mode error"),
+        }
+    }
+
+    #[test]
+    fn loads_graph_toml_with_point_scalar_port_metadata() {
+        let dir = temp_test_dir("graph_toml_point_scalar");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r#"
+            version = 1
+
+            [render]
+            stage = "height"
+            target = "grayscale"
+            source = "Multiply.main:field"
+
+            [Constant.base]
+            value = 0.5
+
+            [Multiply.main]
+            input = "Constant.base:field"
+            factor = 2.0
+            "#,
+        )
+        .expect("graph should write");
+
+        let state = load_and_eval_scene(&dir.join("simple.toml"))
+            .expect("point-scalar graph should evaluate");
+        assert!(state.bindings.contains_key("graph"));
+    }
+
+    #[test]
+    fn renders_live_field_scalar_graph_root() {
+        let dir = temp_test_dir("graph_toml_field_scalar");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        let graph_path = dir.join("simple.toml");
+        fs::write(
+            &graph_path,
+            r#"
+            version = 1
+
+            [render]
+            stage = "height"
+            target = "grayscale"
+            source = "SlopeField.main:field"
+            width = 32
+            height = 32
+
+            [ValueNoise.base]
+            scale = 3.0
+            octaves = 4.0
+            lacunarity = 2.0
+            persistence = 0.5
+
+            [SlopeField.main]
+            input = "ValueNoise.base:field"
+            step = 0.02
+            "#,
+        )
+        .expect("graph should write");
+
+        let graph = load_graph_file(&graph_path).expect("field graph should parse");
+        assert_eq!(
+            graph_render_source_kind(&graph).expect("render source kind should resolve"),
+            GraphRenderSourceKind::FieldScalar
+        );
+
+        let state = load_and_eval_scene(&graph_path).expect("field graph should evaluate");
+        let image = render_node_png(
+            &state,
+            GraphRenderSourceKind::FieldScalar,
+            NodeRenderSettings {
+                width: 32,
+                height: 32,
+                tile_size: 16,
+                world_size: 1.0,
+            },
+            |_progress, _image| Ok(()),
+        )
+        .expect("field graph should render");
+
+        let sum: u32 = image
+            .pixels()
+            .map(|pixel| pixel[0] as u32)
+            .sum();
+        assert!(sum > 0, "field render should not be black");
+    }
+
+    #[test]
+    fn renders_live_erosion_field_graph_root() {
+        let dir = temp_test_dir("graph_toml_erosion_field");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        let graph_path = dir.join("erosion.toml");
+        fs::write(
+            &graph_path,
+            r#"
+            version = 1
+
+            [render]
+            stage = "height"
+            target = "grayscale"
+            source = "ErosionField.main:field"
+            width = 32
+            height = 32
+
+            [ValueNoise.base]
+            scale = 2.5
+            octaves = 6.0
+            lacunarity = 2.0
+            persistence = 0.5
+
+            [ErosionField.main]
+            input = "ValueNoise.base:field"
+            step = 0.03
+            strength = 0.6
+            ridge_boost = 0.32
+            valley_carve = 0.95
+            "#,
+        )
+        .expect("graph should write");
+
+        let graph = load_graph_file(&graph_path).expect("erosion graph should parse");
+        assert_eq!(
+            graph_render_source_kind(&graph).expect("render source kind should resolve"),
+            GraphRenderSourceKind::FieldScalar
+        );
+
+        let state = load_and_eval_scene(&graph_path).expect("erosion graph should evaluate");
+        let image = render_node_png(
+            &state,
+            GraphRenderSourceKind::FieldScalar,
+            NodeRenderSettings {
+                width: 32,
+                height: 32,
+                tile_size: 16,
+                world_size: 1.0,
+            },
+            |_progress, _image| Ok(()),
+        )
+        .expect("erosion graph should render");
+
+        let mut min_v = u8::MAX;
+        let mut max_v = u8::MIN;
+        for pixel in image.pixels() {
+            min_v = min_v.min(pixel[0]);
+            max_v = max_v.max(pixel[0]);
+        }
+        assert!(max_v > min_v, "erosion field render should have variation");
     }
 
     #[test]

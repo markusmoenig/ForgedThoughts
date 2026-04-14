@@ -5,11 +5,11 @@ node Add {
     description: "Adds the outputs of two scalar input nodes.";
     tags: ["operator", "add", "math", "scalar"];
     inputs: [
-        { name: "a", type: "scalar" },
-        { name: "b", type: "scalar" }
+        { name: "a", type: "point_scalar" },
+        { name: "b", type: "point_scalar" }
     ];
     outputs: [
-        { name: "field", type: "scalar" }
+        { name: "field", type: "point_scalar" }
     ];
 
     let a = Constant {};

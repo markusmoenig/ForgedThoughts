@@ -1,0 +1,30 @@
+import "Constant";
+
+node SlopeField {
+    name: "SlopeField";
+    description: "Derives a live slope field from a point-sampled height source.";
+    tags: ["operator", "field", "slope", "terrain"];
+    inputs: [
+        { name: "input", type: "point_scalar" }
+    ];
+    params: [
+        { name: "step", type: "point_scalar", default: 0.002 }
+    ];
+    outputs: [
+        { name: "field", type: "field_scalar" }
+    ];
+
+    let input = Constant {};
+    let step = 0.002;
+
+    fn eval(ctx) {
+        let x = ctx.pos2d.x;
+        let z = ctx.pos2d.z;
+        let h0 = sample(input, x, z);
+        let hx = sample(input, x + step, z);
+        let hz = sample(input, x, z + step);
+        let dx = (hx - h0) / step;
+        let dz = (hz - h0) / step;
+        return clamp(sqrt(dx * dx + dz * dz), 0.0, 1.0);
+    }
+};

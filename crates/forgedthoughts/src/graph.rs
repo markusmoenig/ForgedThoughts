@@ -9,15 +9,16 @@ use toml::Value as TomlValue;
 use crate::{CoreError, builtin_library_item_metadata, builtin_library_items};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GraphPortType {
-    Scalar,
+pub enum GraphRenderSourceKind {
+    PointScalar,
+    FieldScalar,
 }
 
 #[derive(Debug, Clone)]
 struct GraphNodeSchema {
-    inputs: BTreeMap<String, GraphPortType>,
+    inputs: BTreeMap<String, GraphRenderSourceKind>,
     params: BTreeSet<String>,
-    outputs: BTreeMap<String, GraphPortType>,
+    outputs: BTreeMap<String, GraphRenderSourceKind>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +26,99 @@ pub struct GraphRenderConfig {
     pub stage: String,
     pub target: String,
     pub source: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+/// Camera settings parsed from a `[camera]` TOML table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphCamera {
+    /// Eye position in world space.
+    pub origin: [f32; 3],
+    /// Look-at target.
+    pub target: [f32; 3],
+    /// Up vector (default `[0, 1, 0]`).
+    pub up: [f32; 3],
+    /// Vertical field of view in degrees.
+    pub fov_y: f32,
+}
+
+impl Default for GraphCamera {
+    fn default() -> Self {
+        Self {
+            origin: [0.5, 1.5, -2.0],
+            target: [0.5, 0.0, 0.5],
+            up: [0.0, 1.0, 0.0],
+            fov_y: 45.0,
+        }
+    }
+}
+
+/// Sun / directional light settings from a `[sun]` TOML table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphSun {
+    /// Direction *toward* the sun (will be normalised).
+    pub direction: [f32; 3],
+    /// RGB radiance/intensity.
+    pub color: [f32; 3],
+    /// Intensity multiplier.
+    pub intensity: f32,
+}
+
+impl Default for GraphSun {
+    fn default() -> Self {
+        Self {
+            direction: [0.6, 1.0, 0.4],
+            color: [1.0, 0.95, 0.85],
+            intensity: 3.0,
+        }
+    }
+}
+
+/// Sky ambient light settings from a `[sky]` TOML table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphSky {
+    pub color: [f32; 3],
+    pub intensity: f32,
+}
+
+impl Default for GraphSky {
+    fn default() -> Self {
+        Self {
+            color: [0.4, 0.55, 0.8],
+            intensity: 0.4,
+        }
+    }
+}
+
+/// Scene-render settings parsed from a `[scene]` TOML table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphSceneSettings {
+    /// Maximum raymarching steps.
+    pub max_steps: u32,
+    /// Maximum ray distance.
+    pub max_dist: f32,
+    /// Height scale: world-space height range is `[0, height_scale]`.
+    pub height_scale: f32,
+    /// World tile size in world units (terrain spans `[0, world_size]` in X and Z).
+    pub world_size: f32,
+    /// Epsilon for surface detection.
+    pub epsilon: f32,
+    /// Normal estimation finite-difference step.
+    pub normal_eps: f32,
+}
+
+impl Default for GraphSceneSettings {
+    fn default() -> Self {
+        Self {
+            max_steps: 256,
+            max_dist: 20.0,
+            height_scale: 1.0,
+            world_size: 1.0,
+            epsilon: 0.001,
+            normal_eps: 0.002,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +140,10 @@ pub enum GraphValue {
 pub struct GraphFile {
     pub render: GraphRenderConfig,
     pub nodes: BTreeMap<String, GraphNodeInstance>,
+    pub camera: GraphCamera,
+    pub sun: GraphSun,
+    pub sky: GraphSky,
+    pub scene: GraphSceneSettings,
 }
 
 pub fn load_graph_file(path: &Path) -> Result<GraphFile, CoreError> {
@@ -63,10 +161,17 @@ pub fn parse_graph_file(source: &str) -> Result<GraphFile, CoreError> {
         .ok_or_else(|| CoreError::Graph("graph root must be a TOML table".to_string()))?;
 
     let render = parse_render(table.get("render"))?;
+    let camera = parse_camera(table.get("camera"));
+    let sun = parse_sun(table.get("sun"));
+    let sky = parse_sky(table.get("sky"));
+    let scene = parse_scene_settings(table.get("scene"));
     let mut nodes = BTreeMap::new();
 
+    // Reserved top-level keys that are not node instance groups.
+    let reserved = ["version", "render", "camera", "sun", "sky", "scene"];
+
     for (key, value) in table {
-        if key == "version" || key == "render" {
+        if reserved.contains(&key.as_str()) {
             continue;
         }
 
@@ -96,22 +201,11 @@ pub fn parse_graph_file(source: &str) -> Result<GraphFile, CoreError> {
 
     validate_graph(&render, &nodes)?;
 
-    Ok(GraphFile { render, nodes })
+    Ok(GraphFile { render, nodes, camera, sun, sky, scene })
 }
 
 pub fn lower_graph_to_ft(graph: &GraphFile) -> Result<String, CoreError> {
-    if graph.render.stage != "height" {
-        return Err(CoreError::Graph(format!(
-            "unsupported render stage '{}'; only 'height' is supported right now",
-            graph.render.stage
-        )));
-    }
-    if graph.render.target != "grayscale" {
-        return Err(CoreError::Graph(format!(
-            "unsupported render target '{}'; only 'grayscale' is supported right now",
-            graph.render.target
-        )));
-    }
+    validate_render_mode(&graph.render)?;
 
     let (instance, port) = parse_ref(&graph.render.source)?;
     if port != "field" {
@@ -139,7 +233,92 @@ fn parse_render(value: Option<&TomlValue>) -> Result<GraphRenderConfig, CoreErro
         stage: required_string(table, "stage", "render")?,
         target: required_string(table, "target", "render")?,
         source: required_string(table, "source", "render")?,
+        width: optional_u32(table, "width"),
+        height: optional_u32(table, "height"),
     })
+}
+
+fn parse_camera(value: Option<&TomlValue>) -> GraphCamera {
+    let Some(table) = value.and_then(TomlValue::as_table) else {
+        return GraphCamera::default();
+    };
+    let mut cam = GraphCamera::default();
+    if let Some(v) = optional_f32_array3(table, "origin") { cam.origin = v; }
+    if let Some(v) = optional_f32_array3(table, "target") { cam.target = v; }
+    if let Some(v) = optional_f32_array3(table, "up") { cam.up = v; }
+    if let Some(v) = optional_f32(table, "fov_y") { cam.fov_y = v; }
+    cam
+}
+
+fn parse_sun(value: Option<&TomlValue>) -> GraphSun {
+    let Some(table) = value.and_then(TomlValue::as_table) else {
+        return GraphSun::default();
+    };
+    let mut sun = GraphSun::default();
+    if let Some(v) = optional_f32_array3(table, "direction") { sun.direction = v; }
+    if let Some(v) = optional_f32_array3(table, "color") { sun.color = v; }
+    if let Some(v) = optional_f32(table, "intensity") { sun.intensity = v; }
+    sun
+}
+
+fn parse_sky(value: Option<&TomlValue>) -> GraphSky {
+    let Some(table) = value.and_then(TomlValue::as_table) else {
+        return GraphSky::default();
+    };
+    let mut sky = GraphSky::default();
+    if let Some(v) = optional_f32_array3(table, "color") { sky.color = v; }
+    if let Some(v) = optional_f32(table, "intensity") { sky.intensity = v; }
+    sky
+}
+
+fn parse_scene_settings(value: Option<&TomlValue>) -> GraphSceneSettings {
+    let Some(table) = value.and_then(TomlValue::as_table) else {
+        return GraphSceneSettings::default();
+    };
+    let mut s = GraphSceneSettings::default();
+    if let Some(v) = optional_u32(table, "max_steps") { s.max_steps = v; }
+    if let Some(v) = optional_f32(table, "max_dist") { s.max_dist = v; }
+    if let Some(v) = optional_f32(table, "height_scale") { s.height_scale = v; }
+    if let Some(v) = optional_f32(table, "world_size") { s.world_size = v; }
+    if let Some(v) = optional_f32(table, "epsilon") { s.epsilon = v; }
+    if let Some(v) = optional_f32(table, "normal_eps") { s.normal_eps = v; }
+    s
+}
+
+fn optional_f32(table: &toml::map::Map<String, TomlValue>, key: &str) -> Option<f32> {
+    match table.get(key)? {
+        TomlValue::Float(v) => Some(*v as f32),
+        TomlValue::Integer(v) => Some(*v as f32),
+        _ => None,
+    }
+}
+
+fn optional_u32(table: &toml::map::Map<String, TomlValue>, key: &str) -> Option<u32> {
+    match table.get(key)? {
+        TomlValue::Integer(v) => Some((*v).max(0) as u32),
+        TomlValue::Float(v) => Some(*v as u32),
+        _ => None,
+    }
+}
+
+fn optional_f32_array3(
+    table: &toml::map::Map<String, TomlValue>,
+    key: &str,
+) -> Option<[f32; 3]> {
+    let arr = table.get(key)?.as_array()?;
+    if arr.len() != 3 { return None; }
+    let x = to_f32(&arr[0])?;
+    let y = to_f32(&arr[1])?;
+    let z = to_f32(&arr[2])?;
+    Some([x, y, z])
+}
+
+fn to_f32(v: &TomlValue) -> Option<f32> {
+    match v {
+        TomlValue::Float(f) => Some(*f as f32),
+        TomlValue::Integer(i) => Some(*i as f32),
+        _ => None,
+    }
 }
 
 fn parse_node_fields(
@@ -187,18 +366,7 @@ fn validate_graph(
     nodes: &BTreeMap<String, GraphNodeInstance>,
 ) -> Result<(), CoreError> {
     let (render_instance, render_port) = parse_ref(&render.source)?;
-    if render.stage != "height" {
-        return Err(CoreError::Graph(format!(
-            "unsupported render stage '{}'; only 'height' is supported right now",
-            render.stage
-        )));
-    }
-    if render.target != "grayscale" {
-        return Err(CoreError::Graph(format!(
-            "unsupported render target '{}'; only 'grayscale' is supported right now",
-            render.target
-        )));
-    }
+    validate_render_mode(render)?;
     let render_node = nodes.get(&render_instance).ok_or_else(|| {
         CoreError::Graph(format!(
             "render source references unknown node instance '{render_instance}'"
@@ -211,11 +379,17 @@ fn validate_graph(
         &render_node.node_type,
         "render source",
     )?;
-    if render_port_ty != GraphPortType::Scalar {
-        return Err(CoreError::Graph(format!(
-            "render source '{}' must resolve to a scalar output for target '{}'",
-            render.source, render.target
-        )));
+    match (render.stage.as_str(), render.target.as_str(), render_port_ty) {
+        ("height", "grayscale", GraphRenderSourceKind::PointScalar)
+        | ("height", "grayscale", GraphRenderSourceKind::FieldScalar)
+        | ("scene", "raytrace", GraphRenderSourceKind::PointScalar)
+        | ("scene", "raytrace", GraphRenderSourceKind::FieldScalar) => {}
+        _ => {
+            return Err(CoreError::Graph(format!(
+                "render source '{}' is incompatible with render mode '{} / {}'",
+                render.source, render.stage, render.target
+            )))
+        }
     }
 
     for node in nodes.values() {
@@ -369,7 +543,7 @@ fn input_port_type(
     schema: &GraphNodeSchema,
     field: &str,
     node_type: &str,
-) -> Result<GraphPortType, CoreError> {
+) -> Result<GraphRenderSourceKind, CoreError> {
     schema
         .inputs
         .get(field)
@@ -386,7 +560,7 @@ fn output_port_type(
     field: &str,
     node_type: &str,
     scope: &str,
-) -> Result<GraphPortType, CoreError> {
+) -> Result<GraphRenderSourceKind, CoreError> {
     schema
         .outputs
         .get(field)
@@ -406,13 +580,40 @@ fn is_editor_field(field: &str) -> bool {
     matches!(field, "pos")
 }
 
-fn parse_port_type(value: &str) -> Result<GraphPortType, CoreError> {
+fn parse_port_type(value: &str) -> Result<GraphRenderSourceKind, CoreError> {
     match value {
-        "scalar" => Ok(GraphPortType::Scalar),
+        "point_scalar" => Ok(GraphRenderSourceKind::PointScalar),
+        "field_scalar" => Ok(GraphRenderSourceKind::FieldScalar),
         _ => Err(CoreError::Graph(format!(
             "unsupported graph port type '{value}'"
         ))),
     }
+}
+
+fn validate_render_mode(render: &GraphRenderConfig) -> Result<(), CoreError> {
+    match (render.stage.as_str(), render.target.as_str()) {
+        ("height", "grayscale") | ("scene", "raytrace") => Ok(()),
+        ("height", target) => Err(CoreError::Graph(format!(
+            "unsupported render target '{target}' for stage 'height'; supported: grayscale"
+        ))),
+        ("scene", target) => Err(CoreError::Graph(format!(
+            "unsupported render target '{target}' for stage 'scene'; supported: raytrace"
+        ))),
+        (stage, _) => Err(CoreError::Graph(format!(
+            "unsupported render stage '{stage}'; supported: height, scene"
+        ))),
+    }
+}
+
+pub fn graph_render_source_kind(graph: &GraphFile) -> Result<GraphRenderSourceKind, CoreError> {
+    let (instance, port) = parse_ref(&graph.render.source)?;
+    let node = graph.nodes.get(&instance).ok_or_else(|| {
+        CoreError::Graph(format!(
+            "render source references unknown node instance '{instance}'"
+        ))
+    })?;
+    let schema = node_schema(&node.node_type)?;
+    output_port_type(&schema, &port, &node.node_type, "render source")
 }
 
 fn graph_value_to_ft(value: &GraphValue) -> Result<String, CoreError> {

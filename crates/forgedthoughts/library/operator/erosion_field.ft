@@ -1,0 +1,99 @@
+import "Constant";
+
+node ErosionField {
+    name: "ErosionField";
+    description: "Stylized multi-scale live erosion that deepens valleys and preserves broad ridges.";
+    tags: ["operator", "field", "erosion", "ridge", "terrain"];
+    inputs: [
+        { name: "input", type: "point_scalar" }
+    ];
+    params: [
+        { name: "step", type: "point_scalar", default: 0.01 },
+        { name: "strength", type: "point_scalar", default: 0.55 },
+        { name: "ridge_boost", type: "point_scalar", default: 0.28 },
+        { name: "valley_carve", type: "point_scalar", default: 0.9 }
+    ];
+    outputs: [
+        { name: "field", type: "field_scalar" }
+    ];
+
+    let input = Constant {};
+    let step = 0.01;
+    let strength = 0.55;
+    let ridge_boost = 0.28;
+    let valley_carve = 0.9;
+
+    fn sample_height(x, z) {
+        return sample(input, x, z);
+    }
+
+    fn average8(x, z, r) {
+        let xp = sample_height(x + r, z);
+        let xm = sample_height(x - r, z);
+        let zp = sample_height(x, z + r);
+        let zm = sample_height(x, z - r);
+        let xzp = sample_height(x + r, z + r);
+        let xzm = sample_height(x + r, z - r);
+        let xmzp = sample_height(x - r, z + r);
+        let xmzm = sample_height(x - r, z - r);
+        return (xp + xm + zp + zm + xzp + xzm + xmzp + xmzm) / 8.0;
+    }
+
+    fn relief8(x, z, r) {
+        let c = sample_height(x, z);
+        let xp = sample_height(x + r, z);
+        let xm = sample_height(x - r, z);
+        let zp = sample_height(x, z + r);
+        let zm = sample_height(x, z - r);
+        let xzp = sample_height(x + r, z + r);
+        let xzm = sample_height(x + r, z - r);
+        let xmzp = sample_height(x - r, z + r);
+        let xmzm = sample_height(x - r, z - r);
+        let max0 = max(c, max(xp, xm));
+        let max1 = max(zp, max(zm, xzp));
+        let max2 = max(xzm, max(xmzp, xmzm));
+        let min0 = min(c, min(xp, xm));
+        let min1 = min(zp, min(zm, xzp));
+        let min2 = min(xzm, min(xmzp, xmzm));
+        return max(max0, max(max1, max2)) - min(min0, min(min1, min2));
+    }
+
+    fn ridge8(x, z, r) {
+        let c = sample_height(x, z);
+        let avg = average8(x, z, r);
+        return max(0.0, c - avg);
+    }
+
+    fn valley8(x, z, r) {
+        let c = sample_height(x, z);
+        let avg = average8(x, z, r);
+        return max(0.0, avg - c);
+    }
+
+    fn eval(ctx) {
+        let x = ctx.pos2d.x;
+        let z = ctx.pos2d.z;
+        let h0 = sample_height(x, z);
+
+        let r1 = step;
+        let r2 = step * 2.0;
+        let r3 = step * 4.0;
+
+        let ridge = ridge8(x, z, r1) * 0.50
+            + ridge8(x, z, r2) * 0.32
+            + ridge8(x, z, r3) * 0.18;
+        let valley = valley8(x, z, r1) * 0.45
+            + valley8(x, z, r2) * 0.35
+            + valley8(x, z, r3) * 0.20;
+        let relief = relief8(x, z, r1) * 0.50
+            + relief8(x, z, r2) * 0.30
+            + relief8(x, z, r3) * 0.20;
+
+        let carved = h0
+            - valley * valley_carve * strength * (0.7 + relief * 2.0)
+            - ridge * strength * 0.22;
+        let restored = ridge * ridge_boost * (0.6 + relief * 1.6);
+
+        return clamp(carved + restored, 0.0, 1.0);
+    }
+};

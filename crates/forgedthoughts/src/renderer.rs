@@ -31,6 +31,10 @@ mod path;
 mod ray;
 #[path = "renderer/node.rs"]
 pub mod node;
+#[path = "renderer/height_source.rs"]
+pub mod height_source;
+#[path = "renderer/terrain.rs"]
+pub mod terrain;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RenderOptions {

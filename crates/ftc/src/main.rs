@@ -8,7 +8,11 @@ use std::{
 };
 
 use clap::Parser;
-use forgedthoughts::{NodeRenderSettings, load_and_eval_scene, render_node_png};
+use forgedthoughts::{
+    GraphCamera, GraphSceneSettings, GraphSky, GraphSun, NodeRenderSettings,
+    graph_render_source_kind, load_and_eval_scene, load_graph_file, render_node_png,
+    render_terrain_png,
+};
 use indicatif::{ProgressBar, ProgressStyle};
 use tracing::{error, info, level_filters::LevelFilter};
 use tracing_subscriber::EnvFilter;
@@ -24,17 +28,13 @@ struct Cli {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// Image width in pixels
-    #[arg(long, default_value_t = 512)]
-    width: u32,
+    /// Image width in pixels (overrides TOML)
+    #[arg(long)]
+    width: Option<u32>,
 
-    /// Image height in pixels
-    #[arg(long, default_value_t = 512)]
-    height: u32,
-
-    /// World-space coordinate range (pixels map to [0, world_size])
-    #[arg(long, default_value_t = 1.0)]
-    world_size: f32,
+    /// Image height in pixels (overrides TOML)
+    #[arg(long)]
+    height: Option<u32>,
 
     /// Tile size for rendering
     #[arg(long, default_value_t = 64)]
@@ -104,8 +104,18 @@ fn run(cli: Cli) -> ExitCode {
 }
 
 fn render_graph_once(graph_path: &Path, cli: &Cli) -> ExitCode {
+    // Load the raw graph file first so we can read stage/target/camera/etc.
+    let graph = match load_graph_file(graph_path) {
+        Ok(g) => g,
+        Err(err) => {
+            error!(graph = %graph_path.display(), "failed to parse graph: {err}");
+            return ExitCode::from(3);
+        }
+    };
+
+    // Load and JIT-compile the scene (node eval state).
     let state = match load_and_eval_scene(graph_path) {
-        Ok(state) => state,
+        Ok(s) => s,
         Err(err) => {
             error!(graph = %graph_path.display(), "{err}");
             return ExitCode::from(3);
@@ -117,32 +127,88 @@ fn render_graph_once(graph_path: &Path, cli: &Cli) -> ExitCode {
         .clone()
         .unwrap_or_else(|| default_output_path(graph_path));
 
+    // Resolve width/height: CLI flag > TOML > default 512
+    let width = cli
+        .width
+        .or(graph.render.width)
+        .unwrap_or(512)
+        .max(1);
+    let height = cli
+        .height
+        .or(graph.render.height)
+        .unwrap_or(512)
+        .max(1);
+    let tile_size = cli.tile_size.max(8);
+
+    let stage = graph.render.stage.as_str();
+    let target = graph.render.target.as_str();
+    let source_kind = match graph_render_source_kind(&graph) {
+        Ok(kind) => kind,
+        Err(err) => {
+            error!(graph = %graph_path.display(), "{err}");
+            return ExitCode::from(3);
+        }
+    };
+
+    match (stage, target) {
+        ("scene", "raytrace") => {
+            render_terrain(
+                graph_path,
+                &state,
+                source_kind,
+                &graph.camera,
+                &graph.sun,
+                &graph.sky,
+                &graph.scene,
+                width,
+                height,
+                tile_size,
+                &output_path,
+            )
+        }
+        _ => {
+            // Default: height → grayscale node render
+            render_node(
+                graph_path,
+                &state,
+                source_kind,
+                graph.scene.world_size,
+                width,
+                height,
+                tile_size,
+                &output_path,
+            )
+        }
+    }
+}
+
+fn render_node(
+    _graph_path: &Path,
+    state: &forgedthoughts::EvalState,
+    source_kind: forgedthoughts::GraphRenderSourceKind,
+    world_size: f32,
+    width: u32,
+    height: u32,
+    tile_size: u32,
+    output_path: &Path,
+) -> ExitCode {
     let settings = NodeRenderSettings {
-        width: cli.width.max(1),
-        height: cli.height.max(1),
-        tile_size: cli.tile_size.max(8),
-        world_size: if cli.world_size > 0.0 {
-            cli.world_size
-        } else {
-            1.0
-        },
+        width,
+        height,
+        tile_size,
+        world_size: world_size.max(f32::EPSILON),
     };
 
     let tiles_x = settings.width.div_ceil(settings.tile_size);
     let tiles_y = settings.height.div_ceil(settings.tile_size);
     let tiles_total = u64::from(tiles_x) * u64::from(tiles_y);
-    let progress = ProgressBar::new(tiles_total.max(1));
-    let style =
-        ProgressStyle::with_template("[{elapsed_precise}] {wide_bar} {pos}/{len} tiles {msg}")
-            .unwrap_or_else(|_| ProgressStyle::default_bar())
-            .progress_chars("=>-");
-    progress.set_style(style);
+    let progress = make_progress_bar(tiles_total);
 
     let render_start = Instant::now();
-    let image = match render_node_png(&state, settings, |step, img| {
+    let image = match render_node_png(state, source_kind, settings, |step, img| {
         progress.set_position(u64::from(step.tiles_done));
         progress.set_message(format!("{} ms", step.elapsed_ms));
-        img.save(&output_path)?;
+        img.save(output_path)?;
         Ok(())
     }) {
         Ok(image) => image,
@@ -153,7 +219,7 @@ fn render_graph_once(graph_path: &Path, cli: &Cli) -> ExitCode {
         }
     };
 
-    if let Err(err) = image.save(&output_path) {
+    if let Err(err) = image.save(output_path) {
         progress.abandon_with_message("failed");
         error!(output = %output_path.display(), "{err}");
         return ExitCode::from(4);
@@ -162,12 +228,84 @@ fn render_graph_once(graph_path: &Path, cli: &Cli) -> ExitCode {
     progress.finish_with_message("done");
     info!(
         output = %output_path.display(),
-        width = settings.width,
-        height = settings.height,
+        width,
+        height,
         elapsed_ms = render_start.elapsed().as_millis(),
-        "graph rendered"
+        "node render complete"
     );
     ExitCode::SUCCESS
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_terrain(
+    graph_path: &Path,
+    state: &forgedthoughts::EvalState,
+    source_kind: forgedthoughts::GraphRenderSourceKind,
+    camera: &GraphCamera,
+    sun: &GraphSun,
+    sky: &GraphSky,
+    scene: &GraphSceneSettings,
+    width: u32,
+    height: u32,
+    tile_size: u32,
+    output_path: &Path,
+) -> ExitCode {
+    let tiles_x = width.div_ceil(tile_size);
+    let tiles_y = height.div_ceil(tile_size);
+    let tiles_total = u64::from(tiles_x) * u64::from(tiles_y);
+    let progress = make_progress_bar(tiles_total);
+
+    let render_start = Instant::now();
+    let image = match render_terrain_png(
+        state,
+        source_kind,
+        width,
+        height,
+        tile_size,
+        camera,
+        sun,
+        sky,
+        scene,
+        |step, img| {
+            progress.set_position(u64::from(step.tiles_done));
+            progress.set_message(format!("{} ms", step.elapsed_ms));
+            img.save(output_path)?;
+            Ok(())
+        },
+    ) {
+        Ok(image) => image,
+        Err(err) => {
+            progress.abandon_with_message("failed");
+            error!(graph = %graph_path.display(), output = %output_path.display(), "{err}");
+            return ExitCode::from(4);
+        }
+    };
+
+    if let Err(err) = image.save(output_path) {
+        progress.abandon_with_message("failed");
+        error!(output = %output_path.display(), "{err}");
+        return ExitCode::from(4);
+    }
+
+    progress.finish_with_message("done");
+    info!(
+        output = %output_path.display(),
+        width,
+        height,
+        elapsed_ms = render_start.elapsed().as_millis(),
+        "terrain render complete"
+    );
+    ExitCode::SUCCESS
+}
+
+fn make_progress_bar(tiles_total: u64) -> ProgressBar {
+    let progress = ProgressBar::new(tiles_total.max(1));
+    let style =
+        ProgressStyle::with_template("[{elapsed_precise}] {wide_bar} {pos}/{len} tiles {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("=>-");
+    progress.set_style(style);
+    progress
 }
 
 fn is_toml_graph(path: &Path) -> bool {

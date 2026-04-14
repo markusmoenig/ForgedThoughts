@@ -5,13 +5,13 @@ node Multiply {
     description: "Multiplies a scalar input node by a factor.";
     tags: ["operator", "multiply", "math", "scalar"];
     inputs: [
-        { name: "input", type: "scalar" }
+        { name: "input", type: "point_scalar" }
     ];
     params: [
-        { name: "factor", type: "scalar", default: 1.0 }
+        { name: "factor", type: "point_scalar", default: 1.0 }
     ];
     outputs: [
-        { name: "field", type: "scalar" }
+        { name: "field", type: "point_scalar" }
     ];
 
     let input = Constant {};

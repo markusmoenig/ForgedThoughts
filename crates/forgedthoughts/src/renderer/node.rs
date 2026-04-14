@@ -5,11 +5,11 @@ use image::{ImageError, RgbImage};
 use rayon::prelude::*;
 
 use crate::{
-    EvalState, ObjectValue, Value, compile_specialized_height_node_eval_function,
-    eval_node_function,
+    EvalState, GraphRenderSourceKind, compile_specialized_height_node_eval_function,
 };
 
 use super::{RenderError, RenderProgress};
+use super::height_source::HeightSampler;
 
 #[derive(Debug, Clone, Copy)]
 pub struct NodeRenderSettings {
@@ -45,6 +45,7 @@ impl Default for NodeRenderSettings {
 /// value (stored as RGB).
 pub fn render_node_png<F>(
     state: &EvalState,
+    source_kind: GraphRenderSourceKind,
     settings: NodeRenderSettings,
     mut progress_cb: F,
 ) -> Result<RgbImage, RenderError>
@@ -60,12 +61,14 @@ where
         crate::Value::Object(obj) => obj.clone(),
         _ => return Err(RenderError::MissingGraph),
     };
+    let sampler = HeightSampler::new(state, graph_obj.clone(), source_kind);
     let node_name = graph_obj
         .type_name
         .clone()
         .ok_or(RenderError::MissingGraph)?;
-    let compiled_eval =
-        compile_specialized_height_node_eval_function(state, &node_name, Some(&graph_obj));
+    let compiled_eval = matches!(source_kind, GraphRenderSourceKind::PointScalar)
+        .then(|| compile_specialized_height_node_eval_function(state, &node_name, Some(&graph_obj)))
+        .flatten();
 
     let width = settings.width.max(1);
     let height = settings.height.max(1);
@@ -86,6 +89,7 @@ where
 
     // EvalState: Sync — safe to share across rayon threads.
     tile_indices.par_iter().for_each_with(sender, |s, &(tile_x, tile_y)| {
+        let sampler = sampler.clone();
         let px_start = tile_x * tile_size;
         let py_start = tile_y * tile_size;
         let px_end = (px_start + tile_size).min(width);
@@ -103,9 +107,7 @@ where
                 let sample = compiled_eval
                     .as_ref()
                     .and_then(|jit| jit.invoke(&[x, z]))
-                    .or_else(|| {
-                        eval_node_at_pixel(state, &node_name, &graph_obj, x, z)
-                    })
+                    .or_else(|| sampler.sample_root_scalar(x, z))
                     .unwrap_or(0.0);
 
                 let byte = (sample.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -144,49 +146,4 @@ where
     }
 
     Ok(image)
-}
-
-fn eval_node_at_pixel(
-    state: &EvalState,
-    node_name: &str,
-    graph_obj: &ObjectValue,
-    x: f32,
-    z: f32,
-) -> Option<f32> {
-    let ctx = make_height_context(x, z);
-    eval_node_function(
-        state,
-        node_name,
-        Some(graph_obj),
-        "eval",
-        &[Value::Object(ctx.clone())],
-    )
-    .ok()
-    .and_then(|v| match v {
-        Value::Number(n) => Some(n),
-        _ => None,
-    })
-}
-
-fn make_height_context(x: f32, z: f32) -> ObjectValue {
-    let zero = Value::Number(0.0);
-    let pos2d = Value::Object(ObjectValue {
-        type_name: Some("vec3".to_string()),
-        fields: std::collections::HashMap::from([
-            ("x".to_string(), Value::Number(x)),
-            ("y".to_string(), Value::Number(0.0)),
-            ("z".to_string(), Value::Number(z)),
-        ]),
-    });
-
-    ObjectValue {
-        type_name: Some("NodeContext".to_string()),
-        fields: std::collections::HashMap::from([
-            ("stage".to_string(), Value::String("height".to_string())),
-            ("pos2d".to_string(), pos2d),
-            ("height".to_string(), zero.clone()),
-            ("mask".to_string(), zero.clone()),
-            ("value".to_string(), zero),
-        ]),
-    }
 }

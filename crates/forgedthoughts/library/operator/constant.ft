@@ -3,10 +3,10 @@ node Constant {
     description: "Outputs a constant scalar value.";
     tags: ["operator", "constant", "scalar"];
     params: [
-        { name: "value", type: "scalar", default: 0.0 }
+        { name: "value", type: "point_scalar", default: 0.0 }
     ];
     outputs: [
-        { name: "field", type: "scalar" }
+        { name: "field", type: "point_scalar" }
     ];
 
     let value = 0.0;

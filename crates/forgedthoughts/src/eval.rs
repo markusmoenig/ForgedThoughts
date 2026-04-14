@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     env,
     sync::{Mutex, OnceLock},
@@ -11,6 +12,7 @@ use crate::ast::{
     MaterialStatement, NodeDef, Program, SdfDef, SdfFunctionStatement, SdfStatement, SkeletonDef,
     SkeletonStatement, Statement, UnaryOp,
 };
+use crate::field_ir::{compile_field_ir_program, lower_body_to_field_ir};
 use crate::jit::{
     JitCapture, JitFunction, JitModifierDistanceFunction, JitSdfDistanceFunction,
     JitSdfVec3Function, JitVec3Function, compile_jit_function, compile_material_vec3_function,
@@ -86,6 +88,20 @@ pub struct EvalState {
     pub skeleton_defs: HashMap<String, SkeletonDef>,
     pub environment_defs: HashMap<String, EnvironmentDef>,
     pub node_defs: HashMap<String, NodeDef>,
+}
+
+pub trait NodeSampleProvider {
+    fn sample_point_node(&self, target: &ObjectValue, x: f32, z: f32) -> Option<f32>;
+}
+
+#[derive(Clone, Copy)]
+struct NodeSampleProviderHandle {
+    data: *const (),
+    sample_fn: unsafe fn(*const (), &ObjectValue, f32, f32) -> Option<f32>,
+}
+
+thread_local! {
+    static NODE_SAMPLE_PROVIDER_STACK: RefCell<Vec<NodeSampleProviderHandle>> = const { RefCell::new(Vec::new()) };
 }
 
 #[derive(Debug, Error)]
@@ -188,6 +204,40 @@ fn trace_jit_once(kind: &str, name: &str, detail: &str) {
     if seen.insert(key) {
         eprintln!("[forge-jit] {kind} {name}: {detail}");
     }
+}
+
+pub fn with_node_sample_provider<T: NodeSampleProvider, R>(
+    provider: &T,
+    f: impl FnOnce() -> R,
+) -> R {
+    let handle = NodeSampleProviderHandle {
+        data: provider as *const _ as *const (),
+        sample_fn: sample_point_node_thunk::<T>,
+    };
+    NODE_SAMPLE_PROVIDER_STACK.with(|stack| {
+        stack.borrow_mut().push(handle);
+    });
+    let result = f();
+    NODE_SAMPLE_PROVIDER_STACK.with(|stack| {
+        stack.borrow_mut().pop();
+    });
+    result
+}
+
+fn with_current_node_sample_provider<R>(
+    f: impl FnOnce(Option<NodeSampleProviderHandle>) -> R,
+) -> R {
+    NODE_SAMPLE_PROVIDER_STACK.with(|stack| f(stack.borrow().last().copied()))
+}
+
+unsafe fn sample_point_node_thunk<T: NodeSampleProvider>(
+    data: *const (),
+    target: &ObjectValue,
+    x: f32,
+    z: f32,
+) -> Option<f32> {
+    let provider = unsafe { &*(data as *const T) };
+    provider.sample_point_node(target, x, z)
 }
 
 fn eval_statement(stmt: &Statement, state: &mut EvalState) -> Result<(), EvalError> {
@@ -2924,6 +2974,31 @@ pub fn compile_specialized_height_node_eval_function(
     if !jit_enabled() {
         return None;
     }
+    let specialized_body =
+        build_specialized_height_node_eval_body(state, node_name, overrides)?;
+    let params = vec!["x".to_string(), "z".to_string()];
+    let vm = crate::vm::compile_function_parts(&params, &specialized_body)?;
+    compile_jit_function(&format!("node_height_{node_name}_eval"), &vm)
+}
+
+pub fn compile_specialized_height_node_eval_field_ir_function(
+    state: &EvalState,
+    node_name: &str,
+    overrides: Option<&ObjectValue>,
+) -> Option<JitFunction> {
+    if !jit_enabled() {
+        return None;
+    }
+    let specialized_body = build_specialized_height_node_eval_body(state, node_name, overrides)?;
+    let program = lower_body_to_field_ir(&specialized_body)?;
+    compile_field_ir_program(&format!("node_field_ir_{node_name}_eval"), &program)
+}
+
+fn build_specialized_height_node_eval_body(
+    state: &EvalState,
+    node_name: &str,
+    overrides: Option<&ObjectValue>,
+) -> Option<Vec<MaterialFunctionStatement>> {
     let def = state.node_defs.get(node_name)?;
     let (_params, body) = def.statements.iter().find_map(|stmt| match stmt {
         MaterialStatement::Function {
@@ -2966,13 +3041,14 @@ pub fn compile_specialized_height_node_eval_function(
     env.insert("ctx".to_string(), height_context_expr());
     env.extend(const_exprs);
 
-    let specialized_body = specialize_node_stmts(state, &body, &mut env, &helpers, 0)?;
-    let params = vec!["x".to_string(), "z".to_string()];
-    let vm = crate::vm::compile_function_parts(&params, &specialized_body)?;
-    compile_jit_function(&format!("node_height_{node_name}_eval"), &vm)
+    specialize_node_stmts(state, &body, &mut env, &helpers, 0)
 }
 
 fn height_context_expr() -> Expr {
+    height_context_expr_with(&Expr::Ident("x".to_string()), &Expr::Ident("z".to_string()))
+}
+
+fn height_context_expr_with(x: &Expr, z: &Expr) -> Expr {
     Expr::ObjectLiteral {
         type_name: "NodeContext".to_string(),
         fields: vec![
@@ -2982,9 +3058,9 @@ fn height_context_expr() -> Expr {
                 Expr::ObjectLiteral {
                     type_name: "vec3".to_string(),
                     fields: vec![
-                        ("x".to_string(), Expr::Ident("x".to_string())),
+                        ("x".to_string(), x.clone()),
                         ("y".to_string(), Expr::Number(0.0)),
-                        ("z".to_string(), Expr::Ident("z".to_string())),
+                        ("z".to_string(), z.clone()),
                     ],
                 },
             ),
@@ -3121,6 +3197,20 @@ fn specialize_node_expr(
                 .map(|arg| specialize_node_expr(state, arg, env, helpers, depth + 1))
                 .collect::<Option<Vec<_>>>()?;
             if let Expr::Ident(name) = callee.as_ref()
+                && name == "sample"
+                && args.len() == 3
+                && let Some((type_name, fields)) = resolve_specialized_node_object(&args[0], env)
+            {
+                return inline_node_member_expr(
+                    state,
+                    &type_name,
+                    &fields,
+                    "eval",
+                    &[height_context_expr_with(&args[1], &args[2])],
+                    depth + 1,
+                );
+            }
+            if let Expr::Ident(name) = callee.as_ref()
                 && let Some((params, body)) = helpers.get(name)
             {
                 return inline_node_helper_expr(state, params, body, &args, helpers, depth + 1);
@@ -3147,6 +3237,20 @@ fn specialize_node_expr(
             op: *op,
             expr: Box::new(specialize_node_expr(state, expr, env, helpers, depth + 1)?),
         }),
+    }
+}
+
+fn resolve_specialized_node_object(
+    expr: &Expr,
+    env: &HashMap<String, Expr>,
+) -> Option<(String, Vec<(String, Expr)>)> {
+    match expr {
+        Expr::ObjectLiteral { type_name, fields } => Some((type_name.clone(), fields.clone())),
+        Expr::Ident(name) => match env.get(name)? {
+            Expr::ObjectLiteral { type_name, fields } => Some((type_name.clone(), fields.clone())),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -3446,6 +3550,11 @@ fn eval_expr_in_node_scope(
                 .collect::<Result<Vec<_>, _>>()?;
             match callee.as_ref() {
                 Expr::Ident(name) => {
+                    if let Some(value) =
+                        eval_node_builtin_call(name, &arg_values, state, depth + 1)?
+                    {
+                        return Ok(value);
+                    }
                     if let Some(value) = eval_ident_call(name, &arg_values)? {
                         return Ok(value);
                     }
@@ -3507,6 +3616,139 @@ fn eval_expr_in_node_scope(
             let value = eval_expr_in_node_scope(expr, state, locals, def, overrides, depth)?;
             eval_unary(*op, value)
         }
+    }
+}
+
+fn eval_node_builtin_call(
+    name: &str,
+    args: &[Value],
+    state: &EvalState,
+    depth: usize,
+) -> Result<Option<Value>, EvalError> {
+    match name {
+        "sample" => {
+            if args.len() != 3 {
+                return Err(EvalError::InvalidBuiltinArity {
+                    name: "sample",
+                    expected: 3,
+                    got: args.len(),
+                });
+            }
+            let target = match &args[0] {
+                Value::Object(obj) => obj,
+                _ => return Err(EvalError::UnsupportedCall),
+            };
+            let Value::Number(x) = args[1] else {
+                return Err(EvalError::BuiltinNumericArgs("sample"));
+            };
+            let Value::Number(z) = args[2] else {
+                return Err(EvalError::BuiltinNumericArgs("sample"));
+            };
+            let value = with_current_node_sample_provider(|provider| {
+                provider
+                    .and_then(|provider| unsafe { (provider.sample_fn)(provider.data, target, x, z) })
+                    .ok_or(EvalError::UnsupportedCall)
+            })
+            .or_else(|_| sample_node_at_position(state, target, x, z, depth))?;
+            Ok(Some(Value::Number(value)))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn sample_node_at_position(
+    state: &EvalState,
+    target: &ObjectValue,
+    x: f32,
+    z: f32,
+    depth: usize,
+) -> Result<f32, EvalError> {
+    let node_name = target
+        .type_name
+        .as_deref()
+        .ok_or(EvalError::UnsupportedCall)?;
+    if let Some(jit) = cached_specialized_node_eval_function(state, node_name, target) {
+        if let Some(value) = jit.invoke(&[x, z]) {
+            return Ok(value);
+        }
+    }
+    if depth >= 32 {
+        return Err(EvalError::MaterialCallDepthExceeded);
+    }
+    let def = state
+        .node_defs
+        .get(node_name)
+        .ok_or_else(|| EvalError::UndefinedIdentifier(node_name.to_string()))?;
+    let (params, body) = def
+        .statements
+        .iter()
+        .find_map(|stmt| match stmt {
+            MaterialStatement::Function { name, params, body } if name == "eval" => {
+                Some((params.clone(), body.clone()))
+            }
+            _ => None,
+        })
+        .ok_or_else(|| EvalError::UndefinedIdentifier("eval".to_string()))?;
+    let ctx = node_height_context_value(x, z);
+    let value = eval_node_function_body(
+        state,
+        def,
+        &params,
+        &body,
+        &[Value::Object(ctx)],
+        Some(target),
+        depth,
+    )?;
+    match value {
+        Value::Number(v) => Ok(v),
+        _ => Err(EvalError::UnsupportedCall),
+    }
+}
+
+fn cached_specialized_node_eval_function(
+    state: &EvalState,
+    node_name: &str,
+    target: &ObjectValue,
+) -> Option<JitFunction> {
+    static CACHE: OnceLock<Mutex<HashMap<(usize, String), Option<JitFunction>>>> = OnceLock::new();
+    let key = (target as *const ObjectValue as usize, node_name.to_string());
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(compiled) = cache
+        .lock()
+        .expect("node sample cache poisoned")
+        .get(&key)
+        .copied()
+        .flatten()
+    {
+        return Some(compiled);
+    }
+    let compiled = compile_specialized_height_node_eval_function(state, node_name, Some(target));
+    cache
+        .lock()
+        .expect("node sample cache poisoned")
+        .insert(key, compiled);
+    compiled
+}
+
+fn node_height_context_value(x: f32, z: f32) -> ObjectValue {
+    let zero = Value::Number(0.0);
+    let pos2d = Value::Object(ObjectValue {
+        type_name: Some("vec3".to_string()),
+        fields: HashMap::from([
+            ("x".to_string(), Value::Number(x)),
+            ("y".to_string(), Value::Number(0.0)),
+            ("z".to_string(), Value::Number(z)),
+        ]),
+    });
+    ObjectValue {
+        type_name: Some("NodeContext".to_string()),
+        fields: HashMap::from([
+            ("stage".to_string(), Value::String("height".to_string())),
+            ("pos2d".to_string(), pos2d),
+            ("height".to_string(), zero.clone()),
+            ("mask".to_string(), zero.clone()),
+            ("value".to_string(), zero),
+        ]),
     }
 }
 

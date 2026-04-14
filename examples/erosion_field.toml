@@ -1,0 +1,23 @@
+version = 1
+
+[render]
+stage = "height"
+target = "grayscale"
+source = "ErosionField.main:field"
+width = 512
+height = 512
+
+[ValueNoise.base]
+scale = 2.6
+octaves = 6.0
+lacunarity = 2.0
+persistence = 0.5
+pos = [32, 220]
+
+[ErosionField.main]
+input = "ValueNoise.base:field"
+step = 0.012
+strength = 0.62
+ridge_boost = 0.34
+valley_carve = 0.98
+pos = [260, 220]

@@ -1,0 +1,20 @@
+version = 1
+
+[render]
+stage = "height"
+target = "grayscale"
+source = "SlopeField.main:field"
+width = 512
+height = 512
+
+[ValueNoise.base]
+scale = 3.0
+octaves = 6.0
+lacunarity = 2.0
+persistence = 0.5
+pos = [30, 213]
+
+[SlopeField.main]
+input = "ValueNoise.base:field"
+step = 0.01
+pos = [240, 213]

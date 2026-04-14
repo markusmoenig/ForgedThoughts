@@ -3,13 +3,13 @@ node ValueNoise {
     description: "Fractal Brownian Motion over 2D value noise. Outputs a float in [0, 1].";
     tags: ["noise", "fbm", "heightmap", "procedural"];
     params: [
-        { name: "scale", type: "scalar", default: 1.0 },
-        { name: "octaves", type: "scalar", default: 4.0 },
-        { name: "lacunarity", type: "scalar", default: 2.0 },
-        { name: "persistence", type: "scalar", default: 0.5 }
+        { name: "scale", type: "point_scalar", default: 1.0 },
+        { name: "octaves", type: "point_scalar", default: 4.0 },
+        { name: "lacunarity", type: "point_scalar", default: 2.0 },
+        { name: "persistence", type: "point_scalar", default: 0.5 }
     ];
     outputs: [
-        { name: "field", type: "scalar" }
+        { name: "field", type: "point_scalar" }
     ];
 
     let scale = 1.0;
