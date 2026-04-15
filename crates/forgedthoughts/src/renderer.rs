@@ -35,6 +35,8 @@ pub mod node;
 pub mod height_source;
 #[path = "renderer/terrain.rs"]
 pub mod terrain;
+#[path = "renderer/wgpu_field.rs"]
+pub mod wgpu_field;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RenderOptions {
@@ -173,6 +175,8 @@ pub enum RenderError {
     ExpectedObject,
     #[error("no graph node found (expected a binding named 'graph')")]
     MissingGraph,
+    #[error("renderer backend error: {0}")]
+    Backend(String),
     #[error("failed to write png: {0}")]
     Image(#[from] ImageError),
 }

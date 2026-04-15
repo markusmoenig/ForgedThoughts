@@ -3,31 +3,47 @@ sidebar_position: 1
 title: Overview
 ---
 
-# ForgedThoughts
+# ForgedThoughts Overview
 
-ForgedThoughts is a CPU-first rendering project built around the `Forge` language, signed distance field scene construction, programmable materials, and a reusable asset library.
+ForgedThoughts is now a terrain-first graph system:
 
-Today it has two rendering modes:
+- FT for reusable node definitions
+- TOML for graph instancing/wiring
+- Whitted terrain raymarching driven by graph outputs
 
-- the main renderer: a classical Whitted-style CPU renderer for fast lookdev
-- `depth`: a fast depth preview for quick shape iteration
+The primary path is no longer old scene-centric authoring.  
+The primary path is **graph-driven terrain/material workflows**.
 
-The renderer architecture is documented in the dedicated `Renderer` chapter.
+## Core Pieces
 
-What you can do with it right now:
+1. **Node definitions (FT)**
+   - `node ValueNoise { ... }`
+   - `fn eval(ctx)` entrypoint
+2. **Graph files (TOML)**
+   - `[Type.alias]` instances
+   - explicit port references like `"ValueNoise.main:field"`
+3. **Render selection**
+   - top-level `[render]` chooses exact source/target
+4. **Renderer**
+   - `height/grayscale`
+   - `scene/raytrace`
 
-- author `.ft` scene files in `Forge`
-- build scenes from primitives, CSG operations, and custom SDFs
-- light scenes with point lights and environment lights
-- write materials with built-in backends like `Lambert`, `Metal`, and `Dielectric`
-- tune renderer behavior through `RenderSettings`
-- override material behavior with Forge-side hooks such as `color`, `roughness`, `ior`, `medium`, `eval`, `pdf`, and `sample`
-- share materials, objects, scenes, and helper functions through imports, exports, and the built-in library
+## Current Focus
 
-Where it is heading:
+- fast point-node evaluation
+- field/filter execution for terrain shaping (erosion, slope, etc.)
+- terrain raymarch correctness and speed
+- material-node contract for shell/detail workflows
 
-- a clearer semantic asset layer for reusable materials, objects, and scenes
-- an AI-facing scene interface built on top of Forge and the asset library
-- richer programmable materials and geometry logic in Forge
-- more reusable module and library structure
-- a VM/JIT path for hot shading and procedural evaluation code
+## Documentation Map
+
+- **CLI**: current command-line workflow
+- **Language**: FT node authoring model
+- **Renderer**: heightfield + Whitted terrain model
+- **Materials**: material-lane semantics and usage
+- **Math**: scalar/vector/noise helpers
+
+## Legacy Note
+
+Some older docs/examples describe the previous SDF-scene-centric architecture.  
+Treat those as historical context unless explicitly referenced.

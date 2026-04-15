@@ -3,17 +3,25 @@ version = 1
 [render]
 stage = "scene"
 target = "raytrace"
-source = "ValueNoise.main:field"
+source = "ErosionField.main:field"
 material = "Material.main:material"
 width = 800
 height = 450
 
-[ValueNoise.main]
-scale = 3.0
-octaves = 6.0
+[ValueNoise.base]
+scale = 3.2
+octaves = 7.0
 lacunarity = 2.0
 persistence = 0.5
-pos = [30, 213]
+
+[ErosionField.main]
+input = "ValueNoise.base:field"
+step = 0.0035
+strength = 0.33
+ridge_boost = 0.38
+valley_carve = 0.42
+detail_preserve = 1.35
+base_mix = 0.45
 
 [Material.main]
 displacement = "SphereFbm.main:field"
@@ -23,16 +31,15 @@ metallic = 0.0
 coat = 0.08
 coat_roughness = 0.14
 transparency = 0.0
-max_extend = 0.85
 
 [SphereFbm.main]
-scale = 50.0
+scale = 12.0
 detail = 0.70
-warp = 0.41
+warp = 0.42
 
 [camera]
-origin = [0.5, 0.55, -0.3]
-target = [0.5, 0.15, 0.5]
+origin = [0.5, 0.62, -0.28]
+target = [0.5, 0.2, 0.5]
 fov_y = 55.0
 
 [sun]

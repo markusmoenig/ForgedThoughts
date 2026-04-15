@@ -47,6 +47,14 @@ struct Cli {
     /// Increase log output (-v, -vv)
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
+
+    /// Render material lanes on a close-up preview sphere (Substance-style debug view)
+    #[arg(long)]
+    material_preview: bool,
+
+    /// Material debug visualization mode: off, mask, lanes
+    #[arg(long, value_parser = ["off", "mask", "lanes"])]
+    material_debug: Option<String>,
 }
 
 fn init_logging(verbose: u8) {
@@ -160,6 +168,8 @@ fn render_graph_once(graph_path: &Path, cli: &Cli) -> ExitCode {
                 &graph.sun,
                 &graph.sky,
                 &graph.scene,
+                cli.material_preview,
+                cli.material_debug.as_deref(),
                 width,
                 height,
                 tile_size,
@@ -245,6 +255,8 @@ fn render_terrain(
     sun: &GraphSun,
     sky: &GraphSky,
     scene: &GraphSceneSettings,
+    material_preview: bool,
+    material_debug: Option<&str>,
     width: u32,
     height: u32,
     tile_size: u32,
@@ -266,6 +278,8 @@ fn render_terrain(
         sun,
         sky,
         scene,
+        material_preview,
+        material_debug,
         |step, img| {
             progress.set_position(u64::from(step.tiles_done));
             progress.set_message(format!("{} ms", step.elapsed_ms));

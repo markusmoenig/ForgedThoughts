@@ -1,0 +1,31 @@
+import "Constant";
+
+node Material {
+    name: "Material";
+    description: "Material placeholder node that bundles displacement and shading params.";
+    tags: ["material", "bundle", "terrain"];
+    params: [
+        { name: "base_color", type: "point_scalar", default: "#c8b48a" },
+        { name: "max_extend", type: "point_scalar", default: 0.25 },
+        { name: "roughness", type: "point_scalar", default: 0.7 },
+        { name: "metallic", type: "point_scalar", default: 0.0 },
+        { name: "coat", type: "point_scalar", default: 0.0 },
+        { name: "coat_roughness", type: "point_scalar", default: 0.0 },
+        { name: "transparency", type: "point_scalar", default: 0.0 }
+    ];
+    inputs: [
+        { name: "displacement", type: "point_scalar" }
+    ];
+    outputs: [
+        { name: "material", type: "material" }
+    ];
+
+    let displacement = Constant {};
+    let base_color = "#c8b48a";
+    let max_extend = 0.25;
+    let roughness = 0.7;
+    let metallic = 0.0;
+    let coat = 0.0;
+    let coat_roughness = 0.0;
+    let transparency = 0.0;
+};

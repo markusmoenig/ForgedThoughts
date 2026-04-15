@@ -21,6 +21,7 @@ pub use eval::{
     Binding, EvalError, EvalState, FunctionValue, ObjectValue, Value,
     compile_specialized_height_node_eval_field_ir_function,
     compile_specialized_height_node_eval_function,
+    compile_specialized_shell_node_eval_function,
     eval_environment_function,
     eval_function_value, eval_material_function, eval_material_function_with_overrides,
     eval_material_properties, eval_material_properties_with_overrides, eval_node_function,
@@ -79,6 +80,30 @@ const BUILTIN_LIBRARY: &[BuiltinLibraryItem] = &[
         description: "Fractal Brownian Motion over 2D value noise. Outputs a float in [0, 1].",
         tags: &["noise", "fbm", "heightmap", "procedural"],
         source: include_str!("../library/noise/value_noise.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Noise,
+        name: "SphereFbm",
+        path: "noise/sphere_fbm.ft",
+        description: "Continuous 3D sphere-lattice FBM field.",
+        tags: &["noise", "3d", "fbm", "terrain"],
+        source: include_str!("../library/noise/sphere_fbm.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Material,
+        name: "Material",
+        path: "material/material.ft",
+        description: "Material placeholder node that bundles displacement and shading parameters.",
+        tags: &["material", "bundle", "terrain"],
+        source: include_str!("../library/material/material.ft"),
+    },
+    BuiltinLibraryItem {
+        category: BuiltinLibraryCategory::Material,
+        name: "MaterialBlend",
+        path: "material/material_blend.ft",
+        description: "Blends two material objects by a scalar mask.",
+        tags: &["material", "blend", "layer", "terrain"],
+        source: include_str!("../library/material/material_blend.ft"),
     },
     BuiltinLibraryItem {
         category: BuiltinLibraryCategory::Operator,
@@ -2097,13 +2122,13 @@ mod tests {
     #[test]
     fn parses_environment_statement() {
         let program = parse_program(
-            r#"
+            r##"
             environment Sky {
               fn color(dir) {
                 return vec3(0.1, 0.2, 0.3);
               }
             };
-            "#,
+            "##,
         )
         .expect("parse should work");
         assert!(matches!(
@@ -2456,7 +2481,7 @@ mod tests {
         fs::create_dir_all(&dir).expect("temp dir should exist");
         fs::write(
             dir.join("simple.toml"),
-            r#"
+            r##"
             version = 1
 
             [render]
@@ -2469,7 +2494,7 @@ mod tests {
             octaves = 4.0
             lacunarity = 2.0
             persistence = 0.5
-            "#,
+            "##,
         )
         .expect("graph should write");
 
@@ -2477,6 +2502,138 @@ mod tests {
             .expect("graph toml should evaluate");
         assert!(state.node_defs.contains_key("ValueNoise"));
         assert!(state.bindings.contains_key("graph"));
+    }
+
+    #[test]
+    fn loads_graph_toml_with_material_root_binding() {
+        let dir = temp_test_dir("graph_toml_material_root");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r##"
+            version = 1
+
+            [render]
+            stage = "scene"
+            target = "raytrace"
+            source = "ValueNoise.height:field"
+            material = "Material.main:material"
+
+            [ValueNoise.height]
+            scale = 2.0
+            octaves = 4.0
+            lacunarity = 2.0
+            persistence = 0.5
+
+            [Material.main]
+            displacement = "ValueNoise.material_seed:field"
+            base_color = "#8f7a5a"
+
+            [ValueNoise.material_seed]
+            scale = 8.0
+            octaves = 3.0
+            lacunarity = 2.0
+            persistence = 0.5
+            "##,
+        )
+        .expect("graph should write");
+
+        let state =
+            load_and_eval_scene(&dir.join("simple.toml")).expect("graph toml should evaluate");
+        assert!(state.bindings.contains_key("graph"));
+        assert!(
+            state.bindings.contains_key("graph_material"),
+            "render.material should lower to graph_material binding"
+        );
+    }
+
+    #[test]
+    fn loads_graph_toml_with_material_blend_root_binding() {
+        let dir = temp_test_dir("graph_toml_material_blend_root");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r##"
+            version = 1
+
+            [render]
+            stage = "scene"
+            target = "raytrace"
+            source = "ValueNoise.height:field"
+            material = "MaterialBlend.mix:material"
+
+            [ValueNoise.height]
+            scale = 2.0
+            octaves = 4.0
+            lacunarity = 2.0
+            persistence = 0.5
+
+            [ValueNoise.mask]
+            scale = 7.0
+            octaves = 3.0
+            lacunarity = 2.0
+            persistence = 0.5
+
+            [Material.a]
+            displacement = "ValueNoise.mask:field"
+            base_color = "#8f7a5a"
+            roughness = 0.65
+
+            [Material.b]
+            displacement = "ValueNoise.height:field"
+            base_color = "#50634a"
+            roughness = 0.92
+
+            [MaterialBlend.mix]
+            a = "Material.a:material"
+            b = "Material.b:material"
+            mask = "ValueNoise.mask:field"
+            "##,
+        )
+        .expect("graph should write");
+
+        let state =
+            load_and_eval_scene(&dir.join("simple.toml")).expect("graph toml should evaluate");
+        let binding = state
+            .bindings
+            .get("graph_material")
+            .expect("graph material binding should exist");
+        let Value::Object(obj) = &binding.value else {
+            panic!("graph material binding should be an object");
+        };
+        assert_eq!(obj.type_name.as_deref(), Some("MaterialBlend"));
+    }
+
+    #[test]
+    fn rejects_invalid_render_material_reference() {
+        let dir = temp_test_dir("graph_toml_invalid_material");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r#"
+            version = 1
+
+            [render]
+            stage = "scene"
+            target = "raytrace"
+            source = "ValueNoise.height:field"
+            material = "ValueNoise.missing:field"
+
+            [ValueNoise.height]
+            scale = 2.0
+            octaves = 4.0
+            lacunarity = 2.0
+            persistence = 0.5
+            "#,
+        )
+        .expect("graph should write");
+
+        let err = load_and_eval_scene(&dir.join("simple.toml"))
+            .expect_err("graph with bad material root should be rejected");
+        match err {
+            CoreError::Graph(message) => assert!(message.contains("render material")),
+            _ => panic!("expected graph render-material error"),
+        }
     }
 
     #[test]
@@ -2658,7 +2815,7 @@ mod tests {
         let err = load_and_eval_scene(&dir.join("simple.toml"))
             .expect_err("graph with bad input port should be rejected");
         match err {
-            CoreError::Graph(message) => assert!(message.contains("declared input port")),
+            CoreError::Graph(message) => assert!(message.contains("declared input/param")),
             _ => panic!("expected graph input-port error"),
         }
     }

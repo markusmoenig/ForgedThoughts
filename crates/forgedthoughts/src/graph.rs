@@ -12,6 +12,7 @@ use crate::{CoreError, builtin_library_item_metadata, builtin_library_items};
 pub enum GraphRenderSourceKind {
     PointScalar,
     FieldScalar,
+    Material,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,7 @@ pub struct GraphRenderConfig {
     pub stage: String,
     pub target: String,
     pub source: String,
+    pub material: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
 }
@@ -216,12 +218,27 @@ pub fn lower_graph_to_ft(graph: &GraphFile) -> Result<String, CoreError> {
 
     let mut imports = BTreeSet::new();
     let object_expr = lower_instance_to_ft(graph, &instance, &mut Vec::new(), &mut imports)?;
+    let material_binding = if let Some(material_ref) = &graph.render.material {
+        let (material_instance, _material_port) = parse_ref(material_ref)?;
+        let material_expr = lower_instance_to_ft(
+            graph,
+            &material_instance,
+            &mut Vec::new(),
+            &mut imports,
+        )?;
+        Some(material_expr)
+    } else {
+        None
+    };
     let mut out = String::new();
     for import in imports {
         out.push_str(&format!("import \"{import}\";\n"));
     }
     out.push_str("\n");
     out.push_str(&format!("let graph = {object_expr};\n"));
+    if let Some(material_expr) = material_binding {
+        out.push_str(&format!("let graph_material = {material_expr};\n"));
+    }
     Ok(out)
 }
 
@@ -233,6 +250,10 @@ fn parse_render(value: Option<&TomlValue>) -> Result<GraphRenderConfig, CoreErro
         stage: required_string(table, "stage", "render")?,
         target: required_string(table, "target", "render")?,
         source: required_string(table, "source", "render")?,
+        material: table
+            .get("material")
+            .and_then(TomlValue::as_str)
+            .map(ToString::to_string),
         width: optional_u32(table, "width"),
         height: optional_u32(table, "height"),
     })
@@ -366,6 +387,11 @@ fn validate_graph(
     nodes: &BTreeMap<String, GraphNodeInstance>,
 ) -> Result<(), CoreError> {
     let (render_instance, render_port) = parse_ref(&render.source)?;
+    let material_root = render
+        .material
+        .as_deref()
+        .map(parse_ref)
+        .transpose()?;
     validate_render_mode(render)?;
     let render_node = nodes.get(&render_instance).ok_or_else(|| {
         CoreError::Graph(format!(
@@ -391,6 +417,26 @@ fn validate_graph(
             )))
         }
     }
+    if let Some((material_instance, material_port)) = &material_root {
+        let material_node = nodes.get(material_instance).ok_or_else(|| {
+            CoreError::Graph(format!(
+                "render material references unknown node instance '{material_instance}'"
+            ))
+        })?;
+        let material_schema = node_schema(&material_node.node_type)?;
+        let material_port_ty = output_port_type(
+            &material_schema,
+            material_port,
+            &material_node.node_type,
+            "render material",
+        )?;
+        if material_port_ty != GraphRenderSourceKind::Material {
+            return Err(CoreError::Graph(format!(
+                "render material '{}' must reference a material output",
+                render.material.as_deref().unwrap_or_default()
+            )));
+        }
+    }
 
     for node in nodes.values() {
         let schema = node_schema(&node.node_type)?;
@@ -399,7 +445,6 @@ fn validate_graph(
                 continue;
             }
             if let GraphValue::Ref { instance, port } = value {
-                let input_ty = input_port_type(&schema, field, &node.node_type)?;
                 let source_node = nodes.get(instance).ok_or_else(|| {
                     CoreError::Graph(format!(
                         "field '{}.{}' references unknown node instance '{instance}'",
@@ -413,10 +458,17 @@ fn validate_graph(
                     &source_node.node_type,
                     &format!("field '{}.{}'", node.node_type, field),
                 )?;
-                if input_ty != output_ty {
+                if let Some(input_ty) = schema.inputs.get(field).copied() {
+                    if input_ty != output_ty {
+                        return Err(CoreError::Graph(format!(
+                            "field '{}.{}' expects a {:?} input but '{}:{}' is {:?}",
+                            node.node_type, field, input_ty, instance, port, output_ty
+                        )));
+                    }
+                } else if !is_param_field(&schema, field) {
                     return Err(CoreError::Graph(format!(
-                        "field '{}.{}' expects a {:?} input but '{}:{}' is {:?}",
-                        node.node_type, field, input_ty, instance, port, output_ty
+                        "field '{}.{}' is not a declared input/param for node type '{}'",
+                        node.node_type, field, node.node_type
                     )));
                 }
             } else if !is_param_field(&schema, field) {
@@ -431,6 +483,9 @@ fn validate_graph(
     let mut visiting = HashSet::new();
     let mut visited = HashSet::new();
     visit_graph(&render_instance, nodes, &mut visiting, &mut visited)?;
+    if let Some((material_instance, _)) = material_root {
+        visit_graph(&material_instance, nodes, &mut visiting, &mut visited)?;
+    }
 
     Ok(())
 }
@@ -489,7 +544,12 @@ fn lower_instance_to_ft(
         let ft_value = match value {
             GraphValue::Ref { instance, port: _ } => {
                 let schema = node_schema(&node.node_type)?;
-                let _ = input_port_type(&schema, name, &node.node_type)?;
+                if !schema.inputs.contains_key(name) && !is_param_field(&schema, name) {
+                    return Err(CoreError::Graph(format!(
+                        "field '{}.{}' is not a declared input/param for node type '{}'",
+                        node.node_type, name, node.node_type
+                    )));
+                }
                 lower_instance_to_ft(graph, instance, stack, imports)?
             }
             _ => graph_value_to_ft(value)?,
@@ -539,22 +599,6 @@ fn node_schema(node_type: &str) -> Result<GraphNodeSchema, CoreError> {
     })
 }
 
-fn input_port_type(
-    schema: &GraphNodeSchema,
-    field: &str,
-    node_type: &str,
-) -> Result<GraphRenderSourceKind, CoreError> {
-    schema
-        .inputs
-        .get(field)
-        .copied()
-        .ok_or_else(|| {
-            CoreError::Graph(format!(
-                "field '{field}' is not a declared input port on node type '{node_type}'"
-            ))
-        })
-}
-
 fn output_port_type(
     schema: &GraphNodeSchema,
     field: &str,
@@ -584,6 +628,7 @@ fn parse_port_type(value: &str) -> Result<GraphRenderSourceKind, CoreError> {
     match value {
         "point_scalar" => Ok(GraphRenderSourceKind::PointScalar),
         "field_scalar" => Ok(GraphRenderSourceKind::FieldScalar),
+        "material" => Ok(GraphRenderSourceKind::Material),
         _ => Err(CoreError::Graph(format!(
             "unsupported graph port type '{value}'"
         ))),

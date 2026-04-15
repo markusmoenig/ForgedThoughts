@@ -1,0 +1,20 @@
+import "Constant";
+import "Material";
+
+node MaterialBlend {
+    name: "MaterialBlend";
+    description: "Blends two material objects by a scalar mask.";
+    tags: ["material", "blend", "layer", "terrain"];
+    inputs: [
+        { name: "a", type: "material" },
+        { name: "b", type: "material" },
+        { name: "mask", type: "point_scalar" }
+    ];
+    outputs: [
+        { name: "material", type: "material" }
+    ];
+
+    let a = Material {};
+    let b = Material {};
+    let mask = Constant { value: 0.5 };
+};

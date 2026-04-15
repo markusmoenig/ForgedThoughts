@@ -1,0 +1,37 @@
+node SphereFbm {
+    name: "SphereFbm";
+    description: "Continuous 3D sphere-lattice signed field for shell marching.";
+    tags: ["noise", "3d", "fbm", "terrain"];
+    params: [
+        { name: "scale", type: "point_scalar", default: 7.0 },
+        { name: "detail", type: "point_scalar", default: 0.55 },
+        { name: "warp", type: "point_scalar", default: 0.30 }
+    ];
+    outputs: [
+        { name: "field", type: "point_scalar" }
+    ];
+
+    let scale = 7.0;
+    let detail = 0.55;
+    let warp = 0.30;
+
+    fn eval(ctx) {
+        let p = vec3(ctx.pos3d.x * scale, ctx.pos3d.y * scale, ctx.pos3d.z * scale);
+        let octaves = 6.0;
+        let lacunarity = 2.0;
+        let threshold = 0.08;
+        let feather = 0.14;
+        let sphere_weight = 0.52;
+        let fbm_weight = 0.48;
+        let bias = 0.28;
+        let wx = fbm_3d(vec3(p.x + 13.1, p.y + 7.9, p.z + 5.7), 4.0, 1.0, 2.0) - 0.5;
+        let wy = fbm_3d(vec3(p.x + 3.4, p.y + 11.3, p.z + 17.2), 4.0, 1.0, 2.0) - 0.5;
+        let wz = fbm_3d(vec3(p.x + 19.7, p.y + 2.2, p.z + 9.1), 4.0, 1.0, 2.0) - 0.5;
+        let pw = vec3(p.x + wx * warp, p.y + wy * warp, p.z + wz * warp);
+        let d_sphere = sphere_lattice_3d(pw) / max(scale, 0.0001);
+        let n_fbm = fbm_3d(vec3(p.x * 0.7, p.y * 0.7, p.z * 0.7), octaves, 1.0, lacunarity) - 0.5;
+        let iso_offset = (threshold + bias + n_fbm * feather * detail * fbm_weight + sphere_weight * 0.25 * detail)
+            / max(scale, 0.0001);
+        return d_sphere - iso_offset;
+    }
+};

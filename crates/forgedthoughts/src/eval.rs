@@ -15,10 +15,13 @@ use crate::ast::{
 use crate::field_ir::{compile_field_ir_program, lower_body_to_field_ir};
 use crate::jit::{
     JitCapture, JitFunction, JitModifierDistanceFunction, JitSdfDistanceFunction,
-    JitSdfVec3Function, JitVec3Function, compile_jit_function, compile_material_vec3_function,
-    compile_modifier_distance_function, compile_sdf_distance_function, compile_sdf_vec3_function,
+    JitSdfVec3Function, JitVec3Function, compile_jit_function, compile_material_scalar_function,
+    compile_material_vec3_function, compile_modifier_distance_function,
+    compile_sdf_distance_function, compile_sdf_vec3_function,
 };
 use crate::vm::{VmFunction, VmInstruction, compile_function};
+
+const NODE_SPECIALIZE_MAX_DEPTH: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -2468,6 +2471,17 @@ fn eval_ident_call(name: &str, args: &[Value]) -> Result<Option<Value>, EvalErro
             };
             Value::Number(value_noise_3d([p[0] * scale, p[1] * scale, p[2] * scale]))
         }
+        "sphere_lattice_3d" => {
+            if args.len() != 1 {
+                return Err(EvalError::InvalidBuiltinArity {
+                    name: "sphere_lattice_3d",
+                    expected: 1,
+                    got: args.len(),
+                });
+            }
+            let p = as_vec3(&args[0]).ok_or(EvalError::BuiltinVec3Args("sphere_lattice_3d"))?;
+            Value::Number(sphere_lattice_3d([p[0], p[1], p[2]]))
+        }
         "fbm_3d" => {
             if args.len() < 2 || args.len() > 4 {
                 return Err(EvalError::UnsupportedCall);
@@ -2981,6 +2995,49 @@ pub fn compile_specialized_height_node_eval_function(
     compile_jit_function(&format!("node_height_{node_name}_eval"), &vm)
 }
 
+pub fn compile_specialized_shell_node_eval_function(
+    state: &EvalState,
+    node_name: &str,
+    overrides: Option<&ObjectValue>,
+) -> Option<JitFunction> {
+    if !jit_enabled() {
+        trace_jit_once("node-shell", node_name, "jit-disabled");
+        return None;
+    }
+    let specialized_body = match build_specialized_shell_node_eval_body(state, node_name, overrides)
+    {
+        Some(body) => body,
+        None => {
+            trace_jit_once("node-shell", node_name, "specialize-failed");
+            return None;
+        }
+    };
+    let params = vec![
+        "x".to_string(),
+        "y".to_string(),
+        "z".to_string(),
+        "nx".to_string(),
+        "ny".to_string(),
+        "nz".to_string(),
+        "vx".to_string(),
+        "vy".to_string(),
+        "vz".to_string(),
+    ];
+    let jit = match compile_material_scalar_function(
+        &format!("node_shell_{node_name}_eval"),
+        &params,
+        &specialized_body,
+    ) {
+        Some(jit) => jit,
+        None => {
+            trace_jit_once("node-shell", node_name, "jit-compile-failed");
+            return None;
+        }
+    };
+    trace_jit_once("node-shell", node_name, "jit");
+    Some(jit)
+}
+
 pub fn compile_specialized_height_node_eval_field_ir_function(
     state: &EvalState,
     node_name: &str,
@@ -3044,8 +3101,122 @@ fn build_specialized_height_node_eval_body(
     specialize_node_stmts(state, &body, &mut env, &helpers, 0)
 }
 
+fn build_specialized_shell_node_eval_body(
+    state: &EvalState,
+    node_name: &str,
+    overrides: Option<&ObjectValue>,
+) -> Option<Vec<MaterialFunctionStatement>> {
+    let def = state.node_defs.get(node_name)?;
+    let (_params, body) = def.statements.iter().find_map(|stmt| match stmt {
+        MaterialStatement::Function {
+            name,
+            params,
+            body,
+        } if name == "eval" && params.len() == 1 => Some((params.clone(), body.clone())),
+        _ => None,
+    })?;
+
+    let mut const_values = HashMap::new();
+    let mut const_exprs = HashMap::new();
+    for stmt in &def.statements {
+        if let MaterialStatement::Binding { name, expr } = stmt {
+            let value = if let Some(v) = overrides.and_then(|o| o.fields.get(name)) {
+                v.clone()
+            } else {
+                eval_expr_in_node_scope(expr, state, &const_values, def, overrides, 0).ok()?
+            };
+            const_exprs.insert(name.clone(), value_to_const_expr(&value)?);
+            const_values.insert(name.clone(), value);
+        }
+    }
+
+    let mut helpers = HashMap::new();
+    for stmt in &def.statements {
+        if let MaterialStatement::Function {
+            name,
+            params,
+            body,
+        } = stmt
+        {
+            helpers.insert(name.clone(), (params.clone(), body.clone()));
+        }
+    }
+
+    let mut env = HashMap::new();
+    env.insert("x".to_string(), Expr::Ident("x".to_string()));
+    env.insert("y".to_string(), Expr::Ident("y".to_string()));
+    env.insert("z".to_string(), Expr::Ident("z".to_string()));
+    env.insert("nx".to_string(), Expr::Ident("nx".to_string()));
+    env.insert("ny".to_string(), Expr::Ident("ny".to_string()));
+    env.insert("nz".to_string(), Expr::Ident("nz".to_string()));
+    env.insert("vx".to_string(), Expr::Ident("vx".to_string()));
+    env.insert("vy".to_string(), Expr::Ident("vy".to_string()));
+    env.insert("vz".to_string(), Expr::Ident("vz".to_string()));
+    env.insert("ctx".to_string(), shell_context_expr());
+    env.extend(const_exprs);
+
+    specialize_node_stmts(state, &body, &mut env, &helpers, 0)
+}
+
 fn height_context_expr() -> Expr {
     height_context_expr_with(&Expr::Ident("x".to_string()), &Expr::Ident("z".to_string()))
+}
+
+fn shell_context_expr() -> Expr {
+    Expr::ObjectLiteral {
+        type_name: "NodeContext".to_string(),
+        fields: vec![
+            ("stage".to_string(), Expr::String("shell".to_string())),
+            (
+                "pos2d".to_string(),
+                Expr::ObjectLiteral {
+                    type_name: "vec3".to_string(),
+                    fields: vec![
+                        ("x".to_string(), Expr::Ident("x".to_string())),
+                        ("y".to_string(), Expr::Number(0.0)),
+                        ("z".to_string(), Expr::Ident("z".to_string())),
+                    ],
+                },
+            ),
+            (
+                "pos3d".to_string(),
+                Expr::ObjectLiteral {
+                    type_name: "vec3".to_string(),
+                    fields: vec![
+                        ("x".to_string(), Expr::Ident("x".to_string())),
+                        ("y".to_string(), Expr::Ident("y".to_string())),
+                        ("z".to_string(), Expr::Ident("z".to_string())),
+                    ],
+                },
+            ),
+            (
+                "normal".to_string(),
+                Expr::ObjectLiteral {
+                    type_name: "vec3".to_string(),
+                    fields: vec![
+                        ("x".to_string(), Expr::Ident("nx".to_string())),
+                        ("y".to_string(), Expr::Ident("ny".to_string())),
+                        ("z".to_string(), Expr::Ident("nz".to_string())),
+                    ],
+                },
+            ),
+            (
+                "view_dir".to_string(),
+                Expr::ObjectLiteral {
+                    type_name: "vec3".to_string(),
+                    fields: vec![
+                        ("x".to_string(), Expr::Ident("vx".to_string())),
+                        ("y".to_string(), Expr::Ident("vy".to_string())),
+                        ("z".to_string(), Expr::Ident("vz".to_string())),
+                    ],
+                },
+            ),
+            ("height".to_string(), Expr::Number(0.0)),
+            ("slope".to_string(), Expr::Number(0.0)),
+            ("mask".to_string(), Expr::Number(0.0)),
+            ("value".to_string(), Expr::Number(0.0)),
+        ],
+    }
 }
 
 fn height_context_expr_with(x: &Expr, z: &Expr) -> Expr {
@@ -3100,7 +3271,7 @@ fn specialize_node_stmts(
     helpers: &HashMap<String, (Vec<String>, Vec<MaterialFunctionStatement>)>,
     depth: usize,
 ) -> Option<Vec<MaterialFunctionStatement>> {
-    if depth >= 32 {
+    if depth >= NODE_SPECIALIZE_MAX_DEPTH {
         return None;
     }
     let mut out = Vec::new();
@@ -3149,7 +3320,7 @@ fn specialize_node_expr(
     helpers: &HashMap<String, (Vec<String>, Vec<MaterialFunctionStatement>)>,
     depth: usize,
 ) -> Option<Expr> {
-    if depth >= 32 {
+    if depth >= NODE_SPECIALIZE_MAX_DEPTH {
         return None;
     }
     match expr {
@@ -3213,7 +3384,15 @@ fn specialize_node_expr(
             if let Expr::Ident(name) = callee.as_ref()
                 && let Some((params, body)) = helpers.get(name)
             {
-                return inline_node_helper_expr(state, params, body, &args, helpers, depth + 1);
+                return inline_node_helper_expr(
+                    state,
+                    env,
+                    params,
+                    body,
+                    &args,
+                    helpers,
+                    depth + 1,
+                );
             }
             if let Expr::Member { target, field } = callee.as_ref() {
                 let target = specialize_node_expr(state, target, env, helpers, depth + 1)?;
@@ -3256,16 +3435,17 @@ fn resolve_specialized_node_object(
 
 fn inline_node_helper_expr(
     state: &EvalState,
+    parent_env: &HashMap<String, Expr>,
     params: &[String],
     body: &[MaterialFunctionStatement],
     args: &[Expr],
     helpers: &HashMap<String, (Vec<String>, Vec<MaterialFunctionStatement>)>,
     depth: usize,
 ) -> Option<Expr> {
-    if depth >= 32 || params.len() != args.len() {
+    if depth >= NODE_SPECIALIZE_MAX_DEPTH || params.len() != args.len() {
         return None;
     }
-    let mut env = HashMap::new();
+    let mut env = parent_env.clone();
     for (param, arg) in params.iter().zip(args.iter()) {
         env.insert(param.clone(), arg.clone());
     }
@@ -3280,7 +3460,7 @@ fn inline_node_member_expr(
     args: &[Expr],
     depth: usize,
 ) -> Option<Expr> {
-    if depth >= 32 {
+    if depth >= NODE_SPECIALIZE_MAX_DEPTH {
         return None;
     }
     let def = state.node_defs.get(node_name)?;
@@ -3328,7 +3508,7 @@ fn specialize_node_inline_body(
     helpers: &HashMap<String, (Vec<String>, Vec<MaterialFunctionStatement>)>,
     depth: usize,
 ) -> Option<Expr> {
-    if depth >= 32 {
+    if depth >= NODE_SPECIALIZE_MAX_DEPTH {
         return None;
     }
     for stmt in body {
@@ -5306,6 +5486,43 @@ fn value_noise_3d(p: [f32; 3]) -> f32 {
     let nxy0 = lerp64(nx00, nx10, u[1]);
     let nxy1 = lerp64(nx01, nx11, u[1]);
     lerp64(nxy0, nxy1, u[2]) * 2.0 - 1.0
+}
+
+fn sphere_lattice_3d(p: [f32; 3]) -> f32 {
+    fn hash3(x: f32, y: f32, z: f32) -> f32 {
+        let n = (x * 127.1 + y * 311.7 + z * 74.7).sin() * 43758.5453;
+        n - n.floor()
+    }
+
+    fn sph(ix: f32, iy: f32, iz: f32, fx: f32, fy: f32, fz: f32, cx: f32, cy: f32, cz: f32) -> f32 {
+        let gx = ix + cx;
+        let gy = iy + cy;
+        let gz = iz + cz;
+        let jx = (hash3(gx + 1.7, gy + 9.2, gz + 5.4) - 0.5) * 0.6;
+        let jy = (hash3(gx + 3.1, gy + 2.8, gz + 7.7) - 0.5) * 0.6;
+        let jz = (hash3(gx + 4.6, gy + 6.3, gz + 1.9) - 0.5) * 0.6;
+        let r = 0.12 + 0.45 * hash3(gx + 0.3, gy + 0.7, gz + 0.9);
+        let dx = fx - cx - jx;
+        let dy = fy - cy - jy;
+        let dz = fz - cz - jz;
+        (dx * dx + dy * dy + dz * dz).sqrt() - r
+    }
+
+    let ix = p[0].floor();
+    let iy = p[1].floor();
+    let iz = p[2].floor();
+    let fx = p[0] - ix;
+    let fy = p[1] - iy;
+    let fz = p[2] - iz;
+    let d000 = sph(ix, iy, iz, fx, fy, fz, 0.0, 0.0, 0.0);
+    let d001 = sph(ix, iy, iz, fx, fy, fz, 0.0, 0.0, 1.0);
+    let d010 = sph(ix, iy, iz, fx, fy, fz, 0.0, 1.0, 0.0);
+    let d011 = sph(ix, iy, iz, fx, fy, fz, 0.0, 1.0, 1.0);
+    let d100 = sph(ix, iy, iz, fx, fy, fz, 1.0, 0.0, 0.0);
+    let d101 = sph(ix, iy, iz, fx, fy, fz, 1.0, 0.0, 1.0);
+    let d110 = sph(ix, iy, iz, fx, fy, fz, 1.0, 1.0, 0.0);
+    let d111 = sph(ix, iy, iz, fx, fy, fz, 1.0, 1.0, 1.0);
+    d000.min(d001).min(d010.min(d011)).min(d100.min(d101).min(d110.min(d111)))
 }
 
 fn fbm_3d(p: [f32; 3], octaves: u32, scale: f32, lacunarity: f32) -> f32 {

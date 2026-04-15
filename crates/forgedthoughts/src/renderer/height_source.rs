@@ -69,6 +69,7 @@ impl<'a> HeightSampler<'a> {
             GraphRenderSourceKind::FieldScalar => {
                 self.sample_field_scalar_node(node_name, graph_obj, x, z)
             }
+            GraphRenderSourceKind::Material => None,
         }
     }
 

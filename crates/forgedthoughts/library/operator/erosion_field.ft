@@ -11,7 +11,9 @@ node ErosionField {
         { name: "step", type: "point_scalar", default: 0.01 },
         { name: "strength", type: "point_scalar", default: 0.55 },
         { name: "ridge_boost", type: "point_scalar", default: 0.28 },
-        { name: "valley_carve", type: "point_scalar", default: 0.9 }
+        { name: "valley_carve", type: "point_scalar", default: 0.9 },
+        { name: "detail_preserve", type: "point_scalar", default: 0.5 },
+        { name: "base_mix", type: "point_scalar", default: 0.25 }
     ];
     outputs: [
         { name: "field", type: "field_scalar" }
@@ -22,6 +24,8 @@ node ErosionField {
     let strength = 0.55;
     let ridge_boost = 0.28;
     let valley_carve = 0.9;
+    let detail_preserve = 0.5;
+    let base_mix = 0.25;
 
     fn sample_height(x, z) {
         return sample(input, x, z);
@@ -93,7 +97,12 @@ node ErosionField {
             - valley * valley_carve * strength * (0.7 + relief * 2.0)
             - ridge * strength * 0.22;
         let restored = ridge * ridge_boost * (0.6 + relief * 1.6);
+        let eroded = carved + restored;
+        // Preserve high-frequency residual detail from the source while keeping macro erosion.
+        let micro = h0 - average8(x, z, r1);
+        let detail = micro * detail_preserve * (0.5 + relief * 0.5);
 
-        return clamp(carved + restored, 0.0, 1.0);
+        let enriched = clamp(eroded + detail, 0.0, 1.0);
+        return mix(enriched, h0, clamp(base_mix, 0.0, 1.0));
     }
 };

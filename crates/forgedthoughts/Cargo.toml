@@ -14,3 +14,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 rayon = "1.10"
 toml = "0.8"
 thiserror = "1.0"
+wgpu = "0.20"
+pollster = "0.3"
+bytemuck = { version = "1.16", features = ["derive"] }

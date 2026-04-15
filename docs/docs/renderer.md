@@ -1,79 +1,55 @@
 ---
 sidebar_position: 4
-title: Overview
+title: Renderer
 ---
 
 # Renderer Overview
 
-ForgedThoughts is built around a CPU-first SDF renderer. The main production path today is `trace`, a classical Whitted-style recursive renderer tuned for fast iteration on signed distance field scenes.
+The renderer is now terrain/graph oriented.
 
-## Why Whitted
+Two active outputs:
 
-The project deliberately prioritizes:
+- `height/grayscale`
+- `scene/raytrace` (Whitted terrain raymarch)
 
-- fast feedback while modeling
-- predictable render cost on the CPU
-- clear reflections and refractions for SDF scenes
-- practical lookdev over slow global-illumination convergence
+## Terrain Raytrace Pipeline
 
-That is why the current renderer is not centered on a path tracer. For this project, a CPU path tracer quickly becomes too slow and too noisy to be the default tool.
+1. Load/evaluate TOML graph root
+2. Sample graph height source (point or field)
+3. Raymarch terrain heightfield
+4. Compute normals/shadows/reflections
+5. Shade with Whitted-style lighting model
 
-## Current Render Paths
+## Field Execution
 
-- `trace`
-  The main renderer. It handles direct lighting, recursive reflection, recursive transmission, medium attenuation, soft-shadow-capable sphere lights, environment backgrounds, and debug AOVs.
+Field graphs can run through:
 
-- `depth`
-  A fast grayscale depth preview for quick shape iteration and scene inspection.
+- CPU field path
+- `wgpu` field backend (generic AST-based translation)
 
-## Current Trace Features
+Current terrain path can consume GPU-rasterized field output for faster height sampling.
 
-- Whitted-style recursive reflections
-- dielectric transmission and refraction
-- rough dielectric approximation with deterministic multi-sample branching
-- Beer-Lambert medium attenuation
-- smooth-boolean shading/material blending
-- point lights
-- sphere lights for softer shadows
-- environment lights and procedural environment backgrounds
-- debug AOVs such as depth, normal, material id, IOR, transmission, Fresnel, and hit distance
+## Material Direction
 
-## Acceleration
+Terrain height is the macro carrier.
 
-The renderer currently supports three scene acceleration modes:
+Material graphs are expected to provide:
 
-- `Naive`
-  Direct scene evaluation with no extra acceleration structure. This is simple and still useful for very small scenes or debugging.
+- PBR/Whitted lanes (`roughness`, `metallic`, `coat`, `transparency`, etc.)
+- optional shell/displacement detail on top of terrain hit
 
-- `Bvh`
-  A hierarchy over lowered scene leaves. This is currently the default fallback when no CLI or `RenderSettings.accel` override is provided.
+This keeps macro terrain fast and moves micro detail power into material nodes.
 
-- `Bricks`
-  A uniform 3D grid accelerator over lowered scene leaves.
+## Known Tradeoff
 
-In practice, the best mode depends on scene structure. CLI `--accel` still overrides `RenderSettings.accel` when both are provided.
+When a field source is rasterized, it is band-limited by raster resolution.
 
-## Forge Runtime
+Mitigation strategies:
 
-Forge is JIT-accelerated where it matters most for rendering, especially for hot custom SDF code and supported material hooks.
+- higher/adaptive field raster resolution
+- hybrid macro field + live micro residual
+- shell detail in material stage
 
-That lets performance-sensitive assets stay in Forge instead of forcing every useful object or material into native Rust just to get acceptable render speed.
+## Validation Helpers
 
-## Important Tradeoffs
-
-- `trace` is not a full global-illumination renderer
-- rough glass is approximate and budgeted to stay practical on the CPU
-- some material behavior is still renderer-specific rather than fully generic
-- renderer correctness is improving incrementally, but speed remains a core design constraint
-
-## Direction
-
-The renderer direction is incremental improvement of `trace`, not replacing it with a slow unbiased architecture.
-
-Near-term goals:
-
-- better dielectric quality
-- better light types and softer shadow control
-- stronger environment lighting and reflections
-- more GI-like features where they fit the CPU/Whitted model
-- continued regression coverage for stable scenes
+`FORGEDTHOUGHTS_REQUIRE_GPU_FIELD=1` can be used to force field graphs to fail if GPU backend translation is unavailable, avoiding silent CPU fallback during backend work.

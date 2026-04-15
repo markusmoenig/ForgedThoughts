@@ -1,20 +1,18 @@
 # ForgedThoughts
 
-ForgedThoughts is a Rust workspace for FT-defined nodes, TOML graph files, and a CPU graph renderer.
+ForgedThoughts is a Rust workspace for terrain-first node graphs:
 
-Current state:
+- FT node definitions (`node ... { fn eval(ctx) { ... } }`)
+- TOML graph instancing/wiring (`[Type.alias]`)
+- Height/field rendering and Whitted terrain raymarching
 
-- FT parser, evaluator, and node loading
-- TOML graph loading with explicit `[render]` output selection
-- `eval(ctx)` node API with a fixed `HeightContext` subset
-- JIT-specialized point-node evaluation for fast height previews
-- Graph rendering from TOML to grayscale PNG
+The current primary authoring path is **TOML graphs + FT nodes**.
 
 ## Workspace
 
-- `crates/forgedthoughts`: core language + renderer library
+- `crates/forgedthoughts`: language, graph loader, evaluator, render backends
 - `crates/ftc`: CLI frontend
-- `examples/`: sample `.ft` scenes and their rendered `.png` outputs
+- `examples/`: graph examples and rendered outputs
 
 ## Quickstart
 
@@ -30,311 +28,70 @@ Render a graph:
 ftc examples/simple_noise.toml
 ```
 
-Render to a custom output:
+Render terrain with erosion:
 
 ```bash
-ftc examples/simple_noise.toml --output out/simple_noise.png
+ftc examples/terrain_erosion.toml
 ```
 
-Render at a larger resolution:
+Render to custom output/resolution:
 
 ```bash
-ftc examples/simple_noise.toml --width 1024 --height 1024
+ftc examples/terrain_erosion.toml --output out/terrain.png --width 1280 --height 720
 ```
 
-Watch and rerender on save:
+Watch and rerender:
 
 ```bash
-ftc examples/simple_noise.toml --watch
+ftc examples/terrain_erosion.toml --watch
 ```
 
-Outputs default to the graph path with `.png` extension, so `examples/simple_noise.toml` renders to `examples/simple_noise.png`.
+## Current Architecture
 
-## Renderer
+1. FT defines reusable node behavior.
+2. TOML graph files instantiate and connect nodes.
+3. `[render]` selects an exact graph source and target.
+4. Terrain raymarch uses graph-driven height/field outputs.
 
-- CPU graph renderer for point-evaluated nodes
-- Progressive tiled updates
-- Fixed `eval(ctx)` node entrypoint
-- Current fast path targets height-stage grayscale preview rendering
+Current render targets:
 
-## Language Snapshot
+- `height/grayscale`
+- `scene/raytrace`
 
-Forge is object-like, incremental, and scriptable:
+## Performance Model
 
-```forge
-var sphere = Sphere {
-  radius: 1.0
-};
-sphere.pos.y = 0.3;
+- Point nodes: JIT-specialized scalar sampling
+- Field nodes: pass-style execution (CPU path + `wgpu` field backend)
+- Terrain path: Whitted raymarch over graph-provided height source
 
-let mat = Dielectric {
-  color: #f5fcff,
-  ior: 1.52,
-  roughness: 0.02,
-  thin_walled: 0.0
-};
+## Material Direction
 
-sphere.material = mat;
-let scene = sphere;
-```
+Material nodes are the main detail layer on top of macro terrain.
 
-Semantic assets can also expose part-oriented material assignment:
+The intended pipeline:
 
-```forge
-var table = Table {
-  width: 1.7,
-  depth: 0.9,
-  height: 0.78
-};
-
-table.top.material = Lambert { color: #7a4c35 };
-table.legs.material = Metal { color: #2b3138, roughness: 0.22 };
-
-var vase = Sphere { radius: 0.18 }
-  .attach(table.top, Top);
-
-var lamp = Lamp {}
-  .attach(cupboard.body, Top, Bottom)
-  .face_to(table.top);
-
-let rib = Box { size: vec3(0.2, 1.0, 0.4) };
-let columns = rib.repeat_x(0.6, 5.0);
-let mirrored = columns.mirror_z();
-let clipped = mirrored.slice_y(-0.4, 0.4);
-```
-
-Supported language pieces today include:
-
-- top-level functions
-- top-level imports
-- top-level exports
-- `let` / `var`
-- nested property assignment like `pos.x` and `rot.z`
-- object literals
-- scalar and `vec3` math
-- hex color literals like `#ff0000` and `#f00`
-- material definitions with local bindings and functions
-- environment definitions with local bindings and functions
-- custom SDF definitions with programmable hooks like `distance(p)`, optional `domain(p)`, and optional `distance_post(d, p)`
-- hard booleans with `+`, `-`, and `&`
-- named `hg_sdf`-style boolean variants like `union_round`, `diff_chamfer`, and `intersect_stairs`
-
-Example Forge material:
-
-```forge
-material SoftGold {
-  model: Metal;
-  color = vec3(0.92, 0.78, 0.34);
-
-  fn eval(ctx) {
-    let ndotl = max(dot(ctx.normal, ctx.wi), 0.0);
-    return mix(vec3(0.08, 0.06, 0.03), color, ndotl) * (1.0 / 3.14159265);
-  }
-
-  fn pdf(ctx) {
-    return max(dot(ctx.normal, ctx.wi), 0.0) / 3.14159265;
-  }
-
-  fn sample(ctx) {
-    return BsdfSample {
-      wi: ctx.normal,
-      f: color * (1.0 / 3.14159265),
-      pdf: 1.0,
-      delta: 0.0,
-      apply_cos: 1.0,
-      transmission: 0.0,
-      thin_walled: 0.0,
-      next_ior: ctx.current_ior
-    };
-  }
-};
-```
-
-Example top-level helper functions:
-
-```forge
-fn accent() {
-  return #ebc757;
-}
-
-fn tint(base, amount) {
-  return mix(base, vec3(1.0), amount);
-}
-
-fn make_gold() {
-  return Metal {
-    color: tint(accent(), 0.12),
-    roughness: 0.18
-  };
-}
-```
+1. Heightfield hit + normal (macro geometry)
+2. Material evaluation at hit context
+3. Shell/displacement detail phase
+4. Whitted shading lanes (`albedo`, `roughness`, `metallic`, `coat`, `transparency`, etc.)
 
 See:
 
-- `examples/lambert.ft`
-- `examples/metal.ft`
-- `examples/glass.ft`
-- `examples/ft_sdf.ft`
-- `examples/imports.ft`
-- `examples/ft_material.ft`
-- `examples/ft_material_glass.ft`
-- `examples/ft_material_wax.ft`
-- `examples/ft_bsdf.ft`
+- [MaterialNodeContract.md](/Users/markusmoenig/ForgedThoughts/MaterialNodeContract.md)
+- [NodeContextDesign.md](/Users/markusmoenig/ForgedThoughts/NodeContextDesign.md)
+- [GraphDesign.md](/Users/markusmoenig/ForgedThoughts/GraphDesign.md)
 
-Example custom SDF:
+## Planned CLI Convenience
 
-```forge
-sdf SoftBlob {
-  let wave_scale = 0.16;
+The CLI is intentionally minimal today, but expected convenience features include:
 
-  fn bounds() {
-    return vec3(1.2, 1.2, 1.1);
-  }
+- list available built-in nodes
+- inspect node input/output ports
+- validate graph connections/types without rendering
+- render-source introspection for graph debugging
 
-  fn warp(p) {
-    return vec3(p.x, p.y + sin(p.x * 4.0) * wave_scale, p.z);
-  }
+## Legacy Note
 
-  fn distance(p) {
-    let q = warp(p);
-    return length(q) - 1.0;
-  }
-};
+Older SDF-scene-centric docs/examples are legacy context.
 
-let scene = SoftBlob {};
-```
-
-`fn bounds()` is optional, but it matters for performance. Without it, custom SDFs fall back to a very conservative bound and acceleration quality drops sharply.
-
-Custom SDFs can also use programmable modifier hooks:
-
-```forge
-sdf TwistStatue {
-  fn bounds() {
-    return vec3(0.4, 0.9, 0.4);
-  }
-
-  fn domain(p) {
-    return rotate_y(p, p.y * 18.0);
-  }
-
-  fn distance(p) {
-    return length(p) - 0.5;
-  }
-
-  fn distance_post(d, p) {
-    return abs(d + sin(p.y * 120.0) * 0.004) - 0.03;
-  }
-}
-```
-
-Ordinary objects can use the same idea directly:
-
-```forge
-var statue = Box { size: vec3(0.55, 1.5, 0.42) };
-
-statue.domain = fn(p) {
-  return rotate_y(p, p.y * 18.0);
-};
-
-statue.distance_post = fn(d, p) {
-  return abs(d + sin((p.y + 0.75) * 115.0) * 0.0045) - 0.028;
-};
-```
-
-Example procedural environment:
-
-```forge
-environment Sky {
-  let zenith = #4d74c7;
-  let horizon = #d8e7ff;
-
-  fn color(dir) {
-    let t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
-    return mix(horizon, zenith, t);
-  }
-};
-```
-
-`color(dir)` is used as the visible background on misses in the main renderer and in `depth`.
-
-## Imports
-
-Forge supports top-level imports:
-
-```forge
-import "./shared/materials.ft";
-import "Gold" as gold;
-import "SoftBlob" as blob;
-import "Studio";
-```
-
-Import rules:
-
-- `./...` and `../...` resolve relative to the current file on disk
-- `materials/...`, `objects/...`, and `scenes/...` resolve from the embedded built-in library
-- bare built-in names like `Glass`, `SoftBlob`, and `Studio` also resolve from the embedded built-in library
-- `as name` namespaces the imported top-level symbols under `name.`
-- each import is loaded only once
-- cyclic imports are rejected
-
-Files can also declare explicit exports:
-
-```forge
-let private_color = #ebc757;
-material Gold {
-  model: Metal;
-  color = private_color;
-  roughness = 0.18;
-};
-
-export { Gold };
-```
-
-## Material Model
-
-There are two layers right now:
-
-1. Built-in host BSDF backends: `Lambert`, `Metal`, `Dielectric`
-2. Forge-side overrides on top of those backends
-
-A Forge material can:
-
-- set static properties like `color = vec3(1.0)`
-- compute dynamic properties from hit context with `fn color(ctx) { ... }`
-- define custom `eval(ctx)`, `pdf(ctx)`, and `sample(ctx)` hooks
-
-Current hit/BSDF context includes values such as:
-
-- `ctx.position`
-- `ctx.local_position`
-- `ctx.normal`
-- `ctx.view_dir`
-- `ctx.wo`
-- `ctx.wi`
-- `ctx.current_ior`
-- `ctx.u1`, `ctx.u2`, `ctx.u3` for `sample(ctx)`
-
-## Current Limits
-
-- `subsurface` exists as material data, but true subsurface transport is not implemented yet
-- `medium` currently affects transmission through simple Beer-Lambert attenuation
-- Forge-defined `eval/pdf/sample` are currently most useful through the shared material system, but the renderer still has some backend-specific recursion logic
-- Forge material functions now use the VM/JIT path for the supported numeric and vec3 subset, with interpreter fallback for the rest
-
-## Development
-
-Run checks:
-
-```bash
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
-```
-
-## Direction
-
-The current direction is:
-
-- keep CPU rendering practical for complex SDF scenes
-- push Forge materials from parameter scripting toward self-contained shareable shading code
-- widen VM/JIT coverage and only then decide where a broader compiler path is worth the added complexity
+The active direction is terrain/node graph workflows, not expanding the old scene authoring architecture.

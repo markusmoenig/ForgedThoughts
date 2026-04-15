@@ -1,5 +1,6 @@
 use std::sync::mpsc;
 use std::time::Instant;
+use std::env;
 
 use image::{ImageError, RgbImage};
 use rayon::prelude::*;
@@ -10,6 +11,7 @@ use crate::{
 
 use super::{RenderError, RenderProgress};
 use super::height_source::HeightSampler;
+use super::wgpu_field::try_render_field_wgpu;
 
 #[derive(Debug, Clone, Copy)]
 pub struct NodeRenderSettings {
@@ -52,6 +54,11 @@ pub fn render_node_png<F>(
 where
     F: FnMut(RenderProgress, &RgbImage) -> Result<(), ImageError> + Send,
 {
+    let require_gpu_field = matches!(
+        env::var("FORGEDTHOUGHTS_REQUIRE_GPU_FIELD").ok().as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    );
+
     let graph_binding = state
         .bindings
         .get("graph")
@@ -61,6 +68,36 @@ where
         crate::Value::Object(obj) => obj.clone(),
         _ => return Err(RenderError::MissingGraph),
     };
+
+    let gpu_start = Instant::now();
+    if matches!(source_kind, GraphRenderSourceKind::FieldScalar) {
+        match try_render_field_wgpu(state, source_kind, &graph_obj, settings) {
+            Ok(Some(image)) => {
+                progress_cb(
+                    RenderProgress {
+                        tiles_done: 1,
+                        tiles_total: 1,
+                        elapsed_ms: gpu_start.elapsed().as_millis(),
+                    },
+                    &image,
+                )?;
+                return Ok(image);
+            }
+            Ok(None) => {
+                if require_gpu_field {
+                    return Err(RenderError::Backend(
+                        "GPU field backend was required but this graph could not be translated to GPU".to_string(),
+                    ));
+                }
+            }
+            Err(err) => {
+                if require_gpu_field {
+                    return Err(err);
+                }
+            }
+        }
+    }
+
     let sampler = HeightSampler::new(state, graph_obj.clone(), source_kind);
     let node_name = graph_obj
         .type_name

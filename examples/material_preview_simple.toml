@@ -1,0 +1,23 @@
+version = 1
+
+[render]
+stage = "scene"
+target = "raytrace"
+source = "Constant.height:field"
+material = "Material.main:material"
+width = 800
+height = 450
+
+[Constant.height]
+value = 0.5
+
+[Material.main]
+displacement = "SphereFbm.main:field"
+base_color = "#8a7456"
+max_extend = 0.85
+roughness = 0.48
+
+[SphereFbm.main]
+scale = 50.0
+detail = 0.85
+warp = 0.30

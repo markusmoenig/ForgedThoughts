@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::env;
 
 use cranelift_codegen::ir::{AbiParam, InstBuilder, types};
 use cranelift_codegen::isa::CallConv;
@@ -15,6 +16,13 @@ use crate::vm::{VmFunction, VmInstruction};
 
 type JitScalar = f32;
 const JIT_TYPE: types::Type = types::F32;
+
+fn jit_trace_enabled() -> bool {
+    matches!(
+        env::var("FORGEDTHOUGHTS_TRACE_JIT").ok().as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
+}
 
 fn jit_const(fb: &mut FunctionBuilder<'_>, value: f32) -> cranelift_codegen::ir::Value {
     fb.ins().f32const(value as JitScalar)
@@ -83,6 +91,158 @@ extern "C" fn forge_hole_line_x_sdf(
         spacing,
         count.round().clamp(1.0, 32.0) as usize,
     )
+}
+
+fn fract_noise_f32(x: JitScalar) -> JitScalar {
+    x - x.floor()
+}
+
+fn hash_noise3_native_f32(p: [JitScalar; 3]) -> JitScalar {
+    let qx = fract_noise_f32(p[0] * std::f32::consts::FRAC_1_PI + 0.11) * 17.0;
+    let qy = fract_noise_f32(p[1] * std::f32::consts::FRAC_1_PI + 0.17) * 17.0;
+    let qz = fract_noise_f32(p[2] * std::f32::consts::FRAC_1_PI + 0.13) * 17.0;
+    fract_noise_f32(qx * qy * qz * (qx + qy + qz))
+}
+
+fn lerp_native_f32(a: JitScalar, b: JitScalar, t: JitScalar) -> JitScalar {
+    a * (1.0 - t) + b * t
+}
+
+fn smoothstep01_native_f32(t: JitScalar) -> JitScalar {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn value_noise_3d_native_f32(p: [JitScalar; 3]) -> JitScalar {
+    let i = [p[0].floor(), p[1].floor(), p[2].floor()];
+    let f = [
+        fract_noise_f32(p[0]),
+        fract_noise_f32(p[1]),
+        fract_noise_f32(p[2]),
+    ];
+    let u = [
+        smoothstep01_native_f32(f[0]),
+        smoothstep01_native_f32(f[1]),
+        smoothstep01_native_f32(f[2]),
+    ];
+
+    let n000 = hash_noise3_native_f32([i[0], i[1], i[2]]);
+    let n001 = hash_noise3_native_f32([i[0], i[1], i[2] + 1.0]);
+    let n010 = hash_noise3_native_f32([i[0], i[1] + 1.0, i[2]]);
+    let n011 = hash_noise3_native_f32([i[0], i[1] + 1.0, i[2] + 1.0]);
+    let n100 = hash_noise3_native_f32([i[0] + 1.0, i[1], i[2]]);
+    let n101 = hash_noise3_native_f32([i[0] + 1.0, i[1], i[2] + 1.0]);
+    let n110 = hash_noise3_native_f32([i[0] + 1.0, i[1] + 1.0, i[2]]);
+    let n111 = hash_noise3_native_f32([i[0] + 1.0, i[1] + 1.0, i[2] + 1.0]);
+
+    let nx00 = lerp_native_f32(n000, n100, u[0]);
+    let nx01 = lerp_native_f32(n001, n101, u[0]);
+    let nx10 = lerp_native_f32(n010, n110, u[0]);
+    let nx11 = lerp_native_f32(n011, n111, u[0]);
+    let nxy0 = lerp_native_f32(nx00, nx10, u[1]);
+    let nxy1 = lerp_native_f32(nx01, nx11, u[1]);
+    lerp_native_f32(nxy0, nxy1, u[2]) * 2.0 - 1.0
+}
+
+fn fbm_3d_native_f32(
+    p: [JitScalar; 3],
+    octaves: u32,
+    scale: JitScalar,
+    lacunarity: JitScalar,
+) -> JitScalar {
+    let mut q = [p[0] * scale, p[1] * scale, p[2] * scale];
+    let mut amplitude = 0.5;
+    let mut sum = 0.0;
+    let lac = if lacunarity.abs() < JitScalar::EPSILON {
+        1.0
+    } else {
+        lacunarity
+    };
+    for _ in 0..octaves.max(1) {
+        sum += amplitude * value_noise_3d_native_f32(q);
+        q = [q[0] * lac, q[1] * lac, q[2] * lac];
+        amplitude *= 0.55;
+    }
+    sum
+}
+
+fn sphere_lattice_3d_native_f32(p: [JitScalar; 3]) -> JitScalar {
+    fn hash3(x: JitScalar, y: JitScalar, z: JitScalar) -> JitScalar {
+        let n = (x * 127.1 + y * 311.7 + z * 74.7).sin() * 43758.5453;
+        n - n.floor()
+    }
+
+    fn sph(
+        ix: JitScalar,
+        iy: JitScalar,
+        iz: JitScalar,
+        fx: JitScalar,
+        fy: JitScalar,
+        fz: JitScalar,
+        cx: JitScalar,
+        cy: JitScalar,
+        cz: JitScalar,
+    ) -> JitScalar {
+        let gx = ix + cx;
+        let gy = iy + cy;
+        let gz = iz + cz;
+        let jx = (hash3(gx + 1.7, gy + 9.2, gz + 5.4) - 0.5) * 0.6;
+        let jy = (hash3(gx + 3.1, gy + 2.8, gz + 7.7) - 0.5) * 0.6;
+        let jz = (hash3(gx + 4.6, gy + 6.3, gz + 1.9) - 0.5) * 0.6;
+        let r = 0.12 + 0.45 * hash3(gx + 0.3, gy + 0.7, gz + 0.9);
+        let dx = fx - cx - jx;
+        let dy = fy - cy - jy;
+        let dz = fz - cz - jz;
+        (dx * dx + dy * dy + dz * dz).sqrt() - r
+    }
+
+    let ix = p[0].floor();
+    let iy = p[1].floor();
+    let iz = p[2].floor();
+    let fx = p[0] - ix;
+    let fy = p[1] - iy;
+    let fz = p[2] - iz;
+    let d000 = sph(ix, iy, iz, fx, fy, fz, 0.0, 0.0, 0.0);
+    let d001 = sph(ix, iy, iz, fx, fy, fz, 0.0, 0.0, 1.0);
+    let d010 = sph(ix, iy, iz, fx, fy, fz, 0.0, 1.0, 0.0);
+    let d011 = sph(ix, iy, iz, fx, fy, fz, 0.0, 1.0, 1.0);
+    let d100 = sph(ix, iy, iz, fx, fy, fz, 1.0, 0.0, 0.0);
+    let d101 = sph(ix, iy, iz, fx, fy, fz, 1.0, 0.0, 1.0);
+    let d110 = sph(ix, iy, iz, fx, fy, fz, 1.0, 1.0, 0.0);
+    let d111 = sph(ix, iy, iz, fx, fy, fz, 1.0, 1.0, 1.0);
+    d000.min(d001).min(d010.min(d011)).min(d100.min(d101).min(d110.min(d111)))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn forge_value_noise_3d(
+    px: JitScalar,
+    py: JitScalar,
+    pz: JitScalar,
+    scale: JitScalar,
+) -> JitScalar {
+    value_noise_3d_native_f32([px * scale, py * scale, pz * scale])
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn forge_fbm_3d(
+    px: JitScalar,
+    py: JitScalar,
+    pz: JitScalar,
+    octaves: JitScalar,
+    scale: JitScalar,
+    lacunarity: JitScalar,
+) -> JitScalar {
+    fbm_3d_native_f32(
+        [px, py, pz],
+        octaves.round().clamp(1.0, 16.0) as u32,
+        scale,
+        lacunarity,
+    )
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn forge_sphere_lattice_3d(px: JitScalar, py: JitScalar, pz: JitScalar) -> JitScalar {
+    sphere_lattice_3d_native_f32([px, py, pz])
 }
 
 #[unsafe(no_mangle)]
@@ -390,6 +550,9 @@ fn create_module() -> Option<JITModule> {
     builder.symbol("forge_hole_line_x_sdf", forge_hole_line_x_sdf as *const u8);
     builder.symbol("forge_hole_line_y_sdf", forge_hole_line_y_sdf as *const u8);
     builder.symbol("forge_hole_line_z_sdf", forge_hole_line_z_sdf as *const u8);
+    builder.symbol("forge_value_noise_3d", forge_value_noise_3d as *const u8);
+    builder.symbol("forge_fbm_3d", forge_fbm_3d as *const u8);
+    builder.symbol("forge_sphere_lattice_3d", forge_sphere_lattice_3d as *const u8);
     Some(JITModule::new(builder))
 }
 
@@ -814,6 +977,87 @@ pub fn compile_material_vec3_function(
             components: [x, y, z],
         },
     ))
+}
+
+pub fn compile_material_scalar_function(
+    name: &str,
+    params: &[String],
+    body: &[MaterialFunctionStatement],
+) -> Option<JitFunction> {
+    if params.len() > 12 {
+        return None;
+    }
+
+    let mut module = create_module()?;
+    let mut sig = module.make_signature();
+    for _ in params {
+        sig.params.push(AbiParam::new(JIT_TYPE));
+    }
+    sig.returns.push(AbiParam::new(JIT_TYPE));
+
+    let func_id = module.declare_function(name, Linkage::Local, &sig).ok()?;
+    let mut ctx = module.make_context();
+    ctx.func.signature = sig;
+    ctx.func.signature.call_conv = CallConv::triple_default(module.isa().triple());
+
+    let mut builder_ctx = FunctionBuilderContext::new();
+    let mut fb = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+    let block = fb.create_block();
+    fb.append_block_params_for_function_params(block);
+    fb.switch_to_block(block);
+    fb.seal_block(block);
+
+    let block_params = fb.block_params(block).to_vec();
+    let mut capture_vars = HashMap::new();
+    for (index, param) in params.iter().enumerate() {
+        let var = Variable::from_u32(index as u32);
+        fb.declare_var(var, JIT_TYPE);
+        fb.def_var(var, block_params[index]);
+        capture_vars.insert(param.clone(), MaterialJitValue::Scalar(fb.use_var(var)));
+    }
+
+    let functions = HashMap::new();
+    let mut jit_ctx = MaterialJitContext {
+        fb: &mut fb,
+        module: &mut module,
+        locals: HashMap::new(),
+        functions: &functions,
+        captures: &capture_vars,
+    };
+    for stmt in body {
+        match stmt {
+            MaterialFunctionStatement::Binding { name, expr } => {
+                let value = match compile_material_expr(expr, &mut jit_ctx) {
+                    Some(value) => value,
+                    None => {
+                        if jit_trace_enabled() {
+                            eprintln!("[forge-jit] material-scalar {name}: expr-compile-failed");
+                        }
+                        return None;
+                    }
+                };
+                jit_ctx.locals.insert(name.clone(), value);
+            }
+            MaterialFunctionStatement::Return { expr } => {
+                let Some(value) = compile_material_expr(expr, &mut jit_ctx) else {
+                    if jit_trace_enabled() {
+                        eprintln!("[forge-jit] material-scalar return: expr-compile-failed");
+                    }
+                    return None;
+                };
+                let MaterialJitValue::Scalar(value) = value else {
+                    if jit_trace_enabled() {
+                        eprintln!("[forge-jit] material-scalar return: non-scalar");
+                    }
+                    return None;
+                };
+                jit_ctx.fb.ins().return_(&[value]);
+                return finalize_scalar_function(module, func_id, ctx, params.len());
+            }
+            MaterialFunctionStatement::ForLoop { .. } => return None,
+        }
+    }
+    None
 }
 
 fn material_function_returns_vec3(
@@ -2063,7 +2307,9 @@ fn infer_material_expr_kind(
                     Some(JitCaptureKind::Vec3)
                 }
                 "length" | "step" | "smoothstep" | "sin" | "cos" | "floor" | "ceil" | "sqrt"
-                | "box_shell_sdf" | "cylinder_x_sdf" | "cylinder_y_sdf" | "cylinder_z_sdf" => {
+                | "fract" | "value_noise_3d" | "fbm_3d" | "sphere_lattice_3d"
+                | "box_shell_sdf" | "cylinder_x_sdf"
+                | "cylinder_y_sdf" | "cylinder_z_sdf" => {
                     Some(JitCaptureKind::Scalar)
                 }
                 "abs" | "min" | "max" | "clamp" | "mix" => {
@@ -2472,7 +2718,11 @@ fn compile_material_expr(
                     .iter()
                     .map(|arg| compile_material_expr(arg, ctx))
                     .collect::<Option<Vec<_>>>()?;
-                return compile_material_builtin(name, &arg_values, ctx);
+                let value = compile_material_builtin(name, &arg_values, ctx);
+                if value.is_none() && jit_trace_enabled() {
+                    eprintln!("[forge-jit] material-expr unsupported builtin: {name}");
+                }
+                return value;
             }
             if let Expr::Member { target, field } = callee.as_ref()
                 && let Expr::Ident(type_name) = target.as_ref()
@@ -2714,6 +2964,16 @@ fn compile_material_builtin(
         ("cos", [MaterialJitValue::Scalar(v)]) => {
             emit_unary_import_call(ctx.fb, ctx.module, "cos", *v).map(MaterialJitValue::Scalar)
         }
+        ("floor", [MaterialJitValue::Scalar(v)]) => {
+            Some(MaterialJitValue::Scalar(ctx.fb.ins().floor(*v)))
+        }
+        ("ceil", [MaterialJitValue::Scalar(v)]) => {
+            Some(MaterialJitValue::Scalar(ctx.fb.ins().ceil(*v)))
+        }
+        ("fract", [MaterialJitValue::Scalar(v)]) => {
+            let floor = ctx.fb.ins().floor(*v);
+            Some(MaterialJitValue::Scalar(ctx.fb.ins().fsub(*v, floor)))
+        }
         ("step", [MaterialJitValue::Scalar(edge), MaterialJitValue::Scalar(x)]) => {
             let cond = ctx.fb.ins().fcmp(
                 cranelift_codegen::ir::condcodes::FloatCC::LessThan,
@@ -2746,6 +3006,53 @@ fn compile_material_builtin(
         ("rotate_z", [MaterialJitValue::Vec3(v), MaterialJitValue::Scalar(deg)]) => Some(
             MaterialJitValue::Vec3(emit_material_rotate_vec3(ctx, *v, *deg, 2)?),
         ),
+        ("value_noise_3d", [MaterialJitValue::Vec3(p)]) => {
+            let one = jit_const(ctx.fb, 1.0);
+            Some(MaterialJitValue::Scalar(emit_value_noise_3d_import_call(
+                ctx.fb, ctx.module, *p, one,
+            )?))
+        }
+        ("value_noise_3d", [MaterialJitValue::Vec3(p), MaterialJitValue::Scalar(scale)]) => {
+            Some(MaterialJitValue::Scalar(emit_value_noise_3d_import_call(
+                ctx.fb, ctx.module, *p, *scale,
+            )?))
+        }
+        ("sphere_lattice_3d", [MaterialJitValue::Vec3(p)]) => Some(MaterialJitValue::Scalar(
+            emit_sphere_lattice_3d_import_call(ctx.fb, ctx.module, *p)?,
+        )),
+        (
+            "fbm_3d",
+            [MaterialJitValue::Vec3(p), MaterialJitValue::Scalar(octaves)],
+        ) => {
+            let one = jit_const(ctx.fb, 1.0);
+            Some(MaterialJitValue::Scalar(emit_fbm_3d_import_call(
+                ctx.fb, ctx.module, *p, *octaves, one, one,
+            )?))
+        }
+        (
+            "fbm_3d",
+            [
+                MaterialJitValue::Vec3(p),
+                MaterialJitValue::Scalar(octaves),
+                MaterialJitValue::Scalar(scale),
+            ],
+        ) => {
+            let one = jit_const(ctx.fb, 1.0);
+            Some(MaterialJitValue::Scalar(emit_fbm_3d_import_call(
+                ctx.fb, ctx.module, *p, *octaves, *scale, one,
+            )?))
+        }
+        (
+            "fbm_3d",
+            [
+                MaterialJitValue::Vec3(p),
+                MaterialJitValue::Scalar(octaves),
+                MaterialJitValue::Scalar(scale),
+                MaterialJitValue::Scalar(lacunarity),
+            ],
+        ) => Some(MaterialJitValue::Scalar(emit_fbm_3d_import_call(
+            ctx.fb, ctx.module, *p, *octaves, *scale, *lacunarity,
+        )?)),
         (
             "box_shell_sdf",
             [
@@ -3078,6 +3385,66 @@ fn emit_hole_line_import_call(
     let call = fb
         .ins()
         .call(local, &[p[0], p[1], p[2], radius, half_len, spacing, count]);
+    fb.inst_results(call).first().copied()
+}
+
+fn emit_value_noise_3d_import_call(
+    fb: &mut FunctionBuilder<'_>,
+    module: &mut JITModule,
+    p: [cranelift_codegen::ir::Value; 3],
+    scale: cranelift_codegen::ir::Value,
+) -> Option<cranelift_codegen::ir::Value> {
+    let mut sig = module.make_signature();
+    for _ in 0..4 {
+        sig.params.push(AbiParam::new(JIT_TYPE));
+    }
+    sig.returns.push(AbiParam::new(JIT_TYPE));
+    let func_id = module
+        .declare_function("forge_value_noise_3d", Linkage::Import, &sig)
+        .ok()?;
+    let local = module.declare_func_in_func(func_id, fb.func);
+    let call = fb.ins().call(local, &[p[0], p[1], p[2], scale]);
+    fb.inst_results(call).first().copied()
+}
+
+fn emit_fbm_3d_import_call(
+    fb: &mut FunctionBuilder<'_>,
+    module: &mut JITModule,
+    p: [cranelift_codegen::ir::Value; 3],
+    octaves: cranelift_codegen::ir::Value,
+    scale: cranelift_codegen::ir::Value,
+    lacunarity: cranelift_codegen::ir::Value,
+) -> Option<cranelift_codegen::ir::Value> {
+    let mut sig = module.make_signature();
+    for _ in 0..6 {
+        sig.params.push(AbiParam::new(JIT_TYPE));
+    }
+    sig.returns.push(AbiParam::new(JIT_TYPE));
+    let func_id = module
+        .declare_function("forge_fbm_3d", Linkage::Import, &sig)
+        .ok()?;
+    let local = module.declare_func_in_func(func_id, fb.func);
+    let call = fb
+        .ins()
+        .call(local, &[p[0], p[1], p[2], octaves, scale, lacunarity]);
+    fb.inst_results(call).first().copied()
+}
+
+fn emit_sphere_lattice_3d_import_call(
+    fb: &mut FunctionBuilder<'_>,
+    module: &mut JITModule,
+    p: [cranelift_codegen::ir::Value; 3],
+) -> Option<cranelift_codegen::ir::Value> {
+    let mut sig = module.make_signature();
+    for _ in 0..3 {
+        sig.params.push(AbiParam::new(JIT_TYPE));
+    }
+    sig.returns.push(AbiParam::new(JIT_TYPE));
+    let func_id = module
+        .declare_function("forge_sphere_lattice_3d", Linkage::Import, &sig)
+        .ok()?;
+    let local = module.declare_func_in_func(func_id, fb.func);
+    let call = fb.ins().call(local, &[p[0], p[1], p[2]]);
     fb.inst_results(call).first().copied()
 }
 
