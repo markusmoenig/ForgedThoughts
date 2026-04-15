@@ -2605,6 +2605,44 @@ mod tests {
     }
 
     #[test]
+    fn loads_graph_toml_with_auto_top_level_material_bindings() {
+        let dir = temp_test_dir("graph_toml_auto_materials");
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        fs::write(
+            dir.join("simple.toml"),
+            r##"
+            version = 1
+
+            [render]
+            stage = "scene"
+            target = "raytrace"
+            source = "ValueNoise.height:field"
+
+            [ValueNoise.height]
+            scale = 2.0
+            octaves = 4.0
+            lacunarity = 2.0
+            persistence = 0.5
+
+            [Material.grass]
+            displacement = "ValueNoise.height:field"
+            base_color = "#72824f"
+
+            [Material.rock]
+            displacement = "ValueNoise.height:field"
+            base_color = "#8f7a5a"
+            "##,
+        )
+        .expect("graph should write");
+
+        let state =
+            load_and_eval_scene(&dir.join("simple.toml")).expect("graph toml should evaluate");
+        assert!(state.bindings.contains_key("graph"));
+        assert!(state.bindings.contains_key("graph_material__Material_grass"));
+        assert!(state.bindings.contains_key("graph_material__Material_rock"));
+    }
+
+    #[test]
     fn rejects_invalid_render_material_reference() {
         let dir = temp_test_dir("graph_toml_invalid_material");
         fs::create_dir_all(&dir).expect("temp dir should exist");

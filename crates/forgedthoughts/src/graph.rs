@@ -230,12 +230,22 @@ pub fn lower_graph_to_ft(graph: &GraphFile) -> Result<String, CoreError> {
     } else {
         None
     };
+    let top_level_materials = collect_top_level_material_instances(graph)?;
+    let mut material_bindings = Vec::new();
+    for instance_id in top_level_materials {
+        let material_expr =
+            lower_instance_to_ft(graph, &instance_id, &mut Vec::new(), &mut imports)?;
+        material_bindings.push((sanitize_binding_suffix(&instance_id), material_expr));
+    }
     let mut out = String::new();
     for import in imports {
         out.push_str(&format!("import \"{import}\";\n"));
     }
     out.push_str("\n");
     out.push_str(&format!("let graph = {object_expr};\n"));
+    for (binding_name, material_expr) in material_bindings {
+        out.push_str(&format!("let graph_material__{binding_name} = {material_expr};\n"));
+    }
     if let Some(material_expr) = material_binding {
         out.push_str(&format!("let graph_material = {material_expr};\n"));
     }
@@ -486,8 +496,45 @@ fn validate_graph(
     if let Some((material_instance, _)) = material_root {
         visit_graph(&material_instance, nodes, &mut visiting, &mut visited)?;
     }
+    for (instance_id, node) in nodes {
+        if node.node_type == "Material" {
+            visit_graph(instance_id, nodes, &mut visiting, &mut visited)?;
+        }
+    }
 
     Ok(())
+}
+
+fn sanitize_binding_suffix(instance: &str) -> String {
+    instance
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+fn collect_top_level_material_instances(graph: &GraphFile) -> Result<Vec<String>, CoreError> {
+    let mut referenced_materials = HashSet::new();
+    for node in graph.nodes.values() {
+        let schema = node_schema(&node.node_type)?;
+        for (field, value) in &node.fields {
+            let Some(GraphRenderSourceKind::Material) = schema.inputs.get(field).copied() else {
+                continue;
+            };
+            let GraphValue::Ref { instance, .. } = value else {
+                continue;
+            };
+            referenced_materials.insert(instance.clone());
+        }
+    }
+
+    Ok(graph
+        .nodes
+        .iter()
+        .filter(|(instance_id, node)| {
+            node.node_type == "Material" && !referenced_materials.contains(*instance_id)
+        })
+        .map(|(instance_id, _)| instance_id.clone())
+        .collect())
 }
 
 fn visit_graph(

@@ -1,0 +1,90 @@
+version = 1
+
+[render]
+stage = "scene"
+target = "raytrace"
+source = "ValueNoise.height:field"
+width = 800
+height = 450
+
+[ValueNoise.height]
+scale = 3.0
+octaves = 6.0
+lacunarity = 2.0
+persistence = 0.5
+
+[Material.grass]
+displacement = "SphereFbm.grass:field"
+base_color = "#72824f"
+height = 0.30
+height_band = 0.65
+slope = 0.18
+slope_band = 0.45
+roughness = 0.88
+metallic = 0.0
+coat = 0.03
+coat_roughness = 0.18
+transparency = 0.0
+max_extend = 0.04
+
+[SphereFbm.grass]
+scale = 90.0
+detail = 0.30
+warp = 0.12
+
+[Material.rock]
+displacement = "SphereFbm.rock:field"
+base_color = "#8f7a5a"
+height = 0.55
+height_band = 0.90
+slope = 0.62
+slope_band = 0.60
+roughness = 0.70
+metallic = 0.0
+coat = 0.08
+coat_roughness = 0.14
+transparency = 0.0
+max_extend = 0.55
+
+[SphereFbm.rock]
+scale = 50.0
+detail = 0.70
+warp = 0.40
+
+[Material.snow]
+displacement = "SphereFbm.snow:field"
+base_color = "#d8dde4"
+height = 0.80
+height_band = 0.35
+slope = 0.22
+slope_band = 0.40
+roughness = 0.92
+metallic = 0.0
+coat = 0.02
+coat_roughness = 0.10
+transparency = 0.0
+max_extend = 0.03
+
+[SphereFbm.snow]
+scale = 120.0
+detail = 0.18
+warp = 0.08
+
+[camera]
+origin = [0.5, 0.55, -0.3]
+target = [0.5, 0.15, 0.5]
+fov_y = 55.0
+
+[sun]
+direction = [0.6, 1.0, 0.4]
+color = [1.0, 0.95, 0.85]
+intensity = 3.5
+
+[sky]
+color = [0.38, 0.52, 0.78]
+intensity = 0.6
+
+[scene]
+height_scale = 0.35
+world_size = 1.0
+max_steps = 400

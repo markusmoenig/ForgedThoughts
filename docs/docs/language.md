@@ -93,12 +93,16 @@ material = "Material.main:material"
 [Material.main]
 displacement = "SphereFbm.main:field"
 base_color = "#8f7a5a"
+max_extend = 0.25
 roughness = 0.72
 metallic = 0.0
 coat = 0.0
 coat_roughness = 0.0
 transparency = 0.0
 ```
+
+For terrain-style material rendering, `render.material` is optional.
+If omitted, the renderer auto-collects unreferenced top-level `Material.*` nodes and evaluates them automatically using each material's own `height`, `height_band`, `slope`, `slope_band`, and `max_extend` settings.
 
 ## Legacy Note
 
