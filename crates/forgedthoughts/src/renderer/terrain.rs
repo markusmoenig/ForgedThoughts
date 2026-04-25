@@ -382,28 +382,28 @@ where
                     let color = if let Some(t) =
                         intersect_sphere(ray.origin, ray.direction, sphere_center, proxy_radius)
                     {
-                        let p = vec3_fma(ray.origin, ray.direction, t);
-                        let n = vec3_normalize(Vec3::new(
-                            p.x - sphere_center.x,
-                            p.y - sphere_center.y,
-                            p.z - sphere_center.z,
-                        ));
-                        let shell_hit = march_material_shell_sphere(
+                        let proxy_p = vec3_fma(ray.origin, ray.direction, t);
+                        let max_t = (proxy_extend * 2.0)
+                            .max(_scene.normal_eps * 128.0)
+                            .max(_scene.epsilon * 4.0)
+                            .min(_scene.max_dist.max(0.25));
+                        if let Some((sp, sn)) = march_material_preview_scene(
                             material_lanes,
                             _scene,
+                            proxy_p,
                             sphere_center,
                             sphere_radius,
-                            p,
-                            n,
                             ray.direction,
-                        );
-                        if let Some((sp, sn)) = shell_hit {
-                            shade_preview_material(
+                            max_t,
+                        ) {
+                            shade_preview_material_sphere(
                                 material_lanes,
                                 material_debug_mode,
                                 sp,
                                 sn,
                                 ray.direction,
+                                sphere_center,
+                                sphere_radius,
                                 sun_dir,
                                 sun_color,
                                 sky_color,
@@ -458,17 +458,27 @@ where
     Ok(image)
 }
 
-fn shade_preview_material(
+fn shade_preview_material_sphere(
     material_lanes: Option<&TerrainMaterialLanes<'_>>,
     material_debug_mode: MaterialDebugMode,
     p: Vec3,
     n: Vec3,
     view_dir: Vec3,
+    sphere_center: Vec3,
+    sphere_radius: f32,
     sun_dir: Vec3,
     sun_color: Spectrum,
     sky_color: Spectrum,
 ) -> Spectrum {
-    let material = sample_surface_material(material_lanes, p, n, view_dir, material_debug_mode);
+    let material = sample_preview_sphere_surface_material(
+        material_lanes,
+        p,
+        n,
+        view_dir,
+        sphere_center,
+        sphere_radius,
+        material_debug_mode,
+    );
     let albedo = material.base_color;
     let n_dot_l = n.dot(sun_dir).max(0.0);
     let direct = spectrum_mul(albedo, sun_color.scale(n_dot_l * 1.2));
@@ -537,7 +547,20 @@ fn sample_height(
 // Raymarching
 // ---------------------------------------------------------------------------
 
-/// March a ray against the heightfield. Returns `(hit_point, normal)` or `None`.
+#[derive(Debug, Clone, Copy)]
+struct TerrainProxyHit {
+    p: Vec3,
+    n: Vec3,
+}
+
+fn terrain_proxy_shell_max(material_lanes: Option<&TerrainMaterialLanes<'_>>) -> f32 {
+    material_lanes
+        .map(|lanes| lanes.global_max_extend())
+        .unwrap_or(0.0)
+        .max(0.0)
+}
+
+/// March a ray against an inflated terrain proxy, then refine to the real terrain.
 fn march_terrain(
     sampler: &HeightSampler<'_>,
     compiled: Option<&crate::jit::JitFunction>,
@@ -546,11 +569,12 @@ fn march_terrain(
     ro: Vec3,
     rd: Vec3,
     scene: &GraphSceneSettings,
-) -> Option<(Vec3, Vec3)> {
+) -> Option<TerrainProxyHit> {
     let max_dist = scene.max_dist;
     let eps = scene.epsilon;
     let ws = scene.world_size;
     let (mut t, max_t) = ray_bounds_interval_xz(ro, rd, ws)?;
+    let proxy_shell_max = terrain_proxy_shell_max(material_lanes);
 
     if t > max_dist {
         return None;
@@ -567,30 +591,61 @@ fn march_terrain(
         let h = sample_height(sampler, compiled, gpu_field, scene, p.x, p.z);
 
         let diff = p.y - h;
-        let safe_diff = diff
-            - terrain_material_broadphase_extend(
+        let proxy_diff = diff - proxy_shell_max;
+
+        if proxy_diff < eps {
+            let (_terrain_t, p_hit, n) = march_terrain_narrow(
                 sampler,
                 compiled,
                 gpu_field,
-                scene,
-                material_lanes,
-                p,
-                h,
+                ro,
                 rd,
-            );
+                t,
+                proxy_shell_max,
+                max_t,
+                scene,
+            )?;
+            return Some(TerrainProxyHit {
+                p: p_hit,
+                n,
+            });
+        }
 
+        t += (proxy_diff * 0.5).max(0.001).min(0.5);
+    }
+
+    None
+}
+
+fn march_terrain_narrow(
+    sampler: &HeightSampler<'_>,
+    compiled: Option<&crate::jit::JitFunction>,
+    gpu_field: Option<&GpuFieldRaster>,
+    ro: Vec3,
+    rd: Vec3,
+    proxy_t: f32,
+    shell_max: f32,
+    max_t: f32,
+    scene: &GraphSceneSettings,
+) -> Option<(f32, Vec3, Vec3)> {
+    let eps = scene.epsilon;
+    let mut t = (proxy_t - shell_max.max(eps * 2.0)).max(0.0);
+    let narrow_max_t = (proxy_t + shell_max.max(eps * 4.0)).min(max_t);
+    for _ in 0..96 {
+        if t > narrow_max_t {
+            return None;
+        }
+        let p = vec3_fma(ro, rd, t);
+        let h = sample_height(sampler, compiled, gpu_field, scene, p.x, p.z);
+        let diff = p.y - h;
         if diff < eps {
-            // Refine to surface.
             let t_refined = (t - (eps - diff) * 0.5).max(0.0);
             let p_hit = vec3_fma(ro, rd, t_refined);
             let n = terrain_normal(sampler, compiled, gpu_field, scene, p_hit);
-            return Some((p_hit, n));
+            return Some((t_refined, p_hit, n));
         }
-
-        // Conservative step: shrink terrain distance by possible shell overhang extent.
-        t += (safe_diff * 0.5).max(0.001).min(0.5);
+        t += (diff * 0.5).max(0.0005).min(0.25);
     }
-
     None
 }
 
@@ -654,15 +709,15 @@ fn trace_terrain(
 ) -> Spectrum {
     match march_terrain(sampler, compiled, gpu_field, material_lanes, ro, rd, scene) {
         None => sky_radiance(rd, sun_dir, sky_color),
-        Some((p, n)) => shade_hit(
+        Some(hit) => shade_hit(
             sampler,
             compiled,
             gpu_field,
             material_lanes,
             material_debug_mode,
             scene,
-            p,
-            n,
+            hit.p,
+            hit.n,
             rd,
             sun_dir,
             sun_color,
@@ -687,18 +742,44 @@ fn shade_hit(
     sky_color: Spectrum,
     depth: u32,
 ) -> Spectrum {
+    let support_height = (p.y / scene.height_scale.max(f32::EPSILON)).clamp(0.0, 1.0);
+    let support_slope = (n.x * n.x + n.z * n.z).sqrt().clamp(0.0, 1.0);
+    let selected_bundle = selected_support_bundle(
+        material_lanes,
+        p,
+        n,
+        view_dir,
+        support_height,
+        support_slope,
+    );
+
     let (shade_p, shade_n) = if depth == 0 {
-        march_material_shell(material_lanes, scene, p, n, view_dir).unwrap_or((p, n))
+        if let Some(bundle) = selected_bundle {
+            let max_t = bundle
+                .activation(p, n, view_dir, support_height, support_slope)
+                .max_extend
+                .max(scene.normal_eps * 128.0)
+                .max(scene.epsilon * 4.0)
+                .min(scene.max_dist.max(0.25));
+            march_selected_material_shell(bundle, scene, p, p, n, view_dir, max_t)
+                .unwrap_or((p, n))
+        } else {
+            (p, n)
+        }
     } else {
         (p, n)
     };
-    let material = sample_surface_material(
-        material_lanes,
-        shade_p,
-        shade_n,
-        view_dir,
-        material_debug_mode,
-    );
+    let material = if let Some(bundle) = selected_bundle {
+        sample_selected_surface_material(bundle, shade_p, shade_n, view_dir, material_debug_mode)
+    } else {
+        sample_surface_material(
+            material_lanes,
+            shade_p,
+            shade_n,
+            view_dir,
+            material_debug_mode,
+        )
+    };
     let albedo = material.base_color;
 
     // --- Shadow ray (hard shadows) ---
@@ -977,6 +1058,54 @@ impl<'a> MaterialNodeBundle<'a> {
         }
     }
 
+    fn activation_height_only(
+        &self,
+        p: Vec3,
+        n: Vec3,
+        view_dir: Vec3,
+        support_height: f32,
+    ) -> MaterialActivation {
+        const MASK_EPS: f32 = 0.01;
+        const EXTEND_EPS: f32 = 1.0e-4;
+
+        match self {
+            Self::Leaf {
+                height,
+                height_band,
+                max_extend,
+                ..
+            } => {
+                let extend = max_extend.sample_raw(p, n, view_dir).unwrap_or(0.25).max(0.0);
+                let height_center = height.sample_unit(p, n, view_dir).unwrap_or(0.5);
+                let height_half_band =
+                    height_band.sample_unit(p, n, view_dir).unwrap_or(1.0) * 0.5;
+                let weight = band_weight(support_height, height_center, height_half_band);
+                MaterialActivation {
+                    active: extend > EXTEND_EPS && weight > 0.0,
+                    weight,
+                    max_extend: extend,
+                }
+            }
+            Self::Blend { a, b, mask } => {
+                let t = mask.sample_unit(p, n, view_dir).unwrap_or(0.5);
+                if t <= MASK_EPS {
+                    return a.activation_height_only(p, n, view_dir, support_height);
+                }
+                if t >= 1.0 - MASK_EPS {
+                    return b.activation_height_only(p, n, view_dir, support_height);
+                }
+
+                let aa = a.activation_height_only(p, n, view_dir, support_height);
+                let bb = b.activation_height_only(p, n, view_dir, support_height);
+                MaterialActivation {
+                    active: aa.active || bb.active,
+                    weight: lerp_f32(aa.weight, bb.weight, t),
+                    max_extend: aa.max_extend.max(bb.max_extend),
+                }
+            }
+        }
+    }
+
     fn roughness(&self, p: Vec3, n: Vec3, view_dir: Vec3) -> f32 {
         match self {
             Self::Leaf { roughness, .. } => roughness.sample_unit(p, n, view_dir).unwrap_or(0.7),
@@ -1069,264 +1198,246 @@ fn sample_surface_material(
     let support_height = p.y.clamp(0.0, 1.0);
     let support_slope = (n.x * n.x + n.z * n.z).sqrt().clamp(0.0, 1.0);
     lanes
-        .weighted_surface_material(p, n, view_dir, support_height, support_slope, debug_mode)
+        .selected_surface_material(p, n, view_dir, support_height, support_slope, debug_mode)
         .unwrap_or(base)
 }
 
-fn march_material_shell(
+fn sample_preview_sphere_surface_material(
     material_lanes: Option<&TerrainMaterialLanes<'_>>,
+    p: Vec3,
+    n: Vec3,
+    view_dir: Vec3,
+    sphere_center: Vec3,
+    sphere_radius: f32,
+    debug_mode: MaterialDebugMode,
+) -> TerrainShadingMaterial {
+    let base = TerrainShadingMaterial {
+        base_color: Spectrum::rgb(0.70, 0.68, 0.65),
+        roughness: 0.68,
+        metallic: 0.03,
+        coat: 0.0,
+        coat_roughness: 0.0,
+        transparency: 0.0,
+    };
+
+    let Some(lanes) = material_lanes else {
+        return base;
+    };
+    let (support_n, support_height, support_slope) =
+        sphere_preview_support(p, sphere_center, sphere_radius);
+    lanes
+        .selected_surface_material(
+            p,
+            if n.x.abs() + n.y.abs() + n.z.abs() > 1.0e-6 {
+                n
+            } else {
+                support_n
+            },
+            view_dir,
+            support_height,
+            support_slope,
+            debug_mode,
+        )
+        .unwrap_or(base)
+}
+
+fn sample_selected_surface_material(
+    bundle: &MaterialNodeBundle<'_>,
+    p: Vec3,
+    n: Vec3,
+    view_dir: Vec3,
+    debug_mode: MaterialDebugMode,
+) -> TerrainShadingMaterial {
+    let density = bundle.displacement(p, n, view_dir).abs().clamp(0.0, 1.0);
+    let mut color = bundle.base_color(p, n, view_dir);
+    let roughness = bundle.roughness(p, n, view_dir);
+    let metallic = bundle.metallic(p, n, view_dir);
+    let coat = bundle.coat(p, n, view_dir);
+    if matches!(debug_mode, MaterialDebugMode::Mask) {
+        color = Spectrum::rgb(density, 1.0 - density, 0.0);
+    } else if matches!(debug_mode, MaterialDebugMode::Lanes) {
+        color = Spectrum::rgb(roughness, metallic, coat);
+    }
+    TerrainShadingMaterial {
+        base_color: color,
+        roughness,
+        metallic,
+        coat,
+        coat_roughness: bundle.coat_roughness(p, n, view_dir),
+        transparency: bundle.transparency(p, n, view_dir),
+    }
+}
+
+fn selected_support_bundle<'a>(
+    material_lanes: Option<&'a TerrainMaterialLanes<'a>>,
+    p: Vec3,
+    n: Vec3,
+    view_dir: Vec3,
+    support_height: f32,
+    support_slope: f32,
+) -> Option<&'a MaterialNodeBundle<'a>> {
+    material_lanes
+        .and_then(|lanes| {
+            lanes
+                .strongest_active_bundle(p, n, view_dir, support_height, support_slope)
+                .map(|(bundle, _)| bundle)
+        })
+}
+
+fn sphere_preview_support(
+    p: Vec3,
+    sphere_center: Vec3,
+    sphere_radius: f32,
+) -> (Vec3, f32, f32) {
+    let mut support_n = vec3_normalize(Vec3::new(
+        p.x - sphere_center.x,
+        p.y - sphere_center.y,
+        p.z - sphere_center.z,
+    ));
+    if support_n.x.abs() + support_n.y.abs() + support_n.z.abs() < 1.0e-6 {
+        support_n = Vec3::new(0.0, 0.0, -1.0);
+    }
+    let support_height =
+        ((p.y - (sphere_center.y - sphere_radius)) / (sphere_radius * 2.0)).clamp(0.0, 1.0);
+    let support_slope = (support_n.x * support_n.x + support_n.z * support_n.z)
+        .sqrt()
+        .clamp(0.0, 1.0);
+    (support_n, support_height, support_slope)
+}
+
+fn march_selected_material_shell(
+    bundle: &MaterialNodeBundle<'_>,
     scene: &GraphSceneSettings,
+    start_p: Vec3,
     macro_p: Vec3,
     macro_n: Vec3,
     view_dir: Vec3,
+    max_t: f32,
 ) -> Option<(Vec3, Vec3)> {
-    let lanes = material_lanes?;
-    let support_height = (macro_p.y / scene.height_scale.max(f32::EPSILON)).clamp(0.0, 1.0);
-    let support_slope = (macro_n.x * macro_n.x + macro_n.z * macro_n.z)
-        .sqrt()
-        .clamp(0.0, 1.0);
-    if !shell_is_active(lanes, macro_p, macro_n, view_dir, support_height, support_slope) {
-        return None;
-    }
     let eps = scene.epsilon.max(0.001);
-    let max_t = shell_search_radius(
-        scene,
-        lanes,
-        macro_p,
-        macro_n,
-        view_dir,
-        support_height,
-        support_slope,
-    );
     let mut t = 0.0_f32;
-    let start = macro_p;
     let march_dir = view_dir;
     for _ in 0..64 {
         if t > max_t {
             break;
         }
-        let p = vec3_fma(start, march_dir, t);
-        let f = shell_implicit(
-            lanes,
+        let p = vec3_fma(start_p, march_dir, t);
+        let f = shell_implicit_selected(bundle, p, macro_p, macro_n, view_dir)?;
+        if f.abs() <= eps {
+            let n =
+                shell_normal_fast_selected(bundle, p, macro_p, macro_n, view_dir, eps)?;
+            return Some((p, n));
+        }
+        t += f;
+    }
+    None
+}
+
+fn march_material_preview_scene(
+    material_lanes: Option<&TerrainMaterialLanes<'_>>,
+    scene: &GraphSceneSettings,
+    start_p: Vec3,
+    sphere_center: Vec3,
+    sphere_radius: f32,
+    view_dir: Vec3,
+    max_t: f32,
+) -> Option<(Vec3, Vec3)> {
+    let eps = scene.epsilon.max(0.001);
+    let mut t = 0.0_f32;
+    let march_dir = view_dir;
+    for _ in 0..64 {
+        if t > max_t {
+            break;
+        }
+        let p = vec3_fma(start_p, march_dir, t);
+        let f = shell_implicit_preview_sphere_scene(
+            material_lanes,
             p,
-            macro_p,
-            macro_n,
+            sphere_center,
+            sphere_radius,
             view_dir,
-            support_height,
-            support_slope,
         )?;
         if f.abs() <= eps {
-            let n = shell_normal_fast(
-                lanes,
+            let n = shell_normal_fast_preview_sphere_scene(
+                material_lanes,
                 p,
-                macro_p,
-                macro_n,
+                sphere_center,
+                sphere_radius,
                 view_dir,
-                support_height,
-                support_slope,
                 eps,
             )?;
             return Some((p, n));
         }
         t += f;
     }
-
     None
 }
 
-fn march_material_shell_sphere(
-    material_lanes: Option<&TerrainMaterialLanes<'_>>,
-    scene: &GraphSceneSettings,
-    sphere_center: Vec3,
-    sphere_radius: f32,
-    macro_p: Vec3,
-    _macro_n: Vec3,
-    view_dir: Vec3,
-) -> Option<(Vec3, Vec3)> {
-    let lanes = material_lanes?;
-    let sphere_normal = vec3_normalize(Vec3::new(
-        macro_p.x - sphere_center.x,
-        macro_p.y - sphere_center.y,
-        macro_p.z - sphere_center.z,
-    ));
-    let support_height = ((macro_p.y - (sphere_center.y - sphere_radius)) / (sphere_radius * 2.0))
-        .clamp(0.0, 1.0);
-    let support_slope = (sphere_normal.x * sphere_normal.x + sphere_normal.z * sphere_normal.z)
-        .sqrt()
-        .clamp(0.0, 1.0);
-    if !shell_is_active(
-        lanes,
-        macro_p,
-        sphere_normal,
-        view_dir,
-        support_height,
-        support_slope,
-    ) {
-        return None;
-    }
-    let eps = scene.epsilon.max(0.001);
-    let max_t = shell_search_radius(
-        scene,
-        lanes,
-        macro_p,
-        sphere_normal,
-        view_dir,
-        support_height,
-        support_slope,
-    );
-    let mut t = 0.0_f32;
-    let start = macro_p;
-    // let f0 = shell_implicit_sphere(lanes, start, sphere_center, sphere_radius, view_dir)?;
-    // if f0.abs() <= eps {
-    //     let n =
-    //         shell_normal_fast_sphere(lanes, start, sphere_center, sphere_radius, view_dir, eps)?;
-    //     return Some((start, n));
-    // }
-    // let march_dir = if f0 < 0.0 {
-    //     vec3_neg(view_dir)
-    // } else {
-    //     view_dir
-    // };
-    let march_dir = view_dir;
-    for _ in 0..64 {
-        if t > max_t {
-            break;
-        }
-        let p = vec3_fma(start, march_dir, t);
-        let f = shell_implicit_sphere(
-            lanes,
-            p,
-            sphere_center,
-            sphere_radius,
-            view_dir,
-            support_height,
-            support_slope,
-        )?;
-        if f.abs() <= eps {
-            let n = shell_normal_fast_sphere(
-                lanes,
-                p,
-                sphere_center,
-                sphere_radius,
-                view_dir,
-                support_height,
-                support_slope,
-                eps,
-            )?;
-            return Some((p, n));
-        }
-        t += f; //.abs().max(1.5e-4);
-    }
-
-    None
-}
-
-fn shell_implicit(
-    lanes: &TerrainMaterialLanes<'_>,
+fn shell_implicit_selected(
+    bundle: &MaterialNodeBundle<'_>,
     p: Vec3,
     macro_p: Vec3,
     macro_n: Vec3,
     view_dir: Vec3,
-    support_height: f32,
-    support_slope: f32,
 ) -> Option<f32> {
-    let disp = lanes.weighted_displacement(p, macro_n, view_dir, support_height, support_slope)?;
+    let disp = bundle.displacement(p, macro_n, view_dir);
     let base = (p.x - macro_p.x) * macro_n.x
         + (p.y - macro_p.y) * macro_n.y
         + (p.z - macro_p.z) * macro_n.z;
     Some(base + disp)
 }
 
-fn shell_implicit_sphere(
-    lanes: &TerrainMaterialLanes<'_>,
+fn shell_implicit_preview_sphere_scene(
+    material_lanes: Option<&TerrainMaterialLanes<'_>>,
     p: Vec3,
     sphere_center: Vec3,
     sphere_radius: f32,
     view_dir: Vec3,
-    support_height: f32,
-    support_slope: f32,
 ) -> Option<f32> {
-    let sphere_normal = vec3_normalize(Vec3::new(
-        p.x - sphere_center.x,
-        p.y - sphere_center.y,
-        p.z - sphere_center.z,
-    ));
-    let disp =
-        lanes.weighted_displacement(p, sphere_normal, view_dir, support_height, support_slope)?;
+    let (support_n, support_height, support_slope) =
+        sphere_preview_support(p, sphere_center, sphere_radius);
     let base = ((p.x - sphere_center.x).powi(2)
         + (p.y - sphere_center.y).powi(2)
         + (p.z - sphere_center.z).powi(2))
     .sqrt()
         - sphere_radius;
+    let disp = material_lanes
+        .and_then(|lanes| {
+            lanes.min_active_displacement(p, support_n, view_dir, support_height, support_slope)
+        })
+        .unwrap_or(0.0);
     Some(base + disp)
 }
 
-fn shell_normal_fast(
-    lanes: &TerrainMaterialLanes<'_>,
+fn shell_normal_fast_selected(
+    bundle: &MaterialNodeBundle<'_>,
     p: Vec3,
     macro_p: Vec3,
     macro_n: Vec3,
     view_dir: Vec3,
-    support_height: f32,
-    support_slope: f32,
     eps: f32,
 ) -> Option<Vec3> {
-    // Tetrahedral gradient: 4 samples instead of 6 central differences.
     let k = 0.57735026 * eps;
     let e0 = Vec3::new(k, -k, -k);
     let e1 = Vec3::new(-k, -k, k);
     let e2 = Vec3::new(-k, k, -k);
     let e3 = Vec3::new(k, k, k);
-    let f0 = shell_implicit(
-        lanes,
-        vec3_add(p, e0),
-        macro_p,
-        macro_n,
-        view_dir,
-        support_height,
-        support_slope,
-    )?;
-    let f1 = shell_implicit(
-        lanes,
-        vec3_add(p, e1),
-        macro_p,
-        macro_n,
-        view_dir,
-        support_height,
-        support_slope,
-    )?;
-    let f2 = shell_implicit(
-        lanes,
-        vec3_add(p, e2),
-        macro_p,
-        macro_n,
-        view_dir,
-        support_height,
-        support_slope,
-    )?;
-    let f3 = shell_implicit(
-        lanes,
-        vec3_add(p, e3),
-        macro_p,
-        macro_n,
-        view_dir,
-        support_height,
-        support_slope,
-    )?;
+    let f0 = shell_implicit_selected(bundle, vec3_add(p, e0), macro_p, macro_n, view_dir)?;
+    let f1 = shell_implicit_selected(bundle, vec3_add(p, e1), macro_p, macro_n, view_dir)?;
+    let f2 = shell_implicit_selected(bundle, vec3_add(p, e2), macro_p, macro_n, view_dir)?;
+    let f3 = shell_implicit_selected(bundle, vec3_add(p, e3), macro_p, macro_n, view_dir)?;
     let gx = e0.x * f0 + e1.x * f1 + e2.x * f2 + e3.x * f3;
     let gy = e0.y * f0 + e1.y * f1 + e2.y * f2 + e3.y * f3;
     let gz = e0.z * f0 + e1.z * f1 + e2.z * f2 + e3.z * f3;
     Some(vec3_normalize(Vec3::new(gx, gy, gz)))
 }
 
-fn shell_normal_fast_sphere(
-    lanes: &TerrainMaterialLanes<'_>,
+fn shell_normal_fast_preview_sphere_scene(
+    material_lanes: Option<&TerrainMaterialLanes<'_>>,
     p: Vec3,
     sphere_center: Vec3,
     sphere_radius: f32,
     view_dir: Vec3,
-    support_height: f32,
-    support_slope: f32,
     eps: f32,
 ) -> Option<Vec3> {
     let k = 0.57735026 * eps;
@@ -1334,65 +1445,38 @@ fn shell_normal_fast_sphere(
     let e1 = Vec3::new(-k, -k, k);
     let e2 = Vec3::new(-k, k, -k);
     let e3 = Vec3::new(k, k, k);
-    let f0 = shell_implicit_sphere(
-        lanes,
+    let f0 = shell_implicit_preview_sphere_scene(
+        material_lanes,
         vec3_add(p, e0),
         sphere_center,
         sphere_radius,
         view_dir,
-        support_height,
-        support_slope,
     )?;
-    let f1 = shell_implicit_sphere(
-        lanes,
+    let f1 = shell_implicit_preview_sphere_scene(
+        material_lanes,
         vec3_add(p, e1),
         sphere_center,
         sphere_radius,
         view_dir,
-        support_height,
-        support_slope,
     )?;
-    let f2 = shell_implicit_sphere(
-        lanes,
+    let f2 = shell_implicit_preview_sphere_scene(
+        material_lanes,
         vec3_add(p, e2),
         sphere_center,
         sphere_radius,
         view_dir,
-        support_height,
-        support_slope,
     )?;
-    let f3 = shell_implicit_sphere(
-        lanes,
+    let f3 = shell_implicit_preview_sphere_scene(
+        material_lanes,
         vec3_add(p, e3),
         sphere_center,
         sphere_radius,
         view_dir,
-        support_height,
-        support_slope,
     )?;
     let gx = e0.x * f0 + e1.x * f1 + e2.x * f2 + e3.x * f3;
     let gy = e0.y * f0 + e1.y * f1 + e2.y * f2 + e3.y * f3;
     let gz = e0.z * f0 + e1.z * f1 + e2.z * f2 + e3.z * f3;
     Some(vec3_normalize(Vec3::new(gx, gy, gz)))
-}
-
-fn shell_search_radius(
-    scene: &GraphSceneSettings,
-    lanes: &TerrainMaterialLanes<'_>,
-    p: Vec3,
-    n: Vec3,
-    view_dir: Vec3,
-    support_height: f32,
-    support_slope: f32,
-) -> f32 {
-    let extend = lanes.max_extend(p, n, view_dir, support_height, support_slope);
-    if extend <= 0.0 {
-        return 0.0;
-    }
-    extend
-        .max(scene.normal_eps * 128.0)
-        .max(scene.epsilon * 4.0)
-        .min(scene.max_dist.max(0.25))
 }
 
 fn band_weight(value: f32, center: f32, half_band: f32) -> f32 {
@@ -1404,40 +1488,6 @@ fn band_weight(value: f32, center: f32, half_band: f32) -> f32 {
         };
     }
     (1.0 - ((value - center).abs() / half_band)).clamp(0.0, 1.0)
-}
-
-fn terrain_material_broadphase_extend(
-    sampler: &HeightSampler<'_>,
-    compiled: Option<&crate::jit::JitFunction>,
-    gpu_field: Option<&GpuFieldRaster>,
-    scene: &GraphSceneSettings,
-    material_lanes: Option<&TerrainMaterialLanes<'_>>,
-    p: Vec3,
-    terrain_h: f32,
-    view_dir: Vec3,
-) -> f32 {
-    let Some(lanes) = material_lanes else {
-        return 0.0;
-    };
-
-    let support_p = Vec3::new(p.x, terrain_h, p.z);
-    let support_n = terrain_normal(sampler, compiled, gpu_field, scene, support_p);
-    let support_height = (terrain_h / scene.height_scale.max(f32::EPSILON)).clamp(0.0, 1.0);
-    let support_slope = (support_n.x * support_n.x + support_n.z * support_n.z)
-        .sqrt()
-        .clamp(0.0, 1.0);
-    lanes.max_extend(support_p, support_n, view_dir, support_height, support_slope)
-}
-
-fn shell_is_active(
-    lanes: &TerrainMaterialLanes<'_>,
-    p: Vec3,
-    n: Vec3,
-    view_dir: Vec3,
-    support_height: f32,
-    support_slope: f32,
-) -> bool {
-    lanes.is_active(p, n, view_dir, support_height, support_slope)
 }
 
 fn shell_context(pos: Vec3, normal: Vec3, view_dir: Vec3) -> ObjectValue {
@@ -1641,21 +1691,6 @@ impl<'a> TerrainMaterialLanes<'a> {
         (!bundles.is_empty()).then_some(Self { bundles })
     }
 
-    fn is_active(
-        &self,
-        p: Vec3,
-        n: Vec3,
-        view_dir: Vec3,
-        support_height: f32,
-        support_slope: f32,
-    ) -> bool {
-        self.bundles.iter().any(|bundle| {
-            bundle
-                .activation(p, n, view_dir, support_height, support_slope)
-                .active
-        })
-    }
-
     fn max_extend(
         &self,
         p: Vec3,
@@ -1673,7 +1708,35 @@ impl<'a> TerrainMaterialLanes<'a> {
             .fold(0.0, f32::max)
     }
 
-    fn weighted_displacement(
+    fn global_max_extend(&self) -> f32 {
+        self.bundles
+            .iter()
+            .map(|bundle| {
+                bundle
+                    .activation_height_only(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, -1.0), 0.5)
+                    .max_extend
+            })
+            .fold(0.0, f32::max)
+    }
+
+    fn strongest_active_bundle(
+        &self,
+        p: Vec3,
+        n: Vec3,
+        view_dir: Vec3,
+        support_height: f32,
+        support_slope: f32,
+    ) -> Option<(&MaterialNodeBundle<'a>, MaterialActivation)> {
+        self.bundles
+            .iter()
+            .filter_map(|bundle| {
+                let activation = bundle.activation(p, n, view_dir, support_height, support_slope);
+                (activation.active && activation.weight > 0.0).then_some((bundle, activation))
+            })
+            .max_by(|(_, a), (_, b)| a.weight.total_cmp(&b.weight))
+    }
+
+    fn selected_displacement(
         &self,
         p: Vec3,
         n: Vec3,
@@ -1681,20 +1744,30 @@ impl<'a> TerrainMaterialLanes<'a> {
         support_height: f32,
         support_slope: f32,
     ) -> Option<f32> {
-        let mut weight_sum = 0.0;
-        let mut disp_sum = 0.0;
-        for bundle in &self.bundles {
-            let activation = bundle.activation(p, n, view_dir, support_height, support_slope);
-            if !activation.active || activation.weight <= 0.0 {
-                continue;
-            }
-            weight_sum += activation.weight;
-            disp_sum += bundle.displacement(p, n, view_dir) * activation.weight;
-        }
-        (weight_sum > 0.0).then_some(disp_sum / weight_sum)
+        let (bundle, _) =
+            self.strongest_active_bundle(p, n, view_dir, support_height, support_slope)?;
+        Some(bundle.displacement(p, n, view_dir))
     }
 
-    fn weighted_surface_material(
+    fn min_active_displacement(
+        &self,
+        p: Vec3,
+        n: Vec3,
+        view_dir: Vec3,
+        support_height: f32,
+        support_slope: f32,
+    ) -> Option<f32> {
+        self.bundles
+            .iter()
+            .filter_map(|bundle| {
+                let activation = bundle.activation(p, n, view_dir, support_height, support_slope);
+                (activation.active && activation.weight > 0.0)
+                    .then_some(bundle.displacement(p, n, view_dir))
+            })
+            .min_by(|a, b| a.total_cmp(b))
+    }
+
+    fn selected_surface_material(
         &self,
         p: Vec3,
         n: Vec3,
@@ -1703,40 +1776,13 @@ impl<'a> TerrainMaterialLanes<'a> {
         support_slope: f32,
         debug_mode: MaterialDebugMode,
     ) -> Option<TerrainShadingMaterial> {
-        let mut weight_sum = 0.0;
-        let mut base_color = Spectrum::rgb(0.0, 0.0, 0.0);
-        let mut roughness = 0.0;
-        let mut metallic = 0.0;
-        let mut coat = 0.0;
-        let mut coat_roughness = 0.0;
-        let mut transparency = 0.0;
-        let mut density = 0.0;
-
-        for bundle in &self.bundles {
-            let activation = bundle.activation(p, n, view_dir, support_height, support_slope);
-            if !activation.active || activation.weight <= 0.0 {
-                continue;
-            }
-            let w = activation.weight;
-            weight_sum += w;
-            density += bundle.displacement(p, n, view_dir).abs().clamp(0.0, 1.0) * w;
-            base_color = base_color + bundle.base_color(p, n, view_dir).scale(w);
-            roughness += bundle.roughness(p, n, view_dir) * w;
-            metallic += bundle.metallic(p, n, view_dir) * w;
-            coat += bundle.coat(p, n, view_dir) * w;
-            coat_roughness += bundle.coat_roughness(p, n, view_dir) * w;
-            transparency += bundle.transparency(p, n, view_dir) * w;
-        }
-
-        if weight_sum <= 0.0 {
-            return None;
-        }
-
-        let mut color = base_color.scale(1.0 / weight_sum);
-        let density = density / weight_sum;
-        let roughness = roughness / weight_sum;
-        let metallic = metallic / weight_sum;
-        let coat = coat / weight_sum;
+        let (bundle, _) =
+            self.strongest_active_bundle(p, n, view_dir, support_height, support_slope)?;
+        let density = bundle.displacement(p, n, view_dir).abs().clamp(0.0, 1.0);
+        let roughness = bundle.roughness(p, n, view_dir);
+        let metallic = bundle.metallic(p, n, view_dir);
+        let coat = bundle.coat(p, n, view_dir);
+        let mut color = bundle.base_color(p, n, view_dir);
         if matches!(debug_mode, MaterialDebugMode::Mask) {
             color = Spectrum::rgb(density, 1.0 - density, 0.0);
         } else if matches!(debug_mode, MaterialDebugMode::Lanes) {
@@ -1747,8 +1793,8 @@ impl<'a> TerrainMaterialLanes<'a> {
             roughness,
             metallic,
             coat,
-            coat_roughness: coat_roughness / weight_sum,
-            transparency: transparency / weight_sum,
+            coat_roughness: bundle.coat_roughness(p, n, view_dir),
+            transparency: bundle.transparency(p, n, view_dir),
         })
     }
 }
@@ -1880,7 +1926,7 @@ fn report_material_distribution(lanes: &TerrainMaterialLanes<'_>, world_size: f3
             let nn = Vec3::new(0.0, 1.0, 0.0);
             let vd = Vec3::new(0.0, 0.0, -1.0);
             let m = lanes
-                .weighted_displacement(p, nn, vd, p.y.clamp(0.0, 1.0), 0.0)
+                .selected_displacement(p, nn, vd, p.y.clamp(0.0, 1.0), 0.0)
                 .unwrap_or(0.0)
                 .abs()
                 .clamp(0.0, 1.0);
@@ -1892,7 +1938,7 @@ fn report_material_distribution(lanes: &TerrainMaterialLanes<'_>, world_size: f3
                 cov50 += 1;
             }
             let c = lanes
-                .weighted_surface_material(
+                .selected_surface_material(
                     p,
                     nn,
                     vd,

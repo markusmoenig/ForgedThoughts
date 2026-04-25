@@ -14,7 +14,7 @@ value = 0.5
 [Material.main]
 displacement = "SphereFbm.main:field"
 base_color = "#8a7456"
-max_extend = 0.85
+max_extend = 1.85
 roughness = 0.48
 
 [SphereFbm.main]
